@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://restaurant-platform.local/schemas/PlateWasteEvent.schema.json",
+  "title": "PlateWasteEvent",
+  "description": "Emitted by a plate-waste sensor (simulated camera+scale stand-in today; real vendor integration, e.g. Winnow webhook, later). Represents a single bussed-plate observation.",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "schema_version",
+    "source_id",
+    "timestamp",
+    "restaurant_id",
+    "station_id",
+    "estimated_waste_grams",
+    "plate_item_ids"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this event, assigned by the producer."
+    },
+    "event_type": {
+      "const": "PlateWasteEvent"
+    },
+    "schema_version": {
+      "type": "string",
+      "description": "Semantic version of this schema, e.g. '1.0.0'. Consumers must reject unknown major versions."
+    },
+    "source_id": {
+      "type": "string",
+      "description": "Identifier of the emitting device/adapter, e.g. 'sim-plate-cam-03' or 'winnow-adapter-01'."
+    },
+    "source_kind": {
+      "type": "string",
+      "enum": ["simulated", "vendor_integration"],
+      "default": "simulated",
+      "description": "Distinguishes stand-in producers from future real integrations without changing the contract."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of observation."
+    },
+    "restaurant_id": {
+      "type": "string"
+    },
+    "station_id": {
+      "type": "string",
+      "description": "Bussing/scrap station identifier."
+    },
+    "table_id": {
+      "type": ["string", "null"],
+      "description": "Originating table, if traceable. Null if untraceable (e.g. batch bussing)."
+    },
+    "estimated_waste_grams": {
+      "type": "number",
+      "minimum": 0
+    },
+    "plate_item_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Menu item IDs believed present on the plate. Empty array permitted if unresolved."
+    },
+    "confounder_flags": {
+      "type": "object",
+      "description": "Known confounding signals captured at observation time, so downstream causal inference is not forced to infer them. Not a claim of dissatisfaction.",
+      "properties": {
+        "to_go_container_used": { "type": "boolean" },
+        "declared_dietary_restriction": { "type": "boolean" },
+        "portion_size_variant": {
+          "type": "string",
+          "enum": ["standard", "half", "large", "unknown"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "image_ref": {
+      "type": ["string", "null"],
+      "description": "Optional MinIO object key for a reference image. Null when no imaging stand-in is used."
+    }
+  },
+  "additionalProperties": false
+}

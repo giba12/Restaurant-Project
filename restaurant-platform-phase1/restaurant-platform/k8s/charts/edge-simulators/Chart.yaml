@@ -1,0 +1,6 @@
+apiVersion: v2
+name: edge-simulators
+description: Placeholder chart for the edge-simulators service. No templates implemented yet — scaffolding only (Phase 1).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

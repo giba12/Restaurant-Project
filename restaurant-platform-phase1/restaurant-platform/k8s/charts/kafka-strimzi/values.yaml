@@ -1,7 +1,2 @@
-# Placeholder values for kafka-strimzi.
-# No defaults defined yet; populate when templates/ is implemented in the corresponding build phase.
+clusterName: restaurant-platform-kafka
 replicaCount: 1
-image:
-  repository: TBD
-  tag: TBD
-  pullPolicy: IfNotPresent

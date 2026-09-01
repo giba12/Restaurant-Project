@@ -1,0 +1,15 @@
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: mqtt-source-connector
+  labels:
+    strimzi.io/cluster: connect-cluster
+spec:
+  class: org.apache.camel.kafkaconnector.mqttsource.CamelMqttsourceSourceConnector
+  tasksMax: 1
+  config:
+    camel.kamelet.mqtt-source.brokerUrl: tcp://mosquitto.kafka.svc.cluster.local:1883
+    camel.kamelet.mqtt-source.topic: test/topic
+    topics: mqtt-bridge-test
+    key.converter: org.apache.kafka.connect.converters.ByteArrayConverter
+    value.converter: org.apache.kafka.connect.converters.ByteArrayConverter

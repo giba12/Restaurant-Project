@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://restaurant-platform.local/schemas/ServiceTimingEvent.schema.json",
+  "title": "ServiceTimingEvent",
+  "description": "Emitted by a ticket-timer sensor at each stage transition of an order's lifecycle (fired, started, plated, delivered). Simulated today; future adapter target e.g. a KDS vendor API.",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "schema_version",
+    "source_id",
+    "timestamp",
+    "restaurant_id",
+    "ticket_id",
+    "stage"
+  ],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": { "const": "ServiceTimingEvent" },
+    "schema_version": { "type": "string" },
+    "source_id": { "type": "string" },
+    "source_kind": {
+      "type": "string",
+      "enum": ["simulated", "vendor_integration"],
+      "default": "simulated"
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "restaurant_id": { "type": "string" },
+    "ticket_id": { "type": "string" },
+    "table_id": { "type": ["string", "null"] },
+    "station_id": { "type": ["string", "null"] },
+    "stage": {
+      "type": "string",
+      "enum": ["fired", "started", "plated", "expo_hold", "delivered"]
+    },
+    "elapsed_since_previous_stage_ms": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Duration since the prior stage event for this ticket, computed by the producer. Null on the first stage."
+    }
+  },
+  "additionalProperties": false
+}

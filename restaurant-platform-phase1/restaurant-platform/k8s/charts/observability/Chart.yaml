@@ -1,0 +1,6 @@
+apiVersion: v2
+name: observability
+description: Placeholder chart for the observability service. No templates implemented yet — scaffolding only (Phase 1).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

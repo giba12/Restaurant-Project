@@ -1,0 +1,2 @@
+clusterName: restaurant-platform-kafka
+replicaCount: 1

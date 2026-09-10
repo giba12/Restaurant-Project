@@ -1,0 +1,7 @@
+# Placeholder values for causal-engine.
+# No defaults defined yet; populate when templates/ is implemented in the corresponding build phase.
+replicaCount: 1
+image:
+  repository: TBD
+  tag: TBD
+  pullPolicy: IfNotPresent

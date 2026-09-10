@@ -1,0 +1,15 @@
+apiVersion: v2
+name: timescaledb
+description: >
+  Thin wrapper chart around Timescale's official timescaledb-single chart,
+  scoped to community-edition (non-Timescale-License-gated) features per
+  the free/open-source project constraint. Verify the license terms of the
+  pulled chart/app version before relying on any feature beyond core
+  hypertables -- see PHASE4-DESIGN.md.
+type: application
+version: 0.1.0
+appVersion: "1.0"
+dependencies:
+  - name: timescaledb-single
+    version: ">=0.35.0"
+    repository: "https://charts.timescale.com"

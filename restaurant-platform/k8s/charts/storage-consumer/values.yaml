@@ -1,0 +1,33 @@
+image:
+  repository: local/storage-consumer
+  tag: "1.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+# Single replica is deliberate: with more than one consumer in the same
+# consumer group, Kafka partitions the four topics across replicas, which
+# is fine for throughput but means a single replica failing does not
+# duplicate writes thanks to the ON CONFLICT DO NOTHING clauses in the
+# insert statements. Raise this only if ingestion throughput actually
+# becomes a bottleneck -- no evidence of that yet at simulator-scale.
+
+kafka:
+  bootstrapServers: "restaurant-platform-kafka-dev-pool-bootstrap.kafka.svc.cluster.local:9092"
+  consumerGroup: "storage-consumer"
+
+timescaledb:
+  # Host/port/database name for the timescaledb-single release deployed
+  # by the sibling `timescaledb` chart. Update if that release name
+  # changes.
+  existingSecret: timescaledb-credentials
+  host: "timescaledb"
+  port: 5432
+  database: "restaurant_platform"
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi

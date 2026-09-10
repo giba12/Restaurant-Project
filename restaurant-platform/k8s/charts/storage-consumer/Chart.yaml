@@ -1,0 +1,6 @@
+apiVersion: v2
+name: storage-consumer
+description: Kafka-to-TimescaleDB consumer for the four Phase 3 event topics.
+type: application
+version: 0.1.0
+appVersion: "1.0"

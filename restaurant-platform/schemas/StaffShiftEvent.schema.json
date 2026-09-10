@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://restaurant-platform.local/schemas/StaffShiftEvent.schema.json",
+  "title": "StaffShiftEvent",
+  "description": "Emitted on staffing state changes (clock-in, clock-out, station reassignment). Simulated today; future adapter target e.g. a scheduling/timeclock vendor API.",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "schema_version",
+    "source_id",
+    "timestamp",
+    "restaurant_id",
+    "staff_id",
+    "role",
+    "shift_action"
+  ],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": { "const": "StaffShiftEvent" },
+    "schema_version": { "type": "string" },
+    "source_id": { "type": "string" },
+    "source_kind": {
+      "type": "string",
+      "enum": ["simulated", "vendor_integration"],
+      "default": "simulated"
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "restaurant_id": { "type": "string" },
+    "staff_id": { "type": "string" },
+    "role": {
+      "type": "string",
+      "enum": ["server", "line_cook", "expo", "host", "bartender", "dishwasher", "manager"]
+    },
+    "shift_action": {
+      "type": "string",
+      "enum": ["clock_in", "clock_out", "break_start", "break_end", "station_reassign"]
+    },
+    "station_id": {
+      "type": ["string", "null"],
+      "description": "Relevant for station_reassign; null otherwise."
+    },
+    "scheduled_vs_actual": {
+      "type": "string",
+      "enum": ["as_scheduled", "early", "late", "unscheduled_cover"],
+      "description": "Deviation from published schedule, kept explicit as a modeled confounder rather than left implicit."
+    }
+  },
+  "additionalProperties": false
+}

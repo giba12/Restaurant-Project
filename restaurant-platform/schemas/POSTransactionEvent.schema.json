@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://restaurant-platform.local/schemas/POSTransactionEvent.schema.json",
+  "title": "POSTransactionEvent",
+  "description": "Emitted on POS transaction completion (simulated today; future adapter target e.g. Toast POS API).",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "schema_version",
+    "source_id",
+    "timestamp",
+    "restaurant_id",
+    "transaction_id",
+    "line_items",
+    "total_amount_cents",
+    "currency"
+  ],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": { "const": "POSTransactionEvent" },
+    "schema_version": { "type": "string" },
+    "source_id": { "type": "string" },
+    "source_kind": {
+      "type": "string",
+      "enum": ["simulated", "vendor_integration"],
+      "default": "simulated"
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "restaurant_id": { "type": "string" },
+    "transaction_id": { "type": "string" },
+    "table_id": { "type": ["string", "null"] },
+    "server_staff_id": { "type": ["string", "null"] },
+    "line_items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["menu_item_id", "quantity", "unit_price_cents"],
+        "properties": {
+          "menu_item_id": { "type": "string" },
+          "quantity": { "type": "integer", "minimum": 1 },
+          "unit_price_cents": { "type": "integer", "minimum": 0 },
+          "modifiers": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "voided": { "type": "boolean", "default": false }
+        },
+        "additionalProperties": false
+      }
+    },
+    "total_amount_cents": { "type": "integer", "minimum": 0 },
+    "currency": { "type": "string", "pattern": "^[A-Z]{3}$", "default": "USD" },
+    "payment_method": {
+      "type": "string",
+      "enum": ["card", "cash", "mobile_wallet", "gift_card", "other"]
+    },
+    "discount_applied_cents": { "type": "integer", "minimum": 0, "default": 0 }
+  },
+  "additionalProperties": false
+}

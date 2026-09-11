@@ -1,0 +1,76 @@
+# Runs 001_hypertables.sql against the TimescaleDB primary on every
+# install/upgrade. Idempotent by construction -- every statement in the
+# SQL file uses IF NOT EXISTS / if_not_exists, so re-running it against an
+# already-initialized database is a no-op.
+#
+# Unlike the earlier dependency-chart version, there is no separate
+# operator (e.g. Patroni) guaranteeing the database is ready before this
+# hook fires -- a Helm post-install hook only waits for the *previous*
+# hook weight to complete, not for an arbitrary Pod's readiness probe to
+# pass. The initContainer below makes that wait explicit rather than
+# relying on the Job's own retry/backoff to eventually succeed by luck.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-schema-init
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h {{ .Release.Name }} -p 5432 -U "$PGUSER" -d "$PGDATABASE"; do
+                echo "waiting for timescaledb..."
+                sleep 3
+              done
+          env:
+            - name: PGDATABASE
+              value: {{ .Values.database.name | quote }}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.secretName }}
+                  key: username
+      containers:
+        - name: schema-init
+          image: postgres:16-alpine
+          command:
+            - psql
+            - -v
+            - ON_ERROR_STOP=1
+            - -f
+            - /sql/001_hypertables.sql
+          env:
+            - name: PGHOST
+              value: {{ .Release.Name }}
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: {{ .Values.database.name | quote }}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.secretName }}
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.secretName }}
+                  key: password
+          volumeMounts:
+            - name: schema-sql
+              mountPath: /sql
+      volumes:
+        - name: schema-sql
+          configMap:
+            name: {{ .Release.Name }}-schema-sql

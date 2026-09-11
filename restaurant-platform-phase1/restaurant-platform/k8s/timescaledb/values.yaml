@@ -1,0 +1,45 @@
+image:
+  # Actively published; only the timescaledb-single Helm *chart* was
+  # abandoned, not the underlying image. Confirm license scope of
+  # whichever tag is pulled against PHASE4-DESIGN.md before relying on
+  # anything beyond core (Apache-2.0) hypertable features -- this
+  # project currently uses none of the TSL-gated features (no
+  # compression, no continuous aggregates), so the "-all" tag's bundled
+  # TSL components are simply unused, not a compliance concern as
+  # currently written.
+  repository: timescale/timescaledb-ha
+  tag: pg16-ts2.16-all
+  pullPolicy: IfNotPresent
+
+database:
+  name: restaurant_platform
+
+# Local single-node dev: one replica, no HA/replica topology. A real
+# production deployment would need at minimum a second replica and a
+# proper failover mechanism (Patroni, as the abandoned chart used) --
+# explicitly out of scope here, matching the project's stated priority
+# of demonstrating storage depth, not HA-database-ops depth.
+replicaCount: 1
+
+persistence:
+  size: 20Gi
+  storageClassName: ""  # empty = cluster default (k3s local-path-provisioner)
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+credentials:
+  # If create=true, a Secret is generated from the values below on
+  # install. This is a local-dev convenience, not a production pattern
+  # -- a real deployment should supply an existingSecret instead and
+  # leave create=false. Values here are placeholders; change before
+  # any use beyond a local, single-user k3s cluster.
+  create: true
+  secretName: timescaledb-credentials
+  username: restaurant_app
+  password: "changeme-local-dev-only"

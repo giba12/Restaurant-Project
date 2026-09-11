@@ -1,0 +1,42 @@
+namespace: kafka
+
+image:
+  repository: localhost/local/edge-simulator
+  tag: "1.0"
+  pullPolicy: IfNotPresent
+
+mqtt:
+  host: mosquitto.kafka.svc.cluster.local
+  port: 1883
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+# One entry per simulated sensor type == one Deployment (one pod type)
+# each, per the Phase 1 architecture requirement ("one container per
+# simulated sensor type"). eventRatePerMin is the Poisson rate parameter
+# (mean events/minute); the actual inter-event interval is drawn from an
+# exponential distribution around that mean, not fixed.
+simulators:
+  - sensorType: plate-waste
+    mqttTopic: sensors/plate-waste
+    eventRatePerMin: 8
+    sourceId: sim-plate-cam-01
+  - sensorType: pos-transaction
+    mqttTopic: sensors/pos-transaction
+    eventRatePerMin: 12
+    sourceId: sim-pos-01
+  - sensorType: service-timing
+    mqttTopic: sensors/service-timing
+    eventRatePerMin: 20
+    sourceId: sim-ticket-timer-01
+  - sensorType: staff-shift
+    mqttTopic: sensors/staff-shift
+    eventRatePerMin: 3
+    sourceId: sim-staffing-sensor-01
+

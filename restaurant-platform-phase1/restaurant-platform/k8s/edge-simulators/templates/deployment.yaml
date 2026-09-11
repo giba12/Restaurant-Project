@@ -1,0 +1,43 @@
+{{- range .Values.simulators }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edge-sim-{{ .sensorType }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    app: edge-sim-{{ .sensorType }}
+    component: edge-simulator
+    sensor-type: {{ .sensorType }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: edge-sim-{{ .sensorType }}
+  template:
+    metadata:
+      labels:
+        app: edge-sim-{{ .sensorType }}
+        component: edge-simulator
+        sensor-type: {{ .sensorType }}
+    spec:
+      containers:
+        - name: simulator
+          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          env:
+            - name: SENSOR_TYPE
+              value: {{ .sensorType | quote }}
+            - name: MQTT_HOST
+              value: {{ $.Values.mqtt.host | quote }}
+            - name: MQTT_PORT
+              value: {{ $.Values.mqtt.port | quote }}
+            - name: MQTT_TOPIC
+              value: {{ .mqttTopic | quote }}
+            - name: SOURCE_ID
+              value: {{ .sourceId | quote }}
+            - name: EVENT_RATE_PER_MIN
+              value: {{ .eventRatePerMin | quote }}
+          resources:
+            {{- toYaml $.Values.resources | nindent 12 }}
+---
+{{- end }}

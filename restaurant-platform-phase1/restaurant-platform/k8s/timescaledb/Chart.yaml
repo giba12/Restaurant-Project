@@ -1,0 +1,13 @@
+apiVersion: v2
+name: timescaledb
+description: >
+  Hand-rolled TimescaleDB deployment (StatefulSet + Service + PVC),
+  replacing the earlier timescaledb-single dependency-chart approach.
+  That chart (charts.timescale.com) is archived/unmaintained as of
+  Jan 2024, pinned at 0.33.1 with no further releases -- this chart
+  pulls only the still-actively-published timescale/timescaledb-ha
+  container image directly, with no dependency on the abandoned Helm
+  packaging around it. See PHASE4-DESIGN.md for the decision record.
+type: application
+version: 0.2.0
+appVersion: "pg16-ts2.16"

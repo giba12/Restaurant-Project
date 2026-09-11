@@ -1,0 +1,20 @@
+# Headless (clusterIP: None) service, required for StatefulSet pod DNS
+# identity. With replicaCount=1 this is also perfectly fine as the
+# client-facing connection point (consumer/dashboard connect to
+# "{{ .Release.Name }}.<namespace>.svc.cluster.local:5432") -- a
+# separate load-balancing ClusterIP service would only matter once
+# replicaCount > 1, which is explicitly out of scope for this phase.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/name: timescaledb
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: timescaledb
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: 5432

@@ -1,0 +1,22 @@
+minio:
+  mode: standalone  # single-node local dev, no distributed erasure-coded pool needed
+
+  persistence:
+    size: 10Gi
+
+  auth:
+    # Injected via Secret at install time, not committed here -- same
+    # pattern as timescaledb-credentials.
+    existingSecret: minio-credentials
+    rootUserKey: accesskey
+    rootPasswordKey: secretkey
+
+  defaultBuckets: "plate-waste-images"
+  # Placeholder bucket only. Nothing writes to this yet -- the CV/plate-
+  # waste-image component is an explicit Phase 6+ stretch item, not part
+  # of the core seven-phase path (see project notes: CV is a solved,
+  # commercially saturated problem and out of scope for the core build).
+  # This bucket exists now purely to establish the access contract early,
+  # per the same contract-first principle used for Kafka schemas.
+  console:
+    enabled: false

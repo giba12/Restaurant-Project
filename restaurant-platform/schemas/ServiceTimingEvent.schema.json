@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://restaurant-platform.local/schemas/ServiceTimingEvent.schema.json",
+  "title": "ServiceTimingEvent",
+  "description": "Emitted by a ticket-timer sensor at each stage transition of an order's lifecycle. Simulated today; future adapter target e.g. a KDS vendor API. Revised 2026-08-26: split former 'expo_hold'/'delivered' ambiguity into distinct 'plated' -> 'picked_up_by_server' -> 'delivered' stages.",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "schema_version",
+    "source_id",
+    "timestamp",
+    "restaurant_id",
+    "ticket_id",
+    "stage"
+  ],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": { "const": "ServiceTimingEvent" },
+    "schema_version": { "type": "string" },
+    "source_id": { "type": "string" },
+    "source_kind": {
+      "type": "string",
+      "enum": ["simulated", "vendor_integration"],
+      "default": "simulated"
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "restaurant_id": { "type": "string" },
+    "ticket_id": { "type": "string" },
+    "table_id": { "type": ["string", "null"] },
+    "station_id": { "type": ["string", "null"] },
+    "stage": {
+      "type": "string",
+      "enum": ["order_fired", "cook_started", "plated", "picked_up_by_server", "delivered"],
+      "description": "order_fired: ticket sent to kitchen. cook_started: line cook begins prep. plated: food ready at expo/pass. picked_up_by_server: server physically takes the plate from the pass — distinct from plated so kitchen-side cook time and front-of-house pickup delay are separately measurable. delivered: food reaches the table."
+    },
+    "elapsed_since_previous_stage_ms": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Duration since the prior stage event for this ticket, computed by the producer. Null on the first stage."
+    }
+  },
+  "additionalProperties": false
+}

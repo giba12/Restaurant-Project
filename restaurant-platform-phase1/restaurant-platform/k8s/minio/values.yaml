@@ -1,22 +1,40 @@
-minio:
-  mode: standalone  # single-node local dev, no distributed erasure-coded pool needed
+image:
+  repository: cgr.dev/chainguard/minio
+  tag: latest
+  # imagePullPolicy is deliberately Always, not the project's usual
+  # IfNotPresent-by-default-tag convention -- ":latest" is the only
+  # freely pullable (no-account) tag Chainguard offers for this image,
+  # and Always ensures a `helm upgrade` actually re-checks for a newer
+  # build rather than silently reusing a stale cached ":latest" image
+  # indefinitely (the inverse problem to the imagePullPolicy note in
+  # the study guide, Section 3.5 -- there, a stale cache was the risk
+  # with a real version tag; here, ":latest" itself is the moving
+  # target, so the caching behavior needs to point the other way).
+  pullPolicy: Always
 
-  persistence:
-    size: 10Gi
+replicaCount: 1
 
-  auth:
-    # Injected via Secret at install time, not committed here -- same
-    # pattern as timescaledb-credentials.
-    existingSecret: minio-credentials
-    rootUserKey: accesskey
-    rootPasswordKey: secretkey
+persistence:
+  size: 10Gi
+  storageClassName: ""
 
-  defaultBuckets: "plate-waste-images"
-  # Placeholder bucket only. Nothing writes to this yet -- the CV/plate-
-  # waste-image component is an explicit Phase 6+ stretch item, not part
-  # of the core seven-phase path (see project notes: CV is a solved,
-  # commercially saturated problem and out of scope for the core build).
-  # This bucket exists now purely to establish the access contract early,
-  # per the same contract-first principle used for Kafka schemas.
-  console:
-    enabled: false
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+credentials:
+  create: true
+  secretName: minio-credentials
+  rootUser: minioadmin
+  rootPassword: "changeme-local-dev-only"
+
+bucket:
+  name: plate-waste-images
+  initImageTag: latest-dev
+  # Placeholder only -- see the note in the bucket-init Job. Nothing
+  # writes to this yet; the CV/plate-waste-image component is a Phase
+  # 6+ stretch item, out of scope for the core seven-phase path.

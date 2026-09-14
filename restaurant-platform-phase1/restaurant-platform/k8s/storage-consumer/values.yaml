@@ -1,5 +1,5 @@
 image:
-  repository: local/storage-consumer
+  repository: localhost/local/storage-consumer
   tag: "1.0"
   pullPolicy: IfNotPresent
 

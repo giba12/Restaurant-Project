@@ -1,14 +1,25 @@
 apiVersion: v2
 name: minio
 description: >
-  Thin wrapper chart around Bitnami's minio chart. Deployed ahead of any
-  real blob data producer -- see PHASE4-DESIGN.md for why this is scoped
-  to "reachable, with one placeholder bucket" rather than "storing data,"
-  since no image/blob-producing component exists yet.
+  Hand-rolled MinIO deployment (StatefulSet + Service + Secret + bucket-
+  init Job). Originally planned to pull MinIO's own official image
+  directly after moving off the Bitnami wrapper chart -- but on
+  2025-10-23, the MinIO project itself stopped publishing free container
+  images to Docker Hub/Quay.io entirely (source-only distribution going
+  forward; the last free tag, RELEASE.2025-10-15T17-29-55Z, contains an
+  unpatched high-severity CVE, GHSA-jjjj-jwhf-8rgr). This chart instead
+  pulls Chainguard's free, continuously-updated MinIO build
+  (cgr.dev/chainguard/minio), published specifically to fill this gap.
+  No account/auth required for the ":latest" tag; pinned version tags
+  require a free Chainguard account and were not used here to keep this
+  chart pullable with zero registration, at the cost of less precise
+  version control than a pinned tag would give.
+
+  Licensing note (unchanged from the prior revision): the underlying
+  MinIO server binary is AGPLv3. Running an unmodified image as internal
+  infrastructure for a personal project does not trigger AGPLv3's
+  network-use source-disclosure clause; re-read this if the project is
+  ever offered commercially per the project notes' secondary goal.
 type: application
-version: 0.1.0
-appVersion: "1.0"
-dependencies:
-  - name: minio
-    version: ">=14.0.0"
-    repository: "oci://registry-1.docker.io/bitnamicharts"
+version: 0.3.0
+appVersion: "latest"

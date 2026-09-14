@@ -6,7 +6,7 @@
 # Import into k3s with:
 #   docker save local/storage-consumer:1.0 | sudo k3s ctr images import -
 
-FROM python:3.12-slim
+FROM python:3.11-slim
 
 RUN useradd -u 1001 -m consumer
 

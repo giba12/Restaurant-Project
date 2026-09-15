@@ -12,7 +12,7 @@ replicaCount: 1
 # becomes a bottleneck -- no evidence of that yet at simulator-scale.
 
 kafka:
-  bootstrapServers: "restaurant-platform-kafka-dev-pool-bootstrap.kafka.svc.cluster.local:9092"
+  bootstrapServers: "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
   consumerGroup: "storage-consumer"
 
 timescaledb:

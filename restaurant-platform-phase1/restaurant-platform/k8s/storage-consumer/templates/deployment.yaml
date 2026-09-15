@@ -23,9 +23,6 @@ spec:
               value: {{ .Values.kafka.bootstrapServers | quote }}
             - name: KAFKA_CONSUMER_GROUP
               value: {{ .Values.kafka.consumerGroup | quote }}
-            - name: TIMESCALE_DSN
-              value: >-
-                postgresql://$(DB_USER):$(DB_PASSWORD)@{{ .Values.timescaledb.host }}:{{ .Values.timescaledb.port }}/{{ .Values.timescaledb.database }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -36,5 +33,8 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.timescaledb.existingSecret }}
                   key: password
+            - name: TIMESCALE_DSN
+              value: >-
+                postgresql://$(DB_USER):$(DB_PASSWORD)@{{ .Values.timescaledb.host }}:{{ .Values.timescaledb.port }}/{{ .Values.timescaledb.database }}
           resources:
 {{ toYaml .Values.resources | indent 12 }}

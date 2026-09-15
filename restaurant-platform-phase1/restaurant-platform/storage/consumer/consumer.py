@@ -43,6 +43,7 @@ from kafka import KafkaConsumer
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
+    #level="DEBUG",
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 log = logging.getLogger("storage-consumer")
@@ -251,6 +252,7 @@ def main() -> None:
     topics = list(TOPIC_SCHEMA_FILES.keys())
 
     consumer = KafkaConsumer(
+        api_version=(2, 8, 0),
         *topics,
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         group_id=KAFKA_CONSUMER_GROUP,

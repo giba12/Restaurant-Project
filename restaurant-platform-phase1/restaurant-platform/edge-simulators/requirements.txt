@@ -1,3 +1,8 @@
 paho-mqtt==2.1.0
 jsonschema==4.23.0
 numpy>=1.26
+# Only used by service_timing.py's scenario-control consumer thread (deferred
+# import, only loaded when SCENARIO_CONTROL_ENABLED=true) -- listed here
+# anyway since all four simulators share one image. api_version pinned in
+# code, not here; see linux-k8s-docker-helm-study-guide.md Section 6.4.
+kafka-python==2.0.2

@@ -37,6 +37,8 @@ spec:
               value: {{ .sourceId | quote }}
             - name: EVENT_RATE_PER_MIN
               value: {{ .eventRatePerMin | quote }}
+            - name: SCENARIO_CONTROL_ENABLED
+              value: {{ $.Values.scenarioControlEnabled | quote }}
           resources:
             {{- toYaml $.Values.resources | nindent 12 }}
 ---

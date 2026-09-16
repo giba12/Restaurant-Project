@@ -9,6 +9,13 @@ mqtt:
   host: mosquitto.kafka.svc.cluster.local
   port: 1883
 
+# Applied to all four simulators uniformly, even though only
+# service_timing.py's SCENARIO_CONTROL_ENABLED env var actually does
+# anything with it -- the other three simply ignore an env var they never
+# read. Enables the background scenario-control-events consumer thread
+# that lets scenario-injection-controller perturb this simulator.
+scenarioControlEnabled: true
+
 resources:
   requests:
     cpu: 25m

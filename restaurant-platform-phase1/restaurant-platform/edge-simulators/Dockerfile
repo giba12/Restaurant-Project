@@ -6,7 +6,12 @@
 # rootless build network namespace does not reliably inherit host DNS
 # inside this WSL2 environment, and pip install needs to resolve PyPI.
 
-FROM python:3.12-slim
+# python:3.11-slim, not 3.12 -- kafka-python 2.0.2 (needed for the
+# service-timing simulator's scenario-control consumer) vendors a copy of
+# `six` that breaks under 3.12's import-system changes. Same pin used by
+# every Phase 5 service and storage-consumer; see
+# linux-k8s-docker-helm-study-guide.md Section 6.3.
+FROM python:3.11-slim
 
 WORKDIR /app
 

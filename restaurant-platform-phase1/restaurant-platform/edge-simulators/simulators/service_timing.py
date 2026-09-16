@@ -11,6 +11,31 @@ STAGES = ["order_fired", "cook_started", "plated", "picked_up_by_server", "deliv
 MAX_OPEN_TICKETS = int(os.environ.get("MAX_OPEN_TICKETS", "8"))
 MAX_STAGE_AGE_SECONDS = int(os.environ.get("MAX_STAGE_AGE_SECONDS", "300"))
 SCENARIO_CONTROL_ENABLED = os.environ.get("SCENARIO_CONTROL_ENABLED", "false").lower() == "true"
+# Removing a station from the assignable pool (see _available_stations)
+# only changes which station NEW tickets land on -- on its own it has no
+# effect on any ticket's own pickup_delay_ms/cook_duration_ms, since a
+# ticket's odds of being picked to advance on any given tick are just
+# 1/len(open_tickets), independent of which station it's at. Two other
+# mechanisms were considered and rejected before this one:
+#   - Weighting ticket selection by station doesn't work: once every open
+#     ticket shares the same (reduced) relative weight -- which happens
+#     quickly once pre-scenario tickets at the removed station drain out
+#     -- the selection distribution is uniform again and the effect
+#     self-cancels. It can only ever produce a brief transient, not a
+#     sustained one.
+#   - A real time.sleep() inside next_event() would block the single
+#     simulator thread entirely, freezing every station's event
+#     generation, not just the affected ones -- far too heavy-handed, and
+#     not how a real short-staffed kitchen behaves (other stations keep
+#     moving).
+# Instead: let backlog grow. Raising the effective open-ticket cap during
+# a shortage means more tickets compete for the same fixed tick budget,
+# which genuinely and sustainedly lowers each one's average pick
+# frequency -- exactly what "the same staff now covering a bigger queue"
+# should look like, and it doesn't self-cancel because the elevated cap
+# persists for the scenario's whole duration, not just until some
+# transient population drains.
+STAFFING_SHORTAGE_BACKLOG_MULTIPLIER = float(os.environ.get("STAFFING_SHORTAGE_BACKLOG_MULTIPLIER", "5"))
 
 class TicketLifecycle:
     """
@@ -33,19 +58,38 @@ class TicketLifecycle:
         # is unchanged/testable when scenario injection is disabled.
         self._active_scenario_getter = active_scenario_getter
 
+    def _active_staffing_shortage(self) -> dict | None:
+        if self._active_scenario_getter is None:
+            return None
+        scenario = self._active_scenario_getter()
+        if scenario and scenario.get("scenario_type") == "staffing_shortage":
+            return scenario
+        return None
+
     def _available_stations(self) -> list[str]:
         base = [s for s in world.STATIONS if s not in ("station-bar", "station-bussing-01")]
-        if self._active_scenario_getter is not None:
-            scenario = self._active_scenario_getter()
-            if scenario and scenario.get("scenario_type") == "staffing_shortage":
-                removed = set(scenario.get("parameters", {}).get("stations_removed", []))
-                reduced = [s for s in base if s not in removed]
-                # Never reduce to an empty pool -- that would stall the
-                # simulator rather than merely slow it down, which is not
-                # the intended perturbation.
-                if reduced:
-                    return reduced
+        scenario = self._active_staffing_shortage()
+        if scenario is not None:
+            removed = set(scenario.get("parameters", {}).get("stations_removed", []))
+            reduced = [s for s in base if s not in removed]
+            # Never reduce to an empty pool -- that would stall the
+            # simulator rather than merely slow it down, which is not
+            # the intended perturbation.
+            if reduced:
+                return reduced
         return base
+
+    def _effective_max_open_tickets(self) -> int:
+        """
+        MAX_OPEN_TICKETS, scaled up by STAFFING_SHORTAGE_BACKLOG_MULTIPLIER
+        while a staffing_shortage scenario is active -- see the module-level
+        comment on that constant for why this (backlog growth), rather than
+        selection weighting or a blocking sleep, is the actual causal link
+        between an injected shortage and an observable timing metric.
+        """
+        if self._active_staffing_shortage() is not None:
+            return int(MAX_OPEN_TICKETS * STAFFING_SHORTAGE_BACKLOG_MULTIPLIER)
+        return MAX_OPEN_TICKETS
 
     def _new_ticket(self) -> dict:
         return {
@@ -71,7 +115,7 @@ class TicketLifecycle:
         return stale[0][0]
 
     def next_event(self) -> dict:
-        at_capacity = len(self.open_tickets) >= MAX_OPEN_TICKETS
+        at_capacity = len(self.open_tickets) >= self._effective_max_open_tickets()
         forced_ticket_id = self._stalest_ticket_id()
 
         if forced_ticket_id is not None:
@@ -84,6 +128,11 @@ class TicketLifecycle:
             ticket_id = new_event_id()
             self.open_tickets[ticket_id] = self._new_ticket()
         else:
+            # Uniform selection among whatever's currently open. During an
+            # active staffing_shortage this pool is much larger (see
+            # _effective_max_open_tickets), so any given ticket's odds of
+            # being the one picked -- and therefore its real wall-clock
+            # wait until its next stage event -- are correspondingly lower.
             ticket_id = random.choice(list(self.open_tickets.keys()))
 
         ticket = self.open_tickets[ticket_id]

@@ -1,6 +1,0 @@
-apiVersion: v2
-name: kafka-strimzi
-description: Placeholder chart for the kafka-strimzi service. No templates implemented yet — scaffolding only (Phase 1).
-type: application
-version: 0.1.0
-appVersion: "0.1.0"

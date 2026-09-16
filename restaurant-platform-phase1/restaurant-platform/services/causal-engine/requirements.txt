@@ -1,0 +1,14 @@
+kafka-python==2.0.2
+jsonschema==4.23.0
+psycopg2-binary==2.9.9
+pandas==2.2.2
+dowhy==0.11.1
+statsmodels==0.14.2
+# Pinned -- statsmodels 0.14.2's discrete-distribution module imports
+# scipy._lib._util._lazywhere, which newer scipy (>=1.15) removed. Leaving
+# scipy unpinned resolves to a version too new for this statsmodels release.
+scipy==1.13.1
+# Pinned -- dowhy 0.11.1's backdoor-set identification calls
+# networkx.algorithms.d_separated, removed in newer networkx in favor of
+# is_d_separator/d_separation. Leaving networkx unpinned resolves too new.
+networkx==3.2.1

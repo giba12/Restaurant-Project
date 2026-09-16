@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://restaurant-platform.local/schemas/ServiceTimingEvent.schema.json",
   "title": "ServiceTimingEvent",
-  "description": "Emitted by a ticket-timer sensor at each stage transition of an order's lifecycle (fired, started, plated, delivered). Simulated today; future adapter target e.g. a KDS vendor API.",
+  "description": "Emitted by a ticket-timer sensor at each stage transition of an order's lifecycle. Simulated today; future adapter target e.g. a KDS vendor API. Revised 2026-08-26: split former 'expo_hold'/'delivered' ambiguity into distinct 'plated' -> 'picked_up_by_server' -> 'delivered' stages.",
   "type": "object",
   "required": [
     "event_id",
@@ -31,7 +31,8 @@
     "station_id": { "type": ["string", "null"] },
     "stage": {
       "type": "string",
-      "enum": ["fired", "started", "plated", "expo_hold", "delivered"]
+      "enum": ["order_fired", "cook_started", "plated", "picked_up_by_server", "delivered"],
+      "description": "order_fired: ticket sent to kitchen. cook_started: line cook begins prep. plated: food ready at expo/pass. picked_up_by_server: server physically takes the plate from the pass — distinct from plated so kitchen-side cook time and front-of-house pickup delay are separately measurable. delivered: food reaches the table."
     },
     "elapsed_since_previous_stage_ms": {
       "type": ["integer", "null"],

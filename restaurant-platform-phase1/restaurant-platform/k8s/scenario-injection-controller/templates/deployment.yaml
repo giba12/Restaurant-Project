@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name }}
+  namespace: kafka
+  labels:
+    app: {{ .Chart.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Chart.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Chart.Name }}
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Overrides the image's ENTRYPOINT (python controller.py) so the
+          # pod stays alive indefinitely instead of printing --help and
+          # exiting (which would crash-loop under the Deployment's default
+          # restart policy). Actual invocations happen via:
+          #   kubectl exec -n kafka deploy/scenario-injection-controller -it -- \
+          #     python controller.py run --scenario-type staffing_shortage \
+          #     --target service-timing --stations-removed station-grill-01 \
+          #     --duration-seconds 300
+          command: ["sleep", "infinity"]
+          env:
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

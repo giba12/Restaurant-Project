@@ -7,3 +7,5 @@ metadata:
 data:
   001_hypertables.sql: |
 {{ .Files.Get "files/001_hypertables.sql" | indent 4 }}
+  002_phase5_hypertables.sql: |
+{{ .Files.Get "files/002_phase5_hypertables.sql" | indent 4 }}

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ticket-timing-aggregator
+description: Phase 5 - consumes service-timing-events, produces TicketTimingSummary
+type: application
+version: 0.1.0
+appVersion: "1.0"

@@ -1,0 +1,15 @@
+image:
+  repository: localhost/local/scenario-injection-controller
+  tag: "1.0"
+  pullPolicy: IfNotPresent
+
+env:
+  KAFKA_BOOTSTRAP_SERVERS: "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi

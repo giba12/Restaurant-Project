@@ -50,6 +50,8 @@ spec:
             - ON_ERROR_STOP=1
             - -f
             - /sql/001_hypertables.sql
+            - -f
+            - /sql/002_phase5_hypertables.sql
           env:
             - name: PGHOST
               value: {{ .Release.Name }}

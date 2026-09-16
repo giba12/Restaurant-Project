@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name }}
+  namespace: kafka
+  labels:
+    app: {{ .Chart.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Chart.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Chart.Name }}
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # No args -- default entrypoint runs run_from_anomaly_stream()
+          # (the long-running consumer path). The scenario-validation
+          # one-shot path (--scenario-injection-id ...) is invoked ad hoc
+          # via `kubectl exec` against this same running pod, not as a
+          # separate Job, to avoid maintaining two images for one module.
+          env:
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.pgPasswordSecretName }}
+                  key: {{ .Values.pgPasswordSecretKey }}
+          volumeMounts:
+            - name: schemas
+              mountPath: /app/schemas
+              readOnly: true
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: schemas
+          configMap:
+            name: phase5-schemas

@@ -1,0 +1,23 @@
+{
+  "apiVersion": "kafka.strimzi.io/v1",
+  "kind": "KafkaConnector",
+  "metadata": {
+    "name": "pos-transaction-source-connector",
+    "namespace": "kafka",
+    "labels": {
+      "strimzi.io/cluster": "connect-cluster"
+    }
+  },
+  "spec": {
+    "class": "org.apache.camel.kafkaconnector.mqttsource.CamelMqttsourceSourceConnector",
+    "config": {
+      "camel.kamelet.mqtt-source.brokerUrl": "tcp://mosquitto.kafka.svc.cluster.local:1883",
+      "camel.kamelet.mqtt-source.clientId": "kafka-connect-pos-transaction",
+      "camel.kamelet.mqtt-source.topic": "sensors/pos-transaction",
+      "key.converter": "org.apache.kafka.connect.converters.ByteArrayConverter",
+      "topics": "pos-transaction-events",
+      "value.converter": "org.apache.kafka.connect.converters.ByteArrayConverter"
+    },
+    "tasksMax": 1
+  }
+}

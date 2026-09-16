@@ -1,0 +1,23 @@
+{
+  "apiVersion": "kafka.strimzi.io/v1",
+  "kind": "KafkaConnector",
+  "metadata": {
+    "name": "staff-shift-source-connector",
+    "namespace": "kafka",
+    "labels": {
+      "strimzi.io/cluster": "connect-cluster"
+    }
+  },
+  "spec": {
+    "class": "org.apache.camel.kafkaconnector.mqttsource.CamelMqttsourceSourceConnector",
+    "config": {
+      "camel.kamelet.mqtt-source.brokerUrl": "tcp://mosquitto.kafka.svc.cluster.local:1883",
+      "camel.kamelet.mqtt-source.clientId": "kafka-connect-staff-shift",
+      "camel.kamelet.mqtt-source.topic": "sensors/staff-shift",
+      "key.converter": "org.apache.kafka.connect.converters.ByteArrayConverter",
+      "topics": "staff-shift-events",
+      "value.converter": "org.apache.kafka.connect.converters.ByteArrayConverter"
+    },
+    "tasksMax": 1
+  }
+}

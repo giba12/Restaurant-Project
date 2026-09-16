@@ -1,0 +1,6 @@
+apiVersion: v2
+name: scenario-injection-controller
+description: Phase 5 - CLI tool publishing scenario control messages to Kafka. Kept running idle so it can be invoked repeatedly via kubectl exec.
+type: application
+version: 0.1.0
+appVersion: "1.0"

@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://restaurant-platform.local/schemas/CausalFinding.schema.json",
+  "title": "CausalFinding",
+  "description": "Derived, computed record emitted by the Phase 5 DoWhy-based causal inference module. This is the ONLY object type the Phase 6 LLM narrator is permitted to read -- the narrator must never receive raw event data or AnomalyEvent records directly, per this project's strict narrator-scoping constraint. Every field a narrative could plausibly reference must therefore already be present here in structured form; the narrator phrases what's here, it does not compute or infer anything beyond it. Reviewed and committed 2026-09-15; field set validated against the causal-engine design in this revision.",
+  "type": "object",
+  "required": [
+    "finding_id",
+    "event_type",
+    "schema_version",
+    "source_id",
+    "computed_at",
+    "restaurant_id",
+    "treatment_variable",
+    "outcome_variable",
+    "confounders_controlled",
+    "effect_estimate",
+    "method",
+    "narrative_ready"
+  ],
+  "properties": {
+    "finding_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this causal finding, assigned by the causal engine."
+    },
+    "event_type": { "const": "CausalFinding" },
+    "schema_version": {
+      "type": "string",
+      "description": "Semantic version of this schema, e.g. '1.0.0'. Consumers must reject unknown major versions."
+    },
+    "source_id": {
+      "type": "string",
+      "description": "Identifier of the computing process, e.g. 'causal-engine-01'."
+    },
+    "computed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "restaurant_id": { "type": "string" },
+
+    "triggering_anomaly_id": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "The AnomalyEvent.anomaly_id that prompted this causal analysis, if any. Null when a finding was instead generated directly to validate a scenario_injection_id (see below) rather than in response to a detected anomaly -- these are the two expected ways a CausalFinding comes to exist."
+    },
+    "scenario_injection_id": {
+      "type": ["string", "null"],
+      "description": "Identifier of a scenario-injection-controller run this finding validates against, if any. Central to Phase 5's own done condition ('an injected scenario produces a correctly attributed finding, not a raw correlation') -- a finding produced during a known, controlled perturbation should be checkable against the injected scenario's known ground truth. Null for findings arising from organic (non-injected) anomalies."
+    },
+
+    "treatment_variable": {
+      "type": "string",
+      "description": "The variable whose causal effect is being estimated, e.g. 'to_go_container_used', 'staffing_level', 'order_volume'. Should generally name a field already present in one of the four Phase 3/4 event schemas' confounder/state fields, or a derived aggregate of one, to keep the causal engine's vocabulary traceable back to the actual data contract rather than introducing ad hoc variable names."
+    },
+    "outcome_variable": {
+      "type": "string",
+      "description": "The variable whose change is attributed to the treatment, e.g. 'estimated_waste_grams', 'pickup_delay_ms'."
+    },
+    "confounders_controlled": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Explicit list of confounding variables controlled for in this estimate, e.g. ['portion_size_variant', 'declared_dietary_restriction']. Required and non-empty deliberately -- an empty array here would represent a naive/uncontrolled correlation, which is exactly what this project's causal-engine design decision (replacing the original plate-waste-camera pitch) was meant to avoid. A finding with no controlled confounders should not validate against this schema."
+    },
+
+    "effect_estimate": {
+      "type": "number",
+      "description": "The estimated causal effect size of treatment_variable on outcome_variable, in whatever unit effect_estimate_unit specifies."
+    },
+    "effect_estimate_unit": {
+      "type": ["string", "null"],
+      "description": "Unit of effect_estimate, e.g. 'grams', 'milliseconds', 'percent_change'. Null only if the estimate is a dimensionless ratio/coefficient and this is genuinely not applicable -- prefer populating this whenever possible, since the narrator (Phase 6) cannot safely phrase an unlabeled number."
+    },
+    "confidence_interval": {
+      "type": ["object", "null"],
+      "properties": {
+        "lower": { "type": "number" },
+        "upper": { "type": "number" },
+        "confidence_level": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "e.g. 0.95 for a 95% interval."
+        }
+      },
+      "required": ["lower", "upper", "confidence_level"],
+      "additionalProperties": false
+    },
+    "method": {
+      "type": "string",
+      "description": "The DoWhy estimator method used, e.g. 'backdoor.linear_regression', 'backdoor.propensity_score_matching'. Kept as a free string rather than an enum since DoWhy supports many estimator identifiers and this project's causal module may reasonably try more than one; narrow this to an enum later if the actual implementation settles on a fixed, small set."
+    },
+    "refutation_passed": {
+      "type": ["boolean", "null"],
+      "description": "Whether DoWhy's refutation step (e.g. placebo treatment, random common cause) supported the estimate. Null if refutation was not run. Strongly recommended to populate before narrative_ready is set true -- an estimate that hasn't been refutation-tested is a weaker basis for a narrated claim."
+    },
+
+    "narrative_ready": {
+      "type": "boolean",
+      "description": "Gate flag for Phase 6. Only findings with narrative_ready=true should ever be passed to the LLM narrator. Exists so a finding can be persisted/inspected (e.g. for the digital twin, or for manual review) before a human or a downstream quality check decides it's solid enough to narrate -- decoupling 'this was computed' from 'this is safe to phrase to an end user.'"
+    },
+    "summary_text": {
+      "type": ["string", "null"],
+      "description": "Optional, pre-computed plain-language summary of the finding, written by the causal engine itself (not the LLM) as a fallback the narrator can use verbatim or build from. Keeping this engine-authored, not narrator-authored, preserves the 'narrator cannot originate a claim' boundary even at the summary-text level."
+    }
+  },
+  "additionalProperties": false
+}

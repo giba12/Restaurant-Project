@@ -1,5 +1,5 @@
 image:
-  repository: localhost/local/causal-engine
+  repository: localhost/local/ticket-timing-aggregator
   tag: "1.0"
   pullPolicy: IfNotPresent
 
@@ -14,13 +14,14 @@ env:
   RESTAURANT_ID: "restaurant-01"
   SCHEMA_VERSION: "1.0.0"
 
+# Referenced from an existing Secret rather than a plaintext value here.
 pgPasswordSecretName: "timescaledb-credentials"
 pgPasswordSecretKey: "password"
 
 resources:
   requests:
-    cpu: 200m
-    memory: 512Mi
+    cpu: 100m
+    memory: 128Mi
   limits:
-    cpu: 1500m
-    memory: 2Gi
+    cpu: 500m
+    memory: 512Mi

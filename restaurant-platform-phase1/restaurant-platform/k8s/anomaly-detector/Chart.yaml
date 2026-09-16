@@ -1,0 +1,6 @@
+apiVersion: v2
+name: anomaly-detector
+description: Phase 5 - control-limit and IsolationForest detection over TicketTimingSummary, emits AnomalyEvent
+type: application
+version: 0.1.0
+appVersion: "1.0"

@@ -131,8 +131,8 @@ def insert_plate_waste(cur, event: dict) -> None:
             "menu_item_id": event.get("menu_item_id"),
             "estimated_waste_grams": event.get("estimated_waste_grams"),
             "to_go_container_used": confounders.get("to_go_container_used"),
-            "dietary_restriction_flag": confounders.get("dietary_restriction_flag"),
-            "portion_size_variant": event.get("portion_size_variant"),
+            "dietary_restriction_flag": confounders.get("declared_dietary_restriction"),
+            "portion_size_variant": confounders.get("portion_size_variant"),
         },
     )
 
@@ -183,7 +183,7 @@ def insert_staff_shift(cur, event: dict) -> None:
             "staff_id": event.get("staff_id"),
             "role": event.get("role"),
             "station_id": event.get("station_id"),
-            "shift_event_type": event.get("shift_event_type"),
+            "shift_event_type": event.get("shift_action"),
         },
     )
 

@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://restaurant-platform.local/schemas/AnomalyEvent.schema.json",
+  "title": "AnomalyEvent",
+  "description": "Derived, computed record emitted by the Phase 5 anomaly-detection module (control-limit or IsolationForest mode) when a monitored metric falls outside its expected range. Not emitted by an edge device -- a downstream consumer of the four Phase 3/4 event streams, computed from aggregated or raw hypertable data. Reviewed and committed 2026-09-15; field set validated against the ticket-timing-aggregator/anomaly-detector design in this revision.",
+  "type": "object",
+  "required": [
+    "anomaly_id",
+    "event_type",
+    "schema_version",
+    "source_id",
+    "detected_at",
+    "restaurant_id",
+    "detection_method",
+    "metric_name",
+    "observed_value",
+    "window_start",
+    "window_end",
+    "severity"
+  ],
+  "properties": {
+    "anomaly_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this anomaly detection, assigned by the detector."
+    },
+    "event_type": { "const": "AnomalyEvent" },
+    "schema_version": {
+      "type": "string",
+      "description": "Semantic version of this schema, e.g. '1.0.0'. Consumers must reject unknown major versions."
+    },
+    "source_id": {
+      "type": "string",
+      "description": "Identifier of the detecting process, e.g. 'anomaly-detector-01'."
+    },
+    "detected_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this anomaly was detected/computed. Distinct from window_start/window_end, which describe the data the detection is about."
+    },
+    "restaurant_id": { "type": "string" },
+
+    "detection_method": {
+      "type": "string",
+      "enum": ["control_limit", "isolation_forest"],
+      "description": "Which of the two Phase 5 detection modes produced this finding. Kept as a closed enum deliberately -- a third method should be a schema_version bump, not a silent new string value, since downstream consumers (the causal engine) may reasonably branch on this."
+    },
+    "metric_name": {
+      "type": "string",
+      "description": "Name of the monitored metric, e.g. 'pickup_delay_ms', 'estimated_waste_grams', 'ticket_total_duration_ms'. Not an enum -- new metrics are expected to be added as detection coverage grows, and a closed list here would need updating in lockstep with detector code, working against the schema-is-the-contract principle rather than for it."
+    },
+    "scope": {
+      "type": "object",
+      "description": "The dimensional scope this anomaly applies to. All fields nullable/optional -- an anomaly may be restaurant-wide, or scoped to a specific station/staff member/ticket, depending on detection_method and metric_name.",
+      "properties": {
+        "station_id": { "type": ["string", "null"] },
+        "table_id": { "type": ["string", "null"] },
+        "staff_id": { "type": ["string", "null"] },
+        "ticket_id": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+
+    "window_start": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Start of the aggregation window the anomaly was computed over."
+    },
+    "window_end": {
+      "type": "string",
+      "format": "date-time",
+      "description": "End of the aggregation window."
+    },
+
+    "observed_value": {
+      "type": "number",
+      "description": "The actual observed value of metric_name over the window."
+    },
+    "expected_range": {
+      "type": ["object", "null"],
+      "description": "Only meaningful for detection_method='control_limit'. Null/absent for isolation_forest, which does not produce a simple range.",
+      "properties": {
+        "lower": { "type": "number" },
+        "upper": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "anomaly_score": {
+      "type": ["number", "null"],
+      "description": "Only meaningful for detection_method='isolation_forest'. Null/absent for control_limit, which does not produce a continuous score. Higher magnitude (more negative, per scikit-learn's convention) indicates a stronger anomaly."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["low", "medium", "high"],
+      "description": "Coarse severity bucket, derived from either expected_range's deviation or anomaly_score depending on detection_method. Exists so downstream consumers (e.g. a future alerting path) don't need to know both detection methods' internals to triage."
+    },
+
+    "contributing_event_ids": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "description": "Optional. event_id values from the underlying raw event tables that contributed to this anomaly's computation, for traceability back to raw data. May be large/omitted for window-aggregate-based detections where enumerating every contributing row isn't practical."
+    }
+  },
+  "additionalProperties": false
+}

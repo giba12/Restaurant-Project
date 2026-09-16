@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # Fixed name, not release-name-templated -- causal-engine, anomaly-detector,
+  # and ticket-timing-aggregator all reference this ConfigMap by this exact
+  # literal name in their own templates/deployment.yaml.
+  name: phase5-schemas
+  labels:
+    app.kubernetes.io/component: phase5-schemas
+data:
+  {{- range $path, $_ := .Files.Glob "files/*.json" }}
+  {{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+  {{- end }}

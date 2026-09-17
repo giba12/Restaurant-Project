@@ -1,6 +1,0 @@
-apiVersion: v2
-name: causal-engine
-description: Placeholder chart for the causal-engine service. No templates implemented yet — scaffolding only (Phase 1).
-type: application
-version: 0.1.0
-appVersion: "0.1.0"

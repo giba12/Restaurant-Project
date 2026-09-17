@@ -1,9 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ .Release.Name }}-schema-sql
-  labels:
-    app.kubernetes.io/component: schema-init
-data:
-  001_hypertables.sql: |
-{{ .Files.Get "files/001_hypertables.sql" | indent 4 }}

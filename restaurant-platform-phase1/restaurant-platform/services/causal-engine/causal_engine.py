@@ -49,6 +49,7 @@ log = logging.getLogger("causal-engine")
 
 ANOMALY_TOPIC = "anomaly-events"
 FINDING_TOPIC = "causal-findings-events"
+NARRATION_TOPIC = "narration-ready-events"
 SOURCE_ID = "causal-engine-01"
 
 # metric_name (as emitted by anomaly-detector) -> causal spec.
@@ -248,6 +249,78 @@ def process_anomaly(conn, producer, finding_schema, anomaly: dict, scenario_inje
     return finding
 
 
+def run_reviewer():
+    """
+    The narrative_ready gate, as its own step -- consumes FINDING_TOPIC and
+    flips narrative_ready to true in the database for any finding whose
+    refutation_passed is true. Deliberately a separate process from
+    process_anomaly/run_for_scenario: per this module's own top-of-file
+    docstring, "a human/automated quality check flipping narrative_ready to
+    True is treated as a separate, later step, not something this module
+    does unilaterally on every estimate it happens to produce." This is
+    that step, made real rather than left permanently unimplemented.
+
+    Rule is deliberately the simplest one directly supported by this
+    project's own stated position (CausalFinding.schema.json's own
+    refutation_passed description: "an estimate that hasn't been
+    refutation-tested is a weaker basis for a narrated claim") --
+    refutation_passed is Phase 5's only existing signal of estimate
+    quality, so it's the only thing this rule checks. Not a stand-in for a
+    real human review step; revisit once a stronger quality signal exists.
+
+    Also publishes to NARRATION_TOPIC on every flip -- necessary, not
+    optional: FINDING_TOPIC messages are published by process_anomaly()
+    before this reviewer ever runs, so narrative_ready is always false in
+    that stream. Nothing downstream (Phase 6's narrator) can otherwise
+    learn when a finding actually becomes ready. No JSON Schema for this
+    topic, same precedent as scenario-control-events in
+    scenario-injection-controller's own docstring: an internal
+    control-plane signal, not one of the committed event contracts.
+    """
+    consumer = KafkaConsumer(
+        FINDING_TOPIC,
+        bootstrap_servers=common.KAFKA_BOOTSTRAP_SERVERS,
+        api_version=common.KAFKA_API_VERSION,
+        group_id="finding-reviewer",
+        value_deserializer=lambda v: json.loads(v.decode("utf-8")),
+        enable_auto_commit=False,
+    )
+    producer = KafkaProducer(
+        bootstrap_servers=common.KAFKA_BOOTSTRAP_SERVERS,
+        api_version=common.KAFKA_API_VERSION,
+        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+    )
+    conn = common.pg_connect()
+
+    log.info("finding-reviewer started, consuming %s", FINDING_TOPIC)
+    for msg in consumer:
+        finding = msg.value
+        try:
+            if finding.get("refutation_passed") is True:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE causal_findings SET narrative_ready = true WHERE finding_id = %(finding_id)s",
+                        {"finding_id": finding["finding_id"]},
+                    )
+                conn.commit()
+                producer.send(
+                    NARRATION_TOPIC,
+                    value={"finding_id": finding["finding_id"], "restaurant_id": finding.get("restaurant_id")},
+                )
+                producer.flush()
+                log.info("finding_id=%s marked narrative_ready=true (refutation_passed=true)", finding["finding_id"])
+            else:
+                log.info(
+                    "finding_id=%s left narrative_ready=false (refutation_passed=%s)",
+                    finding["finding_id"], finding.get("refutation_passed"),
+                )
+            consumer.commit()
+        except Exception:
+            conn.rollback()
+            log.exception("Failed reviewing finding_id=%s; offset not committed", finding.get("finding_id"))
+            raise
+
+
 def run_from_anomaly_stream():
     finding_schema = common.load_schema("CausalFinding.schema.json")
     consumer = KafkaConsumer(
@@ -309,6 +382,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--review", action="store_true", help="Run the narrative_ready reviewer instead of the anomaly-stream consumer")
     parser.add_argument("--scenario-injection-id")
     parser.add_argument("--metric-name")
     parser.add_argument("--window-start")
@@ -316,7 +390,9 @@ if __name__ == "__main__":
     parser.add_argument("--restaurant-id", default=common.RESTAURANT_ID)
     args = parser.parse_args()
 
-    if args.scenario_injection_id:
+    if args.review:
+        run_reviewer()
+    elif args.scenario_injection_id:
         if not all([args.metric_name, args.window_start, args.window_end]):
             parser.error("--metric-name, --window-start, --window-end are required with --scenario-injection-id")
         run_for_scenario(

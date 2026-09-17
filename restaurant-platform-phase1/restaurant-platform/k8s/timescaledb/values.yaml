@@ -43,3 +43,13 @@ credentials:
   secretName: timescaledb-credentials
   username: restaurant_app
   password: "changeme-local-dev-only"
+
+# Phase 6: the LLM narrator's own restricted role (SELECT-only on
+# causal_findings; see storage/schema/003_phase6.sql). A second Secret,
+# not a second key on timescaledb-credentials, so this password can be
+# handed to the narrator chart alone.
+narratorCredentials:
+  create: true
+  secretName: narrator-credentials
+  username: narrator_app
+  password: "changeme-local-dev-only"

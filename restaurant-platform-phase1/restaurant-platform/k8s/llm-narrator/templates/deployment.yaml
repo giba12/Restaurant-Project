@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name }}
+  namespace: kafka
+  labels:
+    app: {{ .Chart.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Chart.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Chart.Name }}
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            # NODE_IP must come before OLLAMA_HOST references it via
+            # $(NODE_IP) -- Kubernetes' $(VAR) substitution only resolves
+            # references to variables declared earlier in this same list
+            # (see restaurant-platform-implementation-status.md problem
+            # log item 37 -- this exact ordering mistake already happened
+            # once in this project).
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: OLLAMA_HOST
+              value: "http://$(NODE_IP):{{ .Values.ollamaPort }}"
+            - name: OLLAMA_MODEL
+              value: {{ .Values.env.OLLAMA_MODEL | quote }}
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: {{ .Values.env.KAFKA_BOOTSTRAP_SERVERS | quote }}
+            - name: PGHOST
+              value: {{ .Values.env.PGHOST | quote }}
+            - name: PGPORT
+              value: {{ .Values.env.PGPORT | quote }}
+            - name: PGDATABASE
+              value: {{ .Values.env.PGDATABASE | quote }}
+            - name: PGUSER
+              value: {{ .Values.env.PGUSER | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.pgPasswordSecretName }}
+                  key: {{ .Values.pgPasswordSecretKey }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

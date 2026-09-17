@@ -1,5 +1,8 @@
+# Deliberately reuses causal-engine's already-built image rather than
+# maintaining a second Dockerfile for one extra entry point -- see
+# templates/deployment.yaml's command override.
 image:
-  repository: localhost/local/digital-twin
+  repository: localhost/local/causal-engine
   tag: "1.0"
   pullPolicy: IfNotPresent
 
@@ -17,8 +20,8 @@ pgPasswordSecretKey: "password"
 
 resources:
   requests:
-    cpu: 100m
+    cpu: 50m
     memory: 128Mi
   limits:
-    cpu: 500m
+    cpu: 200m
     memory: 256Mi

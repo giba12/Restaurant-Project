@@ -1,7 +1,32 @@
-# Placeholder values for llm-narrator.
-# No defaults defined yet; populate when templates/ is implemented in the corresponding build phase.
-replicaCount: 1
 image:
-  repository: TBD
-  tag: TBD
+  repository: localhost/local/finding-narrator
+  tag: "1.0"
   pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+env:
+  KAFKA_BOOTSTRAP_SERVERS: "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+  PGHOST: "timescaledb.kafka.svc.cluster.local"
+  PGPORT: "5432"
+  PGDATABASE: "restaurant_platform"
+  PGUSER: "narrator_app"
+  OLLAMA_MODEL: "qwen2.5:3b-instruct"
+
+# Ollama runs natively on the WSL2 host, not in-cluster (k3s has no NVIDIA
+# device plugin installed yet, and this host's GPU already works outside
+# the cluster -- see phase6 plan). Since k3s is single-node, the node IS
+# this host, so OLLAMA_HOST is built from the pod's own status.hostIP via
+# the Downward API in templates/deployment.yaml, not hardcoded here.
+ollamaPort: "11434"
+
+pgPasswordSecretName: "narrator-credentials"
+pgPasswordSecretKey: "password"
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi

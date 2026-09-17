@@ -1,6 +1,6 @@
 apiVersion: v2
 name: digital-twin
-description: Placeholder chart for the digital-twin service. No templates implemented yet — scaffolding only (Phase 1).
+description: Phase 6 - maintains current restaurant state (tables, staff, station load) from the raw Phase 3 event streams, upserted into twin_table_state/twin_staff_state/twin_station_state.
 type: application
 version: 0.1.0
-appVersion: "0.1.0"
+appVersion: "1.0"

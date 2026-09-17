@@ -52,6 +52,8 @@ spec:
             - /sql/001_hypertables.sql
             - -f
             - /sql/002_phase5_hypertables.sql
+            - -f
+            - /sql/003_phase6.sql
           env:
             - name: PGHOST
               value: {{ .Release.Name }}
@@ -68,6 +70,11 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.credentials.secretName }}
+                  key: password
+            - name: NARRATOR_PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.narratorCredentials.secretName }}
                   key: password
           volumeMounts:
             - name: schema-sql

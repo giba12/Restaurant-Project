@@ -36,6 +36,13 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      # Without this, log.dirs is never set in the merged server.properties
+      # at all (confirmed directly: it's simply absent), so Kafka falls
+      # back to its built-in /tmp default -- a path the volume below was
+      # never actually mounted onto. Every container recreation was
+      # silently wiping all topic data, not just an artifact of repeated
+      # --force-recreate cycles as first suspected.
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:

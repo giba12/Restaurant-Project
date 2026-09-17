@@ -85,12 +85,22 @@ def load_schemas() -> dict[str, dict]:
 # ---------------------------------------------------------------------
 # Per-event-type insert statements.
 #
-# Field-provenance note: only insert_service_timing's column list is
-# confirmed against actual producer code (service_timing.py). The other
-# three use the INFERRED columns from 001_hypertables.sql, guarded by
-# .get(...) with a None default so a missing/misnamed inferred field
-# degrades to a NULL typed column rather than a crash -- raw_payload
-# still captures the true event regardless. See PHASE4-DESIGN.md.
+# Field-provenance note: all four column lists are now confirmed against
+# the real schemas/*.schema.json files and storage/schema/001_hypertables.sql
+# (previously only insert_service_timing was confirmed; the other three
+# were guesses against the table DDL alone). Two real mismatches were
+# found and fixed this way: insert_plate_waste referenced a nonexistent
+# `menu_item_id` column (the real field is `plate_item_ids`, a TEXT[]),
+# and insert_pos_transaction referenced four columns that don't exist at
+# all (`menu_item_id`, `staff_id`, `quantity`, `unit_price` -- the real
+# columns are `transaction_id`, `server_staff_id`, `total_amount_cents`,
+# `currency`, `payment_method`, `discount_applied_cents`). Both silently
+# failed every insert (retried, then gave up without committing the
+# offset -- see write_with_retry/main below) rather than crashing, which
+# is why this went unnoticed: no pod ever crash-looped from it. Remaining
+# .get(...) calls with a None default are for genuinely optional fields,
+# not a hedge against more unconfirmed guesses -- raw_payload still
+# captures the true event regardless. See PHASE4-DESIGN.md.
 # ---------------------------------------------------------------------
 
 def _common_fields(event: dict) -> dict:
@@ -113,12 +123,12 @@ def insert_plate_waste(cur, event: dict) -> None:
         """
         INSERT INTO plate_waste_events (
             event_id, event_type, schema_version, source_id, source_kind,
-            "timestamp", restaurant_id, table_id, station_id, menu_item_id,
+            "timestamp", restaurant_id, table_id, station_id, plate_item_ids,
             estimated_waste_grams, to_go_container_used,
             declared_dietary_restriction, portion_size_variant, raw_payload
         ) VALUES (
             %(event_id)s, %(event_type)s, %(schema_version)s, %(source_id)s, %(source_kind)s,
-            %(timestamp)s, %(restaurant_id)s, %(table_id)s, %(station_id)s, %(menu_item_id)s,
+            %(timestamp)s, %(restaurant_id)s, %(table_id)s, %(station_id)s, %(plate_item_ids)s,
             %(estimated_waste_grams)s, %(to_go_container_used)s,
             %(declared_dietary_restriction)s, %(portion_size_variant)s, %(raw_payload)s
         )
@@ -128,7 +138,7 @@ def insert_plate_waste(cur, event: dict) -> None:
             **f,
             "table_id": event.get("table_id"),
             "station_id": event.get("station_id"),
-            "menu_item_id": event.get("menu_item_id"),
+            "plate_item_ids": event.get("plate_item_ids"),
             "estimated_waste_grams": event.get("estimated_waste_grams"),
             "to_go_container_used": confounders.get("to_go_container_used"),
             "declared_dietary_restriction": confounders.get("declared_dietary_restriction"),
@@ -143,22 +153,24 @@ def insert_pos_transaction(cur, event: dict) -> None:
         """
         INSERT INTO pos_transaction_events (
             event_id, event_type, schema_version, source_id, source_kind,
-            "timestamp", restaurant_id, table_id, menu_item_id, staff_id,
-            quantity, unit_price, raw_payload
+            "timestamp", restaurant_id, transaction_id, table_id, server_staff_id,
+            total_amount_cents, currency, payment_method, discount_applied_cents, raw_payload
         ) VALUES (
             %(event_id)s, %(event_type)s, %(schema_version)s, %(source_id)s, %(source_kind)s,
-            %(timestamp)s, %(restaurant_id)s, %(table_id)s, %(menu_item_id)s, %(staff_id)s,
-            %(quantity)s, %(unit_price)s, %(raw_payload)s
+            %(timestamp)s, %(restaurant_id)s, %(transaction_id)s, %(table_id)s, %(server_staff_id)s,
+            %(total_amount_cents)s, %(currency)s, %(payment_method)s, %(discount_applied_cents)s, %(raw_payload)s
         )
         ON CONFLICT (event_id, "timestamp") DO NOTHING
         """,
         {
             **f,
+            "transaction_id": event["transaction_id"],
             "table_id": event.get("table_id"),
-            "menu_item_id": event.get("menu_item_id"),
-            "staff_id": event.get("staff_id"),
-            "quantity": event.get("quantity"),
-            "unit_price": event.get("unit_price"),
+            "server_staff_id": event.get("server_staff_id"),
+            "total_amount_cents": event["total_amount_cents"],
+            "currency": event.get("currency", "USD"),
+            "payment_method": event.get("payment_method"),
+            "discount_applied_cents": event.get("discount_applied_cents", 0),
         },
     )
 

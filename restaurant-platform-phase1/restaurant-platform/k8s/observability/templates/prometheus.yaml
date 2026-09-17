@@ -47,6 +47,16 @@ data:
         static_configs:
           - targets: ["kube-state-metrics:8080"]
 
+      # Strimzi's dedicated Kafka Exporter component (spec.kafkaExporter
+      # in k8s/kafka-strimzi/templates/kafka-cluster.yaml) -- consumer
+      # group lag isn't a broker JMX metric at all, so this is a
+      # separate Strimzi-managed Deployment+Service, not another
+      # per-pod JMX target like kafka-jmx below. Fixed DNS name, same
+      # "kafka" namespace as Prometheus itself.
+      - job_name: kafka-consumer-lag
+        static_configs:
+          - targets: ["restaurant-platform-kafka-kafka-exporter:9404"]
+
       # Strimzi Kafka/Connect JMX exporters -- see k8s/kafka-strimzi and
       # k8s/kafka-connect-mqtt's metricsConfig. Strimzi exposes these on
       # port 9404 on each broker/connect pod; discover via the pod API
@@ -59,6 +69,17 @@ data:
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_label_strimzi_io_cluster]
             regex: (restaurant-platform-kafka|connect-cluster)
+            action: keep
+          # component-type, not just cluster: the cluster label alone
+          # also matches the kafka-exporter and entity-operator pods
+          # (same Strimzi cluster, different components) -- confirmed
+          # via real duplicate kafka_consumergroup_lag series (same
+          # data, two different `job` labels) once kafkaExporter was
+          # added, since it happens to also listen on port 9404. That
+          # component is scraped by the dedicated kafka-consumer-lag
+          # job above instead.
+          - source_labels: [__meta_kubernetes_pod_label_strimzi_io_component_type]
+            regex: (kafka|kafka-connect)
             action: keep
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: pod

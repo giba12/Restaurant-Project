@@ -77,6 +77,14 @@ data:
           ]
         },
         {
+          "type": "timeseries",
+          "title": "Kafka consumer group lag (by group, topic)",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+          "targets": [
+            {"expr": "sum by (consumergroup, topic) (kafka_consumergroup_lag)"}
+          ]
+        },
+        {
           "type": "stat",
           "title": "Running pods",
           "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},

@@ -22,13 +22,15 @@ data:
       - pattern: "kafka.server<type=ReplicaManager, name=(UnderReplicatedPartitions|OfflineReplicaCount)><>Value"
         name: "kafka_server_replicamanager_$1"
         type: GAUGE
-      # Consumer group lag -- the second explicitly-named observability
-      # goal. Exposed by the broker as GroupMetadataManager /
-      # kafka.consumer metrics depending on version; the topic-partition
-      # log-end-offset plus each group's committed offset (scraped from
-      # the __consumer_offsets internals via this rule) is the standard
-      # jmx_exporter approach for deriving lag in Grafana/PromQL rather
-      # than a single ready-made "lag" metric.
+      # NOTE: consumer group lag is NOT derivable from broker JMX at all
+      # -- committed offsets live in the internal __consumer_offsets
+      # topic, not an MBean the broker exposes. That's why
+      # kafka-cluster.yaml's spec.kafkaExporter (Strimzi's dedicated
+      # component for this) is used instead; see its comment there. The
+      # per-topic byte-rate counters below are still genuinely useful
+      # (throughput, this project's other observability goal) and the
+      # per-partition log-end-offset rule is kept for potential future
+      # per-partition sizing/growth panels.
       - pattern: "kafka.server<type=(.+), name=(.+)PerSec\\w*, topic=(.+)><>Count"
         name: "kafka_server_$1_$2_total"
         labels:

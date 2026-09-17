@@ -26,3 +26,36 @@ spec:
   entityOperator:
     topicOperator: {}
     userOperator: {}
+  # Consumer group lag isn't a broker JMX metric at all -- committed
+  # offsets live in the internal __consumer_offsets topic, not an MBean
+  # -- so the jmx_exporter rules above can't derive it. Strimzi ships a
+  # purpose-built component for exactly this (wraps kafka_exporter,
+  # which computes lag itself from the consumer/admin APIs); this is
+  # the standard mechanism, not custom code, matching how metricsConfig
+  # above is used for JMX metrics. No `image:` override here -- unlike
+  # a normal container, this MUST be Strimzi's own bundled image (same
+  # one the brokers use), which wraps kafka_exporter with a Strimzi-
+  # specific launch script; confirmed via a real CrashLoopBackOff
+  # (`kafka_exporter_run.sh` not found) when pointed at the plain
+  # upstream danielqsj/kafka-exporter image instead.
+  kafkaExporter:
+    groupRegex: ".*"
+    topicRegex: ".*"
+    resources:
+      {{- toYaml .Values.kafkaExporter.resources | nindent 6 }}
+---
+# Confirmed via real testing: unlike kube-state-metrics or the broker
+# pods themselves, Strimzi does NOT create a Service for the
+# kafkaExporter Deployment -- only the Deployment. Hand-rolled here,
+# same as this project's other infra manifests, selecting on the
+# stable strimzi.io/name label Strimzi puts on the exporter pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.clusterName }}-kafka-exporter
+spec:
+  selector:
+    strimzi.io/name: {{ .Values.clusterName }}-kafka-exporter
+  ports:
+    - port: 9404
+      targetPort: 9404

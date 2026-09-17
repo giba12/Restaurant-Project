@@ -11,7 +11,7 @@
 # `six` that breaks under 3.12's import-system changes. Same pin used by
 # every Phase 5 service and storage-consumer; see
 # linux-k8s-docker-helm-study-guide.md Section 6.3.
-FROM python:3.11-slim
+FROM docker.io/library/python:3.11-slim
 
 WORKDIR /app
 

@@ -78,7 +78,13 @@ def narrate(finding: dict) -> str:
     response = requests.post(
         f"{OLLAMA_HOST}/api/generate",
         json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
-        timeout=60,
+        # Generous on purpose -- confirmed via real testing that ordinary
+        # inference latency for this size of model is a few seconds, but
+        # under heavy host CPU/GPU contention (e.g. this project's k3s and
+        # Docker Compose paths both running at once) a 60s timeout has
+        # actually been hit and crashed this pod. Same reasoning as the
+        # Kafka healthcheck timeout in docker-compose.yml.
+        timeout=180,
     )
     response.raise_for_status()
     return response.json()["response"].strip()

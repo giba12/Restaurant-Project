@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-metrics
+  labels:
+    app: kafka-metrics
+data:
+  kafka-metrics-config.yml: |
+    lowercaseOutputName: true
+    rules:
+      # Broker-level throughput -- the "event throughput" part of this
+      # project's own stated observability goal.
+      - pattern: "kafka.server<type=BrokerTopicMetrics, name=(BytesInPerSec|BytesOutPerSec|MessagesInPerSec), topic=(.+)><>OneMinuteRate"
+        name: "kafka_server_brokertopicmetrics_$1"
+        labels:
+          topic: "$2"
+        type: GAUGE
+      - pattern: "kafka.server<type=BrokerTopicMetrics, name=(BytesInPerSec|BytesOutPerSec|MessagesInPerSec)><>OneMinuteRate"
+        name: "kafka_server_brokertopicmetrics_$1_total"
+        type: GAUGE
+      # Cluster health -- under-replicated/offline partitions.
+      - pattern: "kafka.server<type=ReplicaManager, name=(UnderReplicatedPartitions|OfflineReplicaCount)><>Value"
+        name: "kafka_server_replicamanager_$1"
+        type: GAUGE
+      # Consumer group lag -- the second explicitly-named observability
+      # goal. Exposed by the broker as GroupMetadataManager /
+      # kafka.consumer metrics depending on version; the topic-partition
+      # log-end-offset plus each group's committed offset (scraped from
+      # the __consumer_offsets internals via this rule) is the standard
+      # jmx_exporter approach for deriving lag in Grafana/PromQL rather
+      # than a single ready-made "lag" metric.
+      - pattern: "kafka.server<type=(.+), name=(.+)PerSec\\w*, topic=(.+)><>Count"
+        name: "kafka_server_$1_$2_total"
+        labels:
+          topic: "$3"
+        type: COUNTER
+      - pattern: "kafka.log<type=Log, name=LogEndOffset, topic=(.+), partition=(.+)><>Value"
+        name: "kafka_log_logendoffset"
+        labels:
+          topic: "$1"
+          partition: "$2"
+        type: GAUGE

@@ -1,0 +1,13 @@
+{
+  "name": "plate-waste-source-connector",
+  "config": {
+    "connector.class": "org.apache.camel.kafkaconnector.mqttsource.CamelMqttsourceSourceConnector",
+    "tasks.max": "1",
+    "camel.kamelet.mqtt-source.brokerUrl": "tcp://mosquitto:1883",
+    "camel.kamelet.mqtt-source.clientId": "kafka-connect-plate-waste",
+    "camel.kamelet.mqtt-source.topic": "sensors/plate-waste",
+    "key.converter": "org.apache.kafka.connect.converters.ByteArrayConverter",
+    "value.converter": "org.apache.kafka.connect.converters.ByteArrayConverter",
+    "topics": "plate-waste-events"
+  }
+}

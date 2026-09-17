@@ -1,7 +1,7 @@
 # python:3.11-slim required -- kafka-python 2.0.2's vendored six.moves shim
 # breaks on 3.12+ (see linux-k8s-docker-helm-study-guide.md, Section on
 # kafka-python compatibility).
-FROM python:3.11-slim
+FROM docker.io/library/python:3.11-slim
 
 RUN useradd -u 1001 -m svcuser
 

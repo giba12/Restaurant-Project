@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-connect-metrics
+  labels:
+    app: kafka-connect-metrics
+data:
+  connect-metrics-config.yml: |
+    lowercaseOutputName: true
+    rules:
+      - pattern: "kafka.connect<type=connector-task-metrics, connector=(.+), task=(.+)><>status: (.+)"
+        name: "kafka_connect_connector_task_status"
+        labels:
+          connector: "$1"
+          task: "$2"
+          status: "$3"
+        type: GAUGE
+      - pattern: "kafka.connect<type=connector-metrics, connector=(.+)><>connector-total-task-count"
+        name: "kafka_connect_connector_total_task_count"
+        labels:
+          connector: "$1"
+        type: GAUGE
+      - pattern: "kafka.connect<type=task-error-metrics, connector=(.+), task=(.+)><>total-record-errors"
+        name: "kafka_connect_task_record_errors_total"
+        labels:
+          connector: "$1"
+          task: "$2"
+        type: COUNTER

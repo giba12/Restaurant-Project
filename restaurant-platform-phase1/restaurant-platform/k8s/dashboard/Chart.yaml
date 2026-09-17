@@ -1,6 +1,6 @@
 apiVersion: v2
 name: dashboard
-description: Placeholder chart for the dashboard service. No templates implemented yet — scaffolding only (Phase 1).
+description: Phase 7 - the business-facing React dashboard (dashboard-web, served by nginx, proxying /api/ to dashboard-api) and its read-only FastAPI backend (dashboard-api) over the digital twin and findings tables.
 type: application
 version: 0.1.0
-appVersion: "0.1.0"
+appVersion: "1.0"

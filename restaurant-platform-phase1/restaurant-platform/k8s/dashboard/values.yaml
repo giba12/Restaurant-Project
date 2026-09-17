@@ -1,7 +1,36 @@
-# Placeholder values for dashboard.
-# No defaults defined yet; populate when templates/ is implemented in the corresponding build phase.
-replicaCount: 1
-image:
-  repository: TBD
-  tag: TBD
-  pullPolicy: IfNotPresent
+api:
+  image:
+    repository: localhost/local/dashboard-api
+    tag: "1.0"
+    pullPolicy: IfNotPresent
+  env:
+    KAFKA_BOOTSTRAP_SERVERS: "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+    PGHOST: "timescaledb.kafka.svc.cluster.local"
+    PGPORT: "5432"
+    PGDATABASE: "restaurant_platform"
+    PGUSER: "restaurant_app"
+  pgPasswordSecretName: "timescaledb-credentials"
+  pgPasswordSecretKey: "password"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+web:
+  image:
+    repository: localhost/local/dashboard-web
+    tag: "1.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi

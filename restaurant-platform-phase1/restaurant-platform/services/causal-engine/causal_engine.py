@@ -60,20 +60,18 @@ TREATMENT_MAP = {
     "estimated_waste_grams": {
         "treatment": "to_go_container_used",
         "outcome": "estimated_waste_grams",
-        # NOTE: PlateWasteEvent.schema.json (the canonical contract) names
-        # this confounder 'declared_dietary_restriction', but the actual
-        # plate_waste_events column -- as written by storage-consumer's
-        # insert path -- is 'dietary_restriction_flag'. That's a pre-existing
-        # naming drift between the schema and the DB write path; matching
-        # the real column here rather than fixing storage-consumer's
-        # already-stable Phase 4 insert path as a side effect of Phase 5.
-        "confounders": ["portion_size_variant", "dietary_restriction_flag"],
+        # plate_waste_events.declared_dietary_restriction matches
+        # PlateWasteEvent.schema.json's own field name directly -- the
+        # column was previously misnamed (dietary_restriction_flag) and
+        # storage-consumer wrote into it via the wrong confounder_flags
+        # key; both were fixed to use the canonical schema name.
+        "confounders": ["portion_size_variant", "declared_dietary_restriction"],
         "query": """
             SELECT
                 to_go_container_used,
                 estimated_waste_grams,
                 portion_size_variant,
-                dietary_restriction_flag
+                declared_dietary_restriction
             FROM plate_waste_events
             WHERE "timestamp" BETWEEN %(window_start)s AND %(window_end)s
               AND to_go_container_used IS NOT NULL
@@ -97,12 +95,12 @@ TREATMENT_MAP = {
                 (
                     SELECT COUNT(DISTINCT s.staff_id)
                     FROM staff_shift_events s
-                    WHERE s.shift_event_type = 'clock_in'
+                    WHERE s.shift_action = 'clock_in'
                       AND s."timestamp" <= t.picked_up_time
                       AND NOT EXISTS (
                           SELECT 1 FROM staff_shift_events s2
                           WHERE s2.staff_id = s.staff_id
-                            AND s2.shift_event_type = 'clock_out'
+                            AND s2.shift_action = 'clock_out'
                             AND s2."timestamp" BETWEEN s."timestamp" AND t.picked_up_time
                       )
                 ) AS staffing_level

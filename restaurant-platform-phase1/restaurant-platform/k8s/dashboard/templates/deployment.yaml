@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-api
+  namespace: kafka
+  labels:
+    app: dashboard-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard-api
+  template:
+    metadata:
+      labels:
+        app: dashboard-api
+    spec:
+      containers:
+        - name: dashboard-api
+          image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          ports:
+            - containerPort: 8000
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: {{ .Values.api.env.KAFKA_BOOTSTRAP_SERVERS | quote }}
+            - name: PGHOST
+              value: {{ .Values.api.env.PGHOST | quote }}
+            - name: PGPORT
+              value: {{ .Values.api.env.PGPORT | quote }}
+            - name: PGDATABASE
+              value: {{ .Values.api.env.PGDATABASE | quote }}
+            - name: PGUSER
+              value: {{ .Values.api.env.PGUSER | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.pgPasswordSecretName }}
+                  key: {{ .Values.api.pgPasswordSecretKey }}
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard-api
+  namespace: kafka
+spec:
+  selector:
+    app: dashboard-api
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-web
+  namespace: kafka
+  labels:
+    app: dashboard-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard-web
+  template:
+    metadata:
+      labels:
+        app: dashboard-web
+    spec:
+      containers:
+        - name: dashboard-web
+          image: "{{ .Values.web.image.repository }}:{{ .Values.web.image.tag }}"
+          imagePullPolicy: {{ .Values.web.image.pullPolicy }}
+          ports:
+            - containerPort: 80
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard-web
+  namespace: kafka
+spec:
+  type: {{ .Values.web.service.type }}
+  selector:
+    app: dashboard-web
+  ports:
+    - port: {{ .Values.web.service.port }}
+      targetPort: 80

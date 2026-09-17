@@ -1,6 +1,13 @@
 apiVersion: v2
 name: observability
-description: Placeholder chart for the observability service. No templates implemented yet — scaffolding only (Phase 1).
+description: >
+  Phase 7 - platform observability. kube-state-metrics for pod/deployment
+  health, Prometheus scraping it plus Strimzi's Kafka/Connect JMX
+  exporters (see k8s/kafka-strimzi and k8s/kafka-connect-mqtt's
+  metricsConfig), and Grafana with the Prometheus datasource and a
+  starter dashboard pre-provisioned. All three hand-rolled from official
+  images -- same reasoning as k8s/timescaledb and k8s/minio: no
+  third-party chart dependency to go stale.
 type: application
 version: 0.1.0
-appVersion: "0.1.0"
+appVersion: "1.0"

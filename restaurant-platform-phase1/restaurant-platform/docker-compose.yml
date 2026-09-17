@@ -1,0 +1,285 @@
+# Portable deployment path -- NOT a replacement for k8s/ (that remains
+# the "real Kubernetes depth" story for this project). This is the
+# deliberately simpler path: clone the repo, run `docker compose up
+# --build`, have something running on any machine with just Docker
+# installed. See QUICKSTART.md.
+#
+# MinIO is deliberately not included here -- nothing in this pipeline
+# writes to it yet (see k8s/minio/Chart.yaml's own note: it exists only
+# to establish the storage contract ahead of a possible future CV
+# stretch goal). No reason to add startup weight for zero demonstrated
+# use in the portable path.
+
+services:
+  # -------------------------------------------------------------------
+  # Message backbone
+  # -------------------------------------------------------------------
+  mosquitto:
+    image: docker.io/library/eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - ./docker-compose/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  kafka:
+    image: docker.io/apache/kafka:4.3.1
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      # Generous timing on purpose: each check spawns a JVM
+      # (kafka-topics.sh), which can take a while under load on a
+      # machine of unknown specs -- worth costing a few extra seconds on
+      # a fast machine to avoid false "unhealthy" flapping on a slow one.
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 15s
+      retries: 30
+      start_period: 30s
+
+  kafka-connect:
+    restart: unless-stopped
+    build:
+      context: ./docker-compose/kafka-connect
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  kafka-connect-init:
+    image: docker.io/curlimages/curl:8.11.1
+    depends_on:
+      - kafka-connect
+    volumes:
+      - ./docker-compose/kafka-connect/register-connectors.sh:/register-connectors.sh:ro
+      - ./docker-compose/kafka-connect/connectors:/connectors:ro
+    entrypoint: ["/bin/sh", "/register-connectors.sh"]
+    restart: "no"
+
+  # -------------------------------------------------------------------
+  # Storage
+  # -------------------------------------------------------------------
+  timescaledb:
+    image: docker.io/timescale/timescaledb-ha:pg16-ts2.16-all
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: restaurant_platform
+      POSTGRES_USER: restaurant_app
+      POSTGRES_PASSWORD: ${TIMESCALEDB_PASSWORD:-changeme-local-dev-only}
+      # Consumed by 003_phase6.sql's \getenv -- same mechanism as the k8s
+      # schema-init Job, just via docker-entrypoint-initdb.d instead of a
+      # Helm-hook Job (Postgres's own image runs every mounted .sql file
+      # with this same psql, so \getenv/\gexec work identically here).
+      NARRATOR_PGPASSWORD: ${NARRATOR_PGPASSWORD:-changeme-local-dev-only}
+    volumes:
+      - timescaledb-data:/home/postgres/pgdata/data
+      - ./storage/schema/001_hypertables.sql:/docker-entrypoint-initdb.d/001_hypertables.sql:ro
+      - ./storage/schema/002_phase5_hypertables.sql:/docker-entrypoint-initdb.d/002_phase5_hypertables.sql:ro
+      - ./storage/schema/003_phase6.sql:/docker-entrypoint-initdb.d/003_phase6.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U restaurant_app -d restaurant_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # -------------------------------------------------------------------
+  # Edge simulators (Phase 3) -- one image, four services, same as the
+  # k8s chart's "one image, SENSOR_TYPE env var selects the module" design.
+  # -------------------------------------------------------------------
+  edge-sim-plate-waste: &edge-sim
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: edge-simulators/Dockerfile
+    depends_on:
+      mosquitto:
+        condition: service_started
+    environment: &edge-sim-env
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      SCENARIO_CONTROL_ENABLED: "true"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SENSOR_TYPE: plate-waste
+      MQTT_TOPIC: sensors/plate-waste
+      SOURCE_ID: sim-plate-cam-01
+      EVENT_RATE_PER_MIN: "8"
+
+  edge-sim-pos-transaction:
+    <<: *edge-sim
+    environment:
+      <<: *edge-sim-env
+      SENSOR_TYPE: pos-transaction
+      MQTT_TOPIC: sensors/pos-transaction
+      SOURCE_ID: sim-pos-01
+      EVENT_RATE_PER_MIN: "12"
+
+  edge-sim-service-timing:
+    <<: *edge-sim
+    environment:
+      <<: *edge-sim-env
+      SENSOR_TYPE: service-timing
+      MQTT_TOPIC: sensors/service-timing
+      SOURCE_ID: sim-ticket-timer-01
+      EVENT_RATE_PER_MIN: "20"
+
+  edge-sim-staff-shift:
+    <<: *edge-sim
+    environment:
+      <<: *edge-sim-env
+      SENSOR_TYPE: staff-shift
+      MQTT_TOPIC: sensors/staff-shift
+      SOURCE_ID: sim-staffing-sensor-01
+      EVENT_RATE_PER_MIN: "3"
+
+  # -------------------------------------------------------------------
+  # Phase 4/5/6 application services -- same images/entry points as the
+  # k8s charts, only the connection env vars differ (compose service
+  # names instead of k8s DNS names).
+  # -------------------------------------------------------------------
+  storage-consumer:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: storage/consumer/Dockerfile
+    depends_on:
+      kafka: { condition: service_healthy }
+      timescaledb: { condition: service_healthy }
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_CONSUMER_GROUP: storage-consumer
+      TIMESCALE_DSN: postgresql://restaurant_app:${TIMESCALEDB_PASSWORD:-changeme-local-dev-only}@timescaledb:5432/restaurant_platform
+
+  ticket-timing-aggregator: &phase5-service
+    restart: unless-stopped
+    build:
+      context: ./services
+      dockerfile: ticket-timing-aggregator/Dockerfile
+    depends_on:
+      kafka: { condition: service_healthy }
+      timescaledb: { condition: service_healthy }
+    environment: &phase5-env
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PGHOST: timescaledb
+      PGPORT: "5432"
+      PGDATABASE: restaurant_platform
+      PGUSER: restaurant_app
+      PGPASSWORD: ${TIMESCALEDB_PASSWORD:-changeme-local-dev-only}
+      RESTAURANT_ID: restaurant-01
+      SCHEMA_VERSION: "1.0.0"
+    volumes:
+      - ./schemas:/app/schemas:ro
+
+  anomaly-detector:
+    <<: *phase5-service
+    build:
+      context: ./services
+      dockerfile: anomaly-detector/Dockerfile
+    environment:
+      <<: *phase5-env
+      ANOMALY_WINDOW_SIZE: "200"
+      ANOMALY_MIN_WINDOW_SIZE: "30"
+      CONTROL_LIMIT_SIGMA: "3.0"
+      ISOLATION_FOREST_REFIT_EVERY: "20"
+      ISOLATION_FOREST_CONTAMINATION: "0.05"
+
+  causal-engine:
+    <<: *phase5-service
+    build:
+      context: ./services
+      dockerfile: causal-engine/Dockerfile
+
+  finding-reviewer:
+    restart: unless-stopped
+    build:
+      context: ./services
+      dockerfile: causal-engine/Dockerfile
+    depends_on:
+      kafka: { condition: service_healthy }
+      timescaledb: { condition: service_healthy }
+    environment:
+      <<: *phase5-env
+    entrypoint: ["python", "causal_engine.py", "--review"]
+
+  scenario-injection-controller:
+    restart: unless-stopped
+    build:
+      context: ./services
+      dockerfile: scenario-injection-controller/Dockerfile
+    depends_on:
+      kafka: { condition: service_healthy }
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    entrypoint: ["sleep", "infinity"]
+
+  digital-twin:
+    restart: unless-stopped
+    build:
+      context: ./services
+      dockerfile: digital-twin/Dockerfile
+    depends_on:
+      kafka: { condition: service_healthy }
+      timescaledb: { condition: service_healthy }
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PGHOST: timescaledb
+      PGPORT: "5432"
+      PGDATABASE: restaurant_platform
+      PGUSER: restaurant_app
+      PGPASSWORD: ${TIMESCALEDB_PASSWORD:-changeme-local-dev-only}
+
+  llm-narrator:
+    restart: unless-stopped
+    build:
+      context: ./services
+      dockerfile: finding-narrator/Dockerfile
+    depends_on:
+      kafka: { condition: service_healthy }
+      timescaledb: { condition: service_healthy }
+      ollama: { condition: service_started }
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PGHOST: timescaledb
+      PGPORT: "5432"
+      PGDATABASE: restaurant_platform
+      PGUSER: narrator_app
+      PGPASSWORD: ${NARRATOR_PGPASSWORD:-changeme-local-dev-only}
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:0.5b-instruct}
+
+  # -------------------------------------------------------------------
+  # Local LLM -- containerized here (unlike the k3s path, which runs
+  # Ollama natively on the host for GPU access). No GPU assumed in the
+  # portable path, hence the much smaller model.
+  # -------------------------------------------------------------------
+  ollama:
+    image: docker.io/ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+
+  ollama-init:
+    image: docker.io/curlimages/curl:8.11.1
+    depends_on:
+      - ollama
+    environment:
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:0.5b-instruct}
+    volumes:
+      - ./docker-compose/ollama/pull-model.sh:/pull-model.sh:ro
+    entrypoint: ["/bin/sh", "/pull-model.sh"]
+    restart: "no"
+
+volumes:
+  kafka-data:
+  timescaledb-data:
+  ollama-data:

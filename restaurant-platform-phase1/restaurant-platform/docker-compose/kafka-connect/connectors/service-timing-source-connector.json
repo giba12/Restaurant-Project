@@ -1,0 +1,13 @@
+{
+  "name": "service-timing-source-connector",
+  "config": {
+    "connector.class": "org.apache.camel.kafkaconnector.mqttsource.CamelMqttsourceSourceConnector",
+    "tasks.max": "1",
+    "camel.kamelet.mqtt-source.brokerUrl": "tcp://mosquitto:1883",
+    "camel.kamelet.mqtt-source.clientId": "kafka-connect-service-timing",
+    "camel.kamelet.mqtt-source.topic": "sensors/service-timing",
+    "key.converter": "org.apache.kafka.connect.converters.ByteArrayConverter",
+    "value.converter": "org.apache.kafka.connect.converters.ByteArrayConverter",
+    "topics": "service-timing-events"
+  }
+}

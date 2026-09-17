@@ -1,7 +1,31 @@
-# Placeholder values for observability.
-# No defaults defined yet; populate when templates/ is implemented in the corresponding build phase.
-replicaCount: 1
-image:
-  repository: TBD
-  tag: TBD
-  pullPolicy: IfNotPresent
+kubeStateMetrics:
+  image:
+    repository: registry.k8s.io/kube-state-metrics/kube-state-metrics
+    tag: v2.13.0
+
+prometheus:
+  image:
+    repository: docker.io/prom/prometheus
+    tag: v2.55.1
+  retention: 3d
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+grafana:
+  image:
+    repository: docker.io/grafana/grafana
+    tag: "11.3.0"
+  adminUser: admin
+  adminPassword: "changeme-local-dev-only"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi

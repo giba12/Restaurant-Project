@@ -13,6 +13,13 @@ spec:
   configStorageTopic: connect-cluster-configs
   offsetStorageTopic: connect-cluster-offsets
   statusStorageTopic: connect-cluster-status
+  # Phase 7: same mechanism as k8s/kafka-strimzi/templates/kafka-cluster.yaml.
+  metricsConfig:
+    type: jmxPrometheusExporter
+    valueFrom:
+      configMapKeyRef:
+        name: kafka-connect-metrics
+        key: connect-metrics-config.yml
   config:
     config.storage.replication.factor: 1
     offset.storage.replication.factor: 1

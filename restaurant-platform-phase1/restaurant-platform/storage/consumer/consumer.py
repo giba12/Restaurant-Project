@@ -115,12 +115,12 @@ def insert_plate_waste(cur, event: dict) -> None:
             event_id, event_type, schema_version, source_id, source_kind,
             "timestamp", restaurant_id, table_id, station_id, menu_item_id,
             estimated_waste_grams, to_go_container_used,
-            dietary_restriction_flag, portion_size_variant, raw_payload
+            declared_dietary_restriction, portion_size_variant, raw_payload
         ) VALUES (
             %(event_id)s, %(event_type)s, %(schema_version)s, %(source_id)s, %(source_kind)s,
             %(timestamp)s, %(restaurant_id)s, %(table_id)s, %(station_id)s, %(menu_item_id)s,
             %(estimated_waste_grams)s, %(to_go_container_used)s,
-            %(dietary_restriction_flag)s, %(portion_size_variant)s, %(raw_payload)s
+            %(declared_dietary_restriction)s, %(portion_size_variant)s, %(raw_payload)s
         )
         ON CONFLICT (event_id, "timestamp") DO NOTHING
         """,
@@ -131,7 +131,7 @@ def insert_plate_waste(cur, event: dict) -> None:
             "menu_item_id": event.get("menu_item_id"),
             "estimated_waste_grams": event.get("estimated_waste_grams"),
             "to_go_container_used": confounders.get("to_go_container_used"),
-            "dietary_restriction_flag": confounders.get("declared_dietary_restriction"),
+            "declared_dietary_restriction": confounders.get("declared_dietary_restriction"),
             "portion_size_variant": confounders.get("portion_size_variant"),
         },
     )
@@ -170,11 +170,11 @@ def insert_staff_shift(cur, event: dict) -> None:
         INSERT INTO staff_shift_events (
             event_id, event_type, schema_version, source_id, source_kind,
             "timestamp", restaurant_id, staff_id, role, station_id,
-            shift_event_type, raw_payload
+            shift_action, raw_payload
         ) VALUES (
             %(event_id)s, %(event_type)s, %(schema_version)s, %(source_id)s, %(source_kind)s,
             %(timestamp)s, %(restaurant_id)s, %(staff_id)s, %(role)s, %(station_id)s,
-            %(shift_event_type)s, %(raw_payload)s
+            %(shift_action)s, %(raw_payload)s
         )
         ON CONFLICT (event_id, "timestamp") DO NOTHING
         """,
@@ -183,7 +183,7 @@ def insert_staff_shift(cur, event: dict) -> None:
             "staff_id": event.get("staff_id"),
             "role": event.get("role"),
             "station_id": event.get("station_id"),
-            "shift_event_type": event.get("shift_action"),
+            "shift_action": event.get("shift_action"),
         },
     )
 

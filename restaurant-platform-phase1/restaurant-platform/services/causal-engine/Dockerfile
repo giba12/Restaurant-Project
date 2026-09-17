@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM docker.io/library/python:3.11-slim
 
 # DoWhy/statsmodels/pandas have C-extension build dependencies not present
 # in the slim base image on some platforms; build-essential is included

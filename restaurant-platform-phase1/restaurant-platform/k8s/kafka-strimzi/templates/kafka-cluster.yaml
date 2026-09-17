@@ -9,6 +9,14 @@ spec:
         port: 9092
         type: internal
         tls: false
+    # Phase 7: JMX-to-Prometheus exporter, standard Strimzi mechanism --
+    # no custom code, just this config. See templates/metrics-configmap.yaml.
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: kafka-metrics
+          key: kafka-metrics-config.yml
     config:
       offsets.topic.replication.factor: 1
       transaction.state.log.replication.factor: 1

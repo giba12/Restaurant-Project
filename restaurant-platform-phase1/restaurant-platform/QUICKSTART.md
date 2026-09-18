@@ -21,6 +21,8 @@ First run builds ~13 images and pulls the LLM model — expect several minutes. 
 
 ## What to look at while it's running
 
+Open **http://localhost:8080** for the live dashboard — station/staff state, anomaly counts, and the narrated-findings feed, all pulled from the running pipeline.
+
 ```bash
 # Real ticket flow accumulating
 docker compose exec timescaledb psql -U restaurant_app -d restaurant_platform \

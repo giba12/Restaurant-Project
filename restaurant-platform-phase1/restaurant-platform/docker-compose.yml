@@ -265,6 +265,35 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:0.5b-instruct}
 
   # -------------------------------------------------------------------
+  # Dashboard (Phase 7) -- same images/entry points as k8s/dashboard/,
+  # just exposed directly on the host instead of requiring
+  # `kubectl port-forward`, since "open a browser" should be zero-step
+  # on this path.
+  # -------------------------------------------------------------------
+  dashboard-api:
+    restart: unless-stopped
+    build:
+      context: ./services
+      dockerfile: dashboard-api/Dockerfile
+    depends_on:
+      timescaledb: { condition: service_healthy }
+    environment:
+      PGHOST: timescaledb
+      PGPORT: "5432"
+      PGDATABASE: restaurant_platform
+      PGUSER: restaurant_app
+      PGPASSWORD: ${TIMESCALEDB_PASSWORD:-changeme-local-dev-only}
+
+  dashboard-web:
+    restart: unless-stopped
+    build:
+      context: ./services/dashboard-web
+    depends_on:
+      - dashboard-api
+    ports:
+      - "8080:80"
+
+  # -------------------------------------------------------------------
   # Local LLM -- containerized here (unlike the k3s path, which runs
   # Ollama natively on the host for GPU access). No GPU assumed in the
   # portable path, hence the much smaller model.

@@ -94,6 +94,7 @@ services:
       - ./storage/schema/001_hypertables.sql:/docker-entrypoint-initdb.d/001_hypertables.sql:ro
       - ./storage/schema/002_phase5_hypertables.sql:/docker-entrypoint-initdb.d/002_phase5_hypertables.sql:ro
       - ./storage/schema/003_phase6.sql:/docker-entrypoint-initdb.d/003_phase6.sql:ro
+      - ./storage/schema/004_player_source_kind.sql:/docker-entrypoint-initdb.d/004_player_source_kind.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U restaurant_app -d restaurant_platform"]
       interval: 5s
@@ -292,6 +293,24 @@ services:
       - dashboard-api
     ports:
       - "8080:80"
+
+  # -------------------------------------------------------------------
+  # Version-2 groundwork: HTTP-to-Kafka bridge for a human-driven game
+  # client (see services/game-bridge/main.py). Published on the host
+  # because the game runs outside the compose network -- bound to
+  # localhost only, since the bridge has no authentication.
+  # -------------------------------------------------------------------
+  game-bridge:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: services/game-bridge/Dockerfile
+    depends_on:
+      kafka: { condition: service_healthy }
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "127.0.0.1:8001:8001"
 
   # -------------------------------------------------------------------
   # Local LLM -- containerized here (unlike the k3s path, which runs

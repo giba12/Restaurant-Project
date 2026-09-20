@@ -54,6 +54,8 @@ spec:
             - /sql/002_phase5_hypertables.sql
             - -f
             - /sql/003_phase6.sql
+            - -f
+            - /sql/004_player_source_kind.sql
           env:
             - name: PGHOST
               value: {{ .Release.Name }}

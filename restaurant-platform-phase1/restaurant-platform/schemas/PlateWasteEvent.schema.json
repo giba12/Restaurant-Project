@@ -34,9 +34,9 @@
     },
     "source_kind": {
       "type": "string",
-      "enum": ["simulated", "vendor_integration"],
+      "enum": ["simulated", "vendor_integration", "player"],
       "default": "simulated",
-      "description": "Distinguishes stand-in producers from future real integrations without changing the contract."
+      "description": "Distinguishes stand-in producers from future real integrations without changing the contract. 'player' (added 2026-09-20) marks a human-driven source, i.e. the version-2 game client via game-bridge."
     },
     "timestamp": {
       "type": "string",

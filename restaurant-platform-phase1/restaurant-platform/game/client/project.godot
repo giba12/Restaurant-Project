@@ -17,3 +17,8 @@ window/size/viewport_width=1024
 window/size/viewport_height=680
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"

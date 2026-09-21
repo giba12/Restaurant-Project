@@ -652,7 +652,7 @@ Everything for the human-playable version lives here, and nothing outside `game/
 - **Purpose:** The bridge's image.
 
 ### `game/client/project.godot`
-- **What it does:** The Godot project file: name and description, the main scene (`res://scenes/main.tscn`), engine feature version 4.5, a 1024 by 680 window, and canvas-items stretch scaling.
+- **What it does:** The Godot project file: name and description, the main scene (`res://scenes/main.tscn`), engine feature version 4.5, a 1024 by 680 window, canvas-items stretch scaling, and the OpenGL "Compatibility" renderer. The renderer is set explicitly because the game is 2D UI: the default (Vulkan) fails on WSL2 machines with no Vulkan driver and prints two errors and a warning before falling back to OpenGL anyway. Compatibility is also the only renderer a web export supports.
 - **Why it works this way:** It is kept minimal and hand-written so the project can be created and tested without the editor.
 - **Purpose:** Marks the directory as a Godot project and sets how it launches. Open `game/client` in Godot, or run `godot4 --path game/client`.
 

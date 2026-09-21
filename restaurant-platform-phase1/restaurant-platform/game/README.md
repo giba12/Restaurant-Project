@@ -50,6 +50,15 @@ Then open `game/client` in Godot 4.5 and press Play, or from a terminal:
 godot4 --path game/client
 ```
 
+**Rootless Podman on WSL2** (the setup this project was built on): after every WSL restart the Podman socket is off, and `docker compose` fails with `FileNotFoundError ... No such file or directory` and a wall of Python traceback. Start it and point Compose at it, in the same terminal, before the command above:
+
+```bash
+systemctl --user start podman.socket
+export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock
+```
+
+Containers do not survive a WSL restart either, so the `up -d` above is needed again each time. Named volumes (your data) do survive. Docker Desktop and native Docker need none of this.
+
 Override the endpoints with `BRIDGE_URL` (default `http://127.0.0.1:8001`) and `DASHBOARD_URL` (default `http://127.0.0.1:8080`). If the bridge isn't up, the game says so and retries every few seconds.
 
 If you are reusing a database volume that predates the game, apply migration 004 once (fresh volumes get it automatically):
@@ -118,6 +127,7 @@ The smoke test uses the fixed player id `smoke-test`, so repeated runs reuse one
 ## Known limits
 
 - Placeholder UI on Godot's default theme; no art, audio, or export presets yet.
+- Godot prints a few harmless lines at start-up under WSL2/WSLg: `xkbcommon ... unrecognized keysym "dead_hamza"` (the Godot snap's bundled keyboard table has a symbol its own library does not know; it only affects Arabic compose-key sequences) and `Could not set V-Sync mode` (the software OpenGL driver, Mesa llvmpipe, does not support it). Neither can be fixed from the project, and neither affects the game.
 - Only two roles are playable (line cook, server). Expo, host, bartender and dishwasher exist in the schema but have no game rules yet, and the guest side (ordering, eating, paying) is not built.
 - Crew and player timings are game-paced (seconds), against the simulators' ~30 s baselines, so game tickets can look like fast outliers to the anomaly detector. Whether they share the baseline or get their own is undecided.
 - Two players in the same role share the tickets first come, first served; there is no queue or seating.

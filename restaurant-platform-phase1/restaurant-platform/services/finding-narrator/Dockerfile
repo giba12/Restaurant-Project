@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # as every other Phase 5/6 service) since phase5_common.py is shared.
 COPY phase5_common.py /app/phase5_common.py
 COPY finding-narrator/narrator.py /app/narrator.py
+COPY finding-narrator/narration_guard.py /app/narration_guard.py
 
 USER 1001
 ENTRYPOINT ["python", "narrator.py"]

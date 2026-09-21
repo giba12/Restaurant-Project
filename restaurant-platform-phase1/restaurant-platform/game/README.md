@@ -1,6 +1,6 @@
 # Version 2: the game
 
-A human-playable front end for the platform. You clock in at a kitchen station, tickets arrive, and you move each one through the stages. Every action becomes a real event on the same Kafka topics the simulators use, so storage, anomaly detection, causal inference, the digital twin and the narrator all run on your play without being changed.
+A human-playable front end for the platform. You clock in as a **line cook** (cook and plate the tickets at your station) or a **server** (pick up and deliver), and a crew inside the bridge does every stage you don't own, so your speed moves the whole chain. Every action becomes a real event on the same Kafka topics the simulators use, so storage, anomaly detection, causal inference, the digital twin and the narrator all run on your play without being changed.
 
 Everything for version 2 lives in this directory. Version 1 (the simulated platform, everything outside `game/`) runs completely without it.
 
@@ -64,35 +64,52 @@ docker compose exec -T timescaledb psql -U restaurant_app -d restaurant_platform
 `game/bridge/main.py` accepts a player's actions and publishes them as schema-validated events tagged `source_kind: "player"`. It has no authentication, so it is bound to localhost only.
 
 ```bash
-curl -s localhost:8001/api/world     # valid stations, tables, stages, roles, actions
+curl -s localhost:8001/api/world     # stations, tables, stages, roles, and which stages each playable role performs
 
 curl -s -H 'content-type: application/json' localhost:8001/api/staff-shift \
   -d '{"player_id":"ana","role":"line_cook","shift_action":"clock_in"}'
+curl -s -H 'content-type: application/json' localhost:8001/api/staff-shift \
+  -d '{"player_id":"ana","role":"line_cook","shift_action":"station_reassign","station_id":"station-grill"}'
 
-# order_fired mints a ticket_id; pass it on each later stage, in order
+curl -s 'localhost:8001/api/tickets?player_id=ana'   # the board: who each open ticket is waiting on
+
+# Tickets normally arrive by themselves while you are on shift. You can also fire one by hand;
+# order_fired mints a ticket_id, which you pass on each later stage, in order:
 curl -s -H 'content-type: application/json' localhost:8001/api/service-timing \
   -d '{"player_id":"ana","stage":"order_fired","table_id":"table-07","station_id":"station-grill"}'
 ```
 
-Out-of-order stages, unknown tables or stations, and bad clock-in sequences are rejected with 409, 422 or 404. The player then appears in the dashboard's staff panel and in `twin_staff_state`.
+Out-of-order stages, unknown tables or stations, and bad clock-in sequences are rejected with 409, 422 or 404. A stage outside your role, or at another cook's station, is 403. The player then appears in the dashboard's staff panel and in `twin_staff_state`.
+
+## Roles and the crew
+
+| Role | Performs | Works |
+|---|---|---|
+| `line_cook` | `cook_started`, `plated` | tickets at the one station they took |
+| `server` | `picked_up_by_server`, `delivered` | the whole floor |
+
+Every stage a player can't do is done by the **crew**, a background "director" thread in the bridge. A stage is crew-owned whenever no clocked-in player *who is not on a break* can do it (for a cook: at that ticket's station). The crew acts after a random delay (6 to 14 s by default), so if you cook slowly the server waits, and if you serve slowly the guest waits. Clock out or take a break and the crew covers your stages. The director also fires new tickets (the dining room) every few seconds while someone is on shift: at the cooks' stations, or anywhere in the kitchen if only servers are working.
+
+Pacing is set by environment variables on the bridge (defaults in brackets): `SPAWN_SECONDS` [8], `MAX_OPEN_TICKETS` [5, per staffed station], `CREW_MIN_SECONDS` [6], `CREW_MAX_SECONDS` [14], `DIRECTOR_TICK_SECONDS` [0.5], `GAME_DIRECTOR=0` to turn the director off.
 
 ## How the game maps onto the platform
 
-| In the game | Event | Notes |
+| In the game | Event | Tagged |
 |---|---|---|
-| Clock in, take a station, clock out | `StaffShiftEvent` | `staff_id` is `player-<name>`, so players never collide with the simulators' roster |
-| A ticket arrives | `ServiceTimingEvent` `order_fired` | table is random, station is yours |
-| Each button press | `ServiceTimingEvent` for the next stage | the bridge computes `elapsed_since_previous_stage_ms` |
+| Clock in, take a station, break, clock out | `StaffShiftEvent` | `player`, `source_id = game-<name>`; `staff_id` is `player-<name>` so players never collide with the simulators' roster |
+| A ticket arrives | `ServiceTimingEvent` `order_fired` | `simulated`, `game-crew` (the dining room); table is random, station is a cook's |
+| Your button press | `ServiceTimingEvent` for the next stage | `player`, `game-<name>`; the bridge computes `elapsed_since_previous_stage_ms` |
+| The crew's stages | `ServiceTimingEvent` | `simulated`, `game-crew` |
 
-The bridge owns the rules (stage order, clock-in sequencing) and rejects anything invalid; the game just reports what it said.
+Crew events are `simulated`, not `player`, so anything downstream can tell a human's actions from the bridge's. The bridge owns the rules (stage order, roles, stations, clock-in sequencing) and the timing of everything the crew does; the game only polls `GET /api/tickets`, presents it, and reports what the bridge rejected.
 
 ## Tests
 
 ```bash
-# Bridge state machines, no Kafka needed
+# Bridge rules, roles and the crew: no Kafka and no waiting (a fake clock drives the director)
 cd game/bridge && pip install -r requirements.txt pytest httpx && python -m pytest test_bridge.py
 
-# Godot client and main scene, headless, against a live bridge
+# Godot client and main scene, headless, against a live bridge (about a minute: it waits for the crew)
 godot4 --headless --path game/client -s res://tests/smoke_test.gd
 ```
 
@@ -101,7 +118,9 @@ The smoke test uses the fixed player id `smoke-test`, so repeated runs reuse one
 ## Known limits
 
 - Placeholder UI on Godot's default theme; no art, audio, or export presets yet.
-- One player does every stage, including the server's pickup and delivery. Splitting those into separate roles is a design decision for later.
-- A human clearing a ticket in a few seconds will look like a fast outlier next to the simulators' ~30 s baselines. Whether player tickets share the anomaly baseline or get their own is undecided.
-- Bridge state (open tickets, clocked-in players) is in memory. If the bridge restarts mid-shift the game drops the tickets it lost and you need to clock in again.
+- Only two roles are playable (line cook, server). Expo, host, bartender and dishwasher exist in the schema but have no game rules yet, and the guest side (ordering, eating, paying) is not built.
+- Crew and player timings are game-paced (seconds), against the simulators' ~30 s baselines, so game tickets can look like fast outliers to the anomaly detector. Whether they share the baseline or get their own is undecided.
+- Two players in the same role share the tickets first come, first served; there is no queue or seating.
+- Bridge state (open tickets, clocked-in players) is in memory. If the bridge restarts mid-shift the board empties and you need to clock in again.
+- The director holds the bridge's state lock while it publishes, so a slow Kafka delays both the crew and the API.
 - The bridge is not deployed on Kubernetes.

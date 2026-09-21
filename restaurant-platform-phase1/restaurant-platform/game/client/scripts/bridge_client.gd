@@ -31,6 +31,10 @@ func post_service_timing(player_id: String, stage: String, ticket_id: Variant = 
 	return await request_json(HTTPClient.METHOD_POST, base_url + "/api/service-timing", body)
 
 
+func get_tickets(player_id: String) -> Dictionary:
+	return await request_json(HTTPClient.METHOD_GET, base_url + "/api/tickets?player_id=" + player_id.uri_encode())
+
+
 func request_json(method: int, url: String, body: Variant = null) -> Dictionary:
 	# One HTTPRequest node per call: a node handles a single request at a time,
 	# and the UI can have several in flight (ticket advance + findings poll).

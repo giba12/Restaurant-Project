@@ -613,7 +613,7 @@ All Python services follow the same skeleton: read configuration from environmen
 
 ## 8. `game/`: version 2, the game and its bridge
 
-Everything for the human-playable version lives here, and nothing outside `game/` refers to it (section 1.7). The client and overlay are not yet committed; the bridge is committed (it was moved here from `services/game-bridge`).
+Everything for the human-playable version lives here, and nothing outside `game/` refers to it (section 1.7). It is all committed; the bridge was moved here from `services/game-bridge`. Since 2026-09-21 the game has roles and a crew (below).
 
 ### `game/README.md`
 - **What it does:** The version 2 front page: the layout of `game/`, the boundary rule and the exact places the game depends on version 1, how to start the platform with the game added and how to run the client, the bridge's API with curl examples, how in-game actions map to events, the tests, and the known limits. It includes a one-line `grep` that should print nothing if version 1 has stayed free of game references.
@@ -627,20 +627,25 @@ Everything for the human-playable version lives here, and nothing outside `game/
 - **Purpose:** The only place the game is wired into a deployment.
 
 ### `game/bridge/main.py`
-- **What it does:** A FastAPI service (port 8001) that turns a game's actions into schema-validated events on the existing topics. `POST /api/service-timing` takes a player, a stage and (for the first stage) a table and station; `POST /api/staff-shift` takes a role and a shift action; `GET /api/world` lists valid stations, tables, stages, roles and actions. It enforces ticket stage order and clock-in, break and clock-out sequencing, fills in the event envelope (id, timestamp, `source_id = game-<player>`, `source_kind = player`), computes `elapsed_since_previous_stage_ms`, validates the finished event against the JSON Schema, publishes it with an acknowledged send, and only then updates its in-memory state.
+- **What it does:** A FastAPI service (port 8001) that turns a game's actions into schema-validated events on the existing topics, and runs the rest of the kitchen. `POST /api/service-timing` takes a player, a stage and (for the first stage) a table and station; `POST /api/staff-shift` takes a role and a shift action; `GET /api/world` lists valid stations, tables, stages, roles and which stages each playable role performs; `GET /api/tickets?player_id=` is the ticket board (each open ticket, its next stage, how long it has waited, who it is waiting on, and whether that player can act). It enforces ticket stage order, clock-in/break/clock-out sequencing, **roles** (a `line_cook` performs `cook_started` and `plated` and only at their own station; a `server` performs `picked_up_by_server` and `delivered`; anything else is 403) and a fixed role per shift. It fills in the event envelope (id, timestamp, `source_id`, `source_kind`), computes `elapsed_since_previous_stage_ms`, validates the finished event against the JSON Schema, publishes with an acknowledged send, and only then updates its in-memory state. A daemon **director** thread (started by the FastAPI lifespan, ticking every 0.5 s) is the crew and the dining room: it fires a ticket every 8 s while a playable player is on shift (at a cook's station, or anywhere if only servers are working; at most 5 open per staffed station), and advances every ticket whose next stage no clocked-in, not-on-break player can do, after a random 6 to 14 s delay. Its events are `source_kind = simulated`, `source_id = game-crew`; a player's are `player` / `game-<name>`. All pacing is environment-tunable.
 - **Why it works this way:**
   - The client sends only domain fields, so it cannot produce a malformed or self-inconsistent event even by accident, and validation lives in exactly one place.
   - Enum values are read from the schema files, not copied, so a schema change flows through.
   - Player ids are turned into staff ids `player-<name>`, which never collide with the simulators' ten-person roster, and station and table ids must come from `world.py`, which keeps player events joinable with simulated ones.
   - State advances only after a successful publish, so a Kafka outage cannot leave the bridge believing a stage happened.
   - The Kafka client is imported lazily, because `kafka-python` cannot load on Python 3.12 and the tests do not need it.
-  - State is in memory and resets on restart, the same trade-off the simulators make. There is no authentication, hence the localhost-only binding.
+  - The crew makes the player's speed matter: a slow cook delays the server, a slow server delays the guest, and the platform sees that as real timing data. Crew events are tagged `simulated` rather than `player`, so downstream analysis can separate a human's actions from the bridge's.
+  - The crew stands back the moment a player can do a stage (and covers when they clock out or go on break), so the ownership rule is one function, `_can_act`, used by the API, the ticket board and the director alike.
+  - The director publishes through the same `_publish_stage` path as a player action, so crew events get the same schema validation and the same publish-then-advance guarantee. A failed crew publish backs off and retries rather than hammering a down Kafka; a failed spawn waits a full spawn interval.
+  - Time goes through one function, `_clock`, so the tests can fake it.
+  - The spawn cap is per staffed station (a global cap let one backed-up station starve a cook who arrived at another; the live smoke test found that).
+  - State is in memory and resets on restart, the same trade-off the simulators make. The director holds the state lock while it publishes, exactly as the API does, so a slow Kafka delays both. There is no authentication, hence the localhost-only binding.
 - **Connects to:** Kafka (`service-timing-events`, `staff-shift-events`); `schemas/` and `edge-simulators/common/world.py` copied into the image; called by `game/client`.
 - **Purpose:** The seam between a human player and the platform; the reason the rest of the pipeline needed no changes for the game.
 
 ### `game/bridge/test_bridge.py`
-- **What it does:** 12 pytest cases with Kafka replaced by a recorder: full ticket lifecycle, envelope ownership, out-of-order and unknown-ticket rejection, duplicate ids, bad player ids and stages, a failed publish not advancing state, the clock-in/break/reassign/clock-out sequence, and consistency of `/api/world` with the schema enums.
-- **Purpose:** Tests the state machines, which are where the bugs would be. Run from `game/bridge`.
+- **What it does:** 27 pytest cases with Kafka replaced by a recorder and time replaced by a fake clock (the director is called directly, so a 5 s crew delay is tested exactly, instantly). Covers the ticket lifecycle, envelope ownership, out-of-order and unknown-ticket rejection, duplicate ids, bad player ids and stages, a failed publish not advancing state, the shift sequence and fixed role, role and station gating (403s), players needing to be clocked in and off break, the crew doing exactly the stages no player can (and tagging its events `simulated`/`game-crew`), the crew covering a break and a clock-out, retry after a failed crew publish, spawn timing and caps (including the per-station cap), a failed spawn not retrying every tick, and the ticket board's `waiting_on` values. Deliberately breaking the station gate and the crew-yields rule each makes tests fail.
+- **Purpose:** Tests the state machines and the crew, which is where the bugs would be. Run from `game/bridge`.
 
 ### `game/bridge/Dockerfile`, `game/bridge/requirements.txt`
 - **What they do:** Python 3.11 with FastAPI, uvicorn, `kafka-python` and `jsonschema`. Built from the platform directory (the Compose context) so it can copy `schemas/` and `edge-simulators/common/world.py`, the single source of truth for entity ids, instead of duplicating them.
@@ -657,26 +662,26 @@ Everything for the human-playable version lives here, and nothing outside `game/
 - **Purpose:** The entry scene.
 
 ### `game/client/scripts/main.gd`
-- **What it does:** The game. It builds the UI in code (title, status line, a setup panel with a name box, station picker and Clock in button, a shift panel with a ticket board and Clock out button, and a findings panel). It clocks the player in and assigns their station, spawns a ticket immediately and then every 8 seconds up to five open, and advances tickets one stage per button press. It colours a stage timer red past 15 seconds, tracks delivered count and average time, polls the dashboard API every 15 seconds for the latest narration, retries the bridge every 3 seconds if it is unreachable, and clocks the player out if the window is closed mid-shift.
+- **What it does:** The game. It builds the UI in code (title, status line, a setup panel with a name box, role picker, a station picker shown only for line cooks and a Clock in button, a shift panel with a ticket board and Clock out button, and a findings panel). The role and station lists come from `/api/world`. It clocks the player in (and a cook onto a station), then polls `GET /api/tickets` every 1.5 s and shows each ticket the player should see (a cook sees their own station, a server the whole floor). A ticket waiting on the player has a live button labelled for the action ("Start cooking", "Plate it", "Pick up", "Deliver"); any other ticket is disabled and says who it is waiting on ("waiting on crew"). It colours the wait timer red past 15 seconds on tickets waiting on you, tracks your action count and the average time a ticket waited for you, polls the dashboard API every 15 seconds for the latest narration, retries the bridge every 3 seconds if it is unreachable, and clocks the player out if the window is closed mid-shift.
 - **Why it works this way:**
-  - The bridge decides what is valid, so the game never duplicates stage-order rules; a 404 (bridge restarted) simply drops the lost ticket.
-  - Stage names come from `/api/world`, not from constants, so they follow the schema.
+  - The bridge decides what is valid, when tickets arrive and what the crew does, so the game holds no ticket rules and no spawn timer; it re-reads the board after every action instead of guessing what happens next, and a ticket that disappears (bridge restart, or the crew finished it) just vanishes from the board.
+  - Stage names, roles and stations come from `/api/world`, not from constants, so they follow the bridge.
   - Player names are sanitised to the bridge's pattern (`^[a-z0-9][a-z0-9-]{0,31}$`).
   - Clock-out on window close exists because otherwise the digital twin would show the player on shift forever.
   - `bridge` is typed as the preloaded script class so Godot's analyser can see its methods.
   - Endpoints are overridable through `BRIDGE_URL` and `DASHBOARD_URL`.
-  - The same player performs every stage, including the server's pickup and delivery. That is a prototype simplification.
+  - Only two roles are playable so far; a role with no player is covered by the crew, so a single player always has a working restaurant around them.
 - **Connects to:** `bridge_client.gd` (HTTP), `game/bridge` (events), `dashboard-api` on port 8080 (findings panel).
 - **Purpose:** The interactive front end of version 2.
 
 ### `game/client/scripts/bridge_client.gd`
-- **What it does:** An async HTTP client node. Every call returns `{ok, status, data, error}`; `status` is 0 when no HTTP response arrived. It offers `get_world()`, `post_staff_shift()`, `post_service_timing()` and a generic `request_json()`, and turns FastAPI's `{"detail": ...}` errors into readable text.
+- **What it does:** An async HTTP client node. Every call returns `{ok, status, data, error}`; `status` is 0 when no HTTP response arrived. It offers `get_world()`, `get_tickets()`, `post_staff_shift()`, `post_service_timing()` and a generic `request_json()`, and turns FastAPI's `{"detail": ...}` errors into readable text.
 - **Why it works this way:** It creates one `HTTPRequest` node per call because a node handles a single request at a time and the UI can have several in flight (a ticket advance and a findings poll). Uniform result dictionaries mean callers never handle raw HTTP details.
 - **Connects to:** `game/bridge` and `dashboard-api`; used by `main.gd` and `tests/smoke_test.gd`.
 - **Purpose:** The game's only network layer.
 
 ### `game/client/tests/smoke_test.gd`
-- **What it does:** A headless integration test against a live bridge (`godot4 --headless --path game/client -s res://tests/smoke_test.gd`). It checks the client end to end (reachability, tagging, 409 and 422 and 404 rejections, all five stages) and then drives the real main scene through its own handlers (clock in, deliver a ticket, clock out). It exits non-zero on failure.
+- **What it does:** A headless integration test against a live bridge (`godot4 --headless --path game/client -s res://tests/smoke_test.gd`). It checks the client and rules end to end (reachability, the playable roles, tagging, 403/409/422 rejections, a server refused a cook's stage and a cook refused a server's), waits for the crew to pick up and deliver a ticket the cook plated, and then drives the real main scene through its own handlers (clock in as a line cook, wait for a fresh ticket to arrive on its own, cook and plate it, see the card say "waiting on crew", clock out). It takes up to about a minute because it waits on the crew and the dining room. It exits non-zero on failure.
 - **Why it works this way:** It uses a fixed player id (`smoke-test`) so repeat runs reuse one staff row in the twin. It preloads scripts by path instead of relying on `class_name`, so it works on a fresh clone before Godot has built its class cache.
 - **Connects to:** a running `game/bridge`; `bridge_client.gd`, `main.gd`.
 - **Purpose:** Verifies the client and UI logic without a display.

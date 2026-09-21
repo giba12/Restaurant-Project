@@ -1,16 +1,16 @@
 # Build from the REPO ROOT (same convention as storage/consumer/Dockerfile
 # and edge-simulators/Dockerfile) so the canonical schemas/ and the shared
 # world model can be COPYed directly instead of duplicated:
-#   docker build --network=host -t local/game-bridge:1.0 -f services/game-bridge/Dockerfile .
+#   docker build --network=host -t local/game-bridge:1.0 -f game/bridge/Dockerfile .
 FROM docker.io/library/python:3.11-slim
 
 RUN useradd -u 1001 -m svcuser
 
 WORKDIR /app
-COPY services/game-bridge/requirements.txt .
+COPY game/bridge/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY services/game-bridge/main.py /app/main.py
+COPY game/bridge/main.py /app/main.py
 # Single source of truth for station/table IDs and RESTAURANT_ID -- the
 # same module the four edge simulators import, so player events join with
 # simulated ones on the same ID spaces.

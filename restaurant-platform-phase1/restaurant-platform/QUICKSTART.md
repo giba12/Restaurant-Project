@@ -48,34 +48,10 @@ docker compose exec causal-engine python causal_engine.py \
   --scenario-injection-id manual-test \
   --metric-name estimated_waste_grams \
   --window-start 2020-01-01T00:00:00Z --window-end 2030-01-01T00:00:00Z \
-  --restaurant-id restaurant-01
+  --restaurant-id rest-001
 ```
 
-Then check `narrated_findings` again after a few seconds.
-
-## Game bridge (version 2 groundwork)
-
-`game-bridge` accepts a human player's actions over HTTP and publishes them as the same events the simulators emit, tagged `source_kind: "player"`. It listens on `localhost:8001` only (no authentication).
-
-```bash
-curl -s localhost:8001/api/world     # valid stations, tables, stages, roles
-
-curl -s -H 'content-type: application/json' localhost:8001/api/staff-shift \
-  -d '{"player_id":"ana","role":"line_cook","shift_action":"clock_in"}'
-
-# order_fired mints a ticket_id; pass it on each later stage, in order
-curl -s -H 'content-type: application/json' localhost:8001/api/service-timing \
-  -d '{"player_id":"ana","stage":"order_fired","table_id":"table-07","station_id":"station-grill"}'
-```
-
-Out-of-order stages, unknown tables/stations and bad clock-in sequences are rejected with 409/422. The player then shows up in the dashboard's staff panel and in `twin_staff_state`.
-
-If you're reusing a database volume from before this feature existed, apply the migration once (fresh volumes get it automatically):
-
-```bash
-docker compose exec -T timescaledb psql -U restaurant_app -d restaurant_platform \
-  < storage/schema/004_player_source_kind.sql
-```
+Then check `narrated_findings` again after a few seconds (a narration can take up to a minute on CPU: each generated sentence is verified against the finding, retried, and replaced by a plain templated sentence if it can't be verified. The `model_used` column says which you got. With the small default model, expect `template-fallback` most of the time).
 
 ## Stopping / resetting
 

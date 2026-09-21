@@ -1,6 +1,6 @@
--- Version-2 (game) support: widen source_kind to accept 'player'.
+-- Interactive-mode support: widen source_kind to accept 'player'.
 --
--- A human-driven source (the game client, via services/game-bridge) is a
+-- A human-driven source (an interactive client) is a
 -- third case of the same "swap the source, keep the contract" rule that
 -- already covers 'simulated' and 'vendor_integration'. The matching change
 -- to the four schemas/*Event.schema.json enums is in the same commit.

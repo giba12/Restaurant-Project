@@ -1,0 +1,24 @@
+# Version 2 (game) add-on for the Compose path. Layered on top of the base
+# stack, which stays version 1 only and knows nothing about the game:
+#
+#   docker compose -f docker-compose.yml -f game/docker-compose.game.yml up -d --build
+#
+# Run from the restaurant-platform directory. Relative paths below resolve
+# against the FIRST -f file's directory (the base file's), not this file's.
+#
+# The bridge is the only game component that runs in Compose; the Godot
+# client runs on the host and talks to it over localhost. It publishes on the
+# host because of that, bound to 127.0.0.1 only since the bridge has no
+# authentication.
+services:
+  game-bridge:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: game/bridge/Dockerfile
+    depends_on:
+      kafka: { condition: service_healthy }
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "127.0.0.1:8001:8001"

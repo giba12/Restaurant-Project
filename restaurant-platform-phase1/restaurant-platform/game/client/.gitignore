@@ -1,0 +1,6 @@
+# Godot import cache and local editor state
+.godot/
+*.translation
+# Export output
+build/
+export_presets.cfg

@@ -21,7 +21,7 @@ edge simulators (see edge-simulators/common/runtime.py):
     succeeds, so a transient DB outage cannot silently drop events.
 
 Environment variables:
-  KAFKA_BOOTSTRAP_SERVERS   default "restaurant-platform-kafka-dev-pool-bootstrap.kafka.svc.cluster.local:9092"
+  KAFKA_BOOTSTRAP_SERVERS   default "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
   KAFKA_CONSUMER_GROUP      default "storage-consumer"
   TIMESCALE_DSN             required, e.g. "postgresql://user:pass@host:5432/restaurant_platform"
   SCHEMA_DIR                default "/app/schemas"
@@ -50,7 +50,7 @@ log = logging.getLogger("storage-consumer")
 
 KAFKA_BOOTSTRAP_SERVERS = os.environ.get(
     "KAFKA_BOOTSTRAP_SERVERS",
-    "restaurant-platform-kafka-dev-pool-bootstrap.kafka.svc.cluster.local:9092",
+    "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092",
 )
 KAFKA_CONSUMER_GROUP = os.environ.get("KAFKA_CONSUMER_GROUP", "storage-consumer")
 TIMESCALE_DSN = os.environ["TIMESCALE_DSN"]
@@ -85,22 +85,16 @@ def load_schemas() -> dict[str, dict]:
 # ---------------------------------------------------------------------
 # Per-event-type insert statements.
 #
-# Field-provenance note: all four column lists are now confirmed against
-# the real schemas/*.schema.json files and storage/schema/001_hypertables.sql
-# (previously only insert_service_timing was confirmed; the other three
-# were guesses against the table DDL alone). Two real mismatches were
-# found and fixed this way: insert_plate_waste referenced a nonexistent
-# `menu_item_id` column (the real field is `plate_item_ids`, a TEXT[]),
-# and insert_pos_transaction referenced four columns that don't exist at
-# all (`menu_item_id`, `staff_id`, `quantity`, `unit_price` -- the real
-# columns are `transaction_id`, `server_staff_id`, `total_amount_cents`,
-# `currency`, `payment_method`, `discount_applied_cents`). Both silently
-# failed every insert (retried, then gave up without committing the
-# offset -- see write_with_retry/main below) rather than crashing, which
-# is why this went unnoticed: no pod ever crash-looped from it. Remaining
-# .get(...) calls with a None default are for genuinely optional fields,
-# not a hedge against more unconfirmed guesses -- raw_payload still
-# captures the true event regardless. See PHASE4-DESIGN.md.
+# Every column list below is checked against schemas/*.schema.json and
+# storage/schema/001_hypertables.sql. .get(...) with a None default is only
+# used for genuinely optional schema fields; raw_payload keeps the true
+# event regardless. A column that does not exist fails the insert, which
+# write_with_retry retries and then refuses to commit past -- so a schema
+# mismatch shows up as a stuck consumer, not as silently lost events.
+#
+# A POS event is one parent row plus one row per entry in its `line_items`
+# array (a real one-to-many part of the contract). Both are written in the
+# same transaction, so a transaction is never stored without its items.
 # ---------------------------------------------------------------------
 
 def _common_fields(event: dict) -> dict:
@@ -173,6 +167,30 @@ def insert_pos_transaction(cur, event: dict) -> None:
             "discount_applied_cents": event.get("discount_applied_cents", 0),
         },
     )
+    for index, item in enumerate(event["line_items"]):
+        cur.execute(
+            """
+            INSERT INTO pos_transaction_line_items (
+                parent_event_id, transaction_id, "timestamp", line_item_index,
+                menu_item_id, quantity, unit_price_cents, modifiers, voided
+            ) VALUES (
+                %(parent_event_id)s, %(transaction_id)s, %(timestamp)s, %(line_item_index)s,
+                %(menu_item_id)s, %(quantity)s, %(unit_price_cents)s, %(modifiers)s, %(voided)s
+            )
+            ON CONFLICT (parent_event_id, line_item_index, "timestamp") DO NOTHING
+            """,
+            {
+                "parent_event_id": f["event_id"],
+                "transaction_id": event["transaction_id"],
+                "timestamp": f["timestamp"],
+                "line_item_index": index,
+                "menu_item_id": item["menu_item_id"],
+                "quantity": item["quantity"],
+                "unit_price_cents": item["unit_price_cents"],
+                "modifiers": item.get("modifiers"),
+                "voided": item.get("voided", False),
+            },
+        )
 
 
 def insert_staff_shift(cur, event: dict) -> None:

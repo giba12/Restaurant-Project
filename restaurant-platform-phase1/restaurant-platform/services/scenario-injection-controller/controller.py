@@ -34,13 +34,13 @@ here as a deliberate scope decision, not an oversight):
   }
 
 Consumer-side support status, this revision:
-  - service-timing: supported. See fixes/service_timing.py's
-    SCENARIO_CONTROL_ENABLED hook (staffing_shortage only).
-  - plate-waste, pos-transaction, staff-shift: NOT supported. Their source
-    was never uploaded to this project's chat history, so no equivalent
-    consumption hook could be added here. A scenario targeting these three
-    will be published to Kafka but will have no observable effect until
-    each simulator gets its own hook, mirroring the one added to
+  - service-timing: supported. See edge-simulators/simulators/
+    service_timing.py's SCENARIO_CONTROL_ENABLED hook (staffing_shortage
+    only).
+  - plate-waste, pos-transaction, staff-shift: NOT supported -- none of
+    those simulators has a consumption hook yet. A scenario targeting
+    these three is published to Kafka but has no observable effect until
+    each simulator gets its own hook, mirroring the one in
     service_timing.py.
 """
 import argparse

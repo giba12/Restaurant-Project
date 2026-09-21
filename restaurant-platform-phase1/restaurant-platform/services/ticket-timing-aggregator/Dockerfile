@@ -11,7 +11,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Build context must be the parent `services/` directory (not this
 # subdirectory), since phase5_common.py is shared across all four
-# services. See PHASE5-SETUP.md step 4 for the exact build command.
+# services. From the services/ directory:
+#   docker build --network=host -t local/ticket-timing-aggregator:1.0 -f ticket-timing-aggregator/Dockerfile .
 COPY phase5_common.py /app/phase5_common.py
 COPY ticket-timing-aggregator/aggregator.py /app/aggregator.py
 # Schema files are mounted at runtime via ConfigMap to /app/schemas -- see

@@ -93,6 +93,15 @@ th {
   color: #9aa0a6;
 }
 
+.badge {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid #5f6368;
+  border-radius: 8px;
+  font-size: 0.7rem;
+  cursor: help;
+}
+
 @media (max-width: 700px) {
   .grid { grid-template-columns: 1fr; }
 }

@@ -1,36 +1,33 @@
 """
-Shared helpers for Phase 5 services (ticket-timing-aggregator,
-anomaly-detector, scenario-injection-controller, causal-engine).
+Shared helpers for the Phase 5/6/7 Python services (ticket-timing-aggregator,
+anomaly-detector, scenario-injection-controller, causal-engine, digital-twin,
+finding-narrator, dashboard-api): configuration from environment variables,
+the Kafka and Postgres connection settings, and a few small utilities.
 
-Deliberately NOT the same module as edge-simulators/common/*.py -- that
-package's contents (world.py, ids.py, runtime.py) have never been uploaded
-to this project's chat history, so this file does not assume its internals.
-RESTAURANT_ID and SCHEMA_VERSION are read from env vars here instead of a
-shared world.py constant; reconcile with the real common/world.py values
-once that file is available, rather than assuming they already match.
+Deliberately separate from edge-simulators/common/ -- that package is the
+simulators' own runtime and is not shared with these services. The one thing
+both sides must agree on is the restaurant id, which comes from the events
+themselves (the simulators use "rest-001"); RESTAURANT_ID below is only a
+fallback and a default for command-line tools, and matches that value.
 """
 import datetime
 import json
 import os
 import uuid
 
-RESTAURANT_ID = os.environ.get("RESTAURANT_ID", "restaurant-01")
+RESTAURANT_ID = os.environ.get("RESTAURANT_ID", "rest-001")
 SCHEMA_VERSION = os.environ.get("SCHEMA_VERSION", "1.0.0")
 
 KAFKA_BOOTSTRAP_SERVERS = os.environ.get(
     "KAFKA_BOOTSTRAP_SERVERS",
-    # Strimzi convention: <Kafka CR name>-kafka-bootstrap. Cluster name
-    # inferred from the broker pod name seen in prior sessions
-    # (restaurant-platform-kafka-dev-pool-0) -- NOT independently confirmed
-    # against the actual Kafka CR/Service name. Verify with
-    # `kubectl get svc -n kafka` before relying on this default.
+    # Strimzi names the bootstrap Service <Kafka CR name>-kafka-bootstrap.
     "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092",
 )
 KAFKA_API_VERSION = (2, 8, 0)  # pinned -- automatic negotiation fails against Kafka 4.3.1
 
 SCHEMA_DIR = os.environ.get("SCHEMA_DIR", "/app/schemas")
 
-PG_HOST = os.environ.get("PGHOST", "timescaledb.kafka.svc.cluster.local")  # verify actual Service name
+PG_HOST = os.environ.get("PGHOST", "timescaledb.kafka.svc.cluster.local")
 PG_PORT = int(os.environ.get("PGPORT", "5432"))
 PG_DATABASE = os.environ.get("PGDATABASE", "restaurant_platform")
 PG_USER = os.environ.get("PGUSER", "restaurant_app")

@@ -1,6 +1,6 @@
 apiVersion: v2
 name: kafka-strimzi
-description: Placeholder chart for the kafka-strimzi service. No templates implemented yet — scaffolding only (Phase 1).
+description: Phase 2/7 - the Strimzi-managed Kafka cluster (single combined KRaft controller/broker node), its Prometheus JMX metrics config, and a Kafka exporter for consumer-group lag.
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

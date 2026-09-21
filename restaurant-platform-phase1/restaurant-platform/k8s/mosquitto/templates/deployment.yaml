@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: mosquitto
 spec:
-  replicas: 1
+  replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
       app: mosquitto
@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: mosquitto
-          image: eclipse-mosquitto:2
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
           ports:
             - containerPort: 1883
           volumeMounts:

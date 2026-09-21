@@ -1,31 +1,21 @@
--- Phase 4: TimescaleDB hypertable definitions.
+-- Phase 4: TimescaleDB hypertable definitions for the four raw event streams.
 --
--- Revision note: this version replaces the prior INFERRED field sets with
--- columns checked directly against the four committed schema files
--- (PlateWasteEvent, POSTransactionEvent, StaffShiftEvent,
--- ServiceTimingEvent). Corrections from the previous revision are listed
--- per table below. raw_payload is retained on every table regardless of
--- typed-column confidence, per standing practice.
+-- Columns are checked directly against the committed schemas/*.schema.json
+-- files (PlateWasteEvent, POSTransactionEvent, StaffShiftEvent,
+-- ServiceTimingEvent). The per-table comments below record what was
+-- corrected from an earlier revision that had guessed some columns.
+-- raw_payload is kept on every table regardless of typed-column
+-- confidence, so the true event survives even if a typed column is wrong.
 --
--- UNRESOLVED CONTRACT ISSUE (read before using service_timing_events):
--- ServiceTimingEvent.schema.json's `stage` enum is
--- {order_fired, cook_started, plated, picked_up_by_server, delivered},
--- per the schema's own revision note ("split former 'expo_hold'/
--- 'delivered' ambiguity into distinct 'plated' -> 'picked_up_by_server'
--- -> 'delivered' stages"). The producer code reviewed this session
--- (edge-simulators/simulators/service_timing.py) still emits the
--- pre-revision set {fired, started, plated, expo_hold, delivered} via its
--- STAGES constant. These two sets do not intersect except at "plated" and
--- "delivered". This table's CHECK constraint below enforces the SCHEMA's
--- enum, on the stated basis that the schema is the contract of record
--- and the producer is out of compliance with it -- not the reverse. This
--- means the constraint will currently reject every event actually
--- emitted by service_timing.py in its present form. This is not a
--- resolvable ambiguity to paper over silently; either the schema enum or
--- STAGES must be corrected before a real Kafka-to-storage consumer is
--- pointed at this table. Flagging here rather than in Section 8 of the
--- implementation-status document, since it directly blocks Phase 4
--- ingestion, not just a "for later" item.
+-- Every statement is IF NOT EXISTS, so re-running is safe -- but that also
+-- means editing this file never changes a database that already exists.
+-- Changes to existing tables go in a new numbered migration instead (see
+-- 004_player_source_kind.sql for an example).
+--
+-- pos_transaction_line_items holds one row per entry in a POS event's
+-- line_items array (a real one-to-many part of the contract). storage-consumer
+-- writes it in the same transaction as the parent pos_transaction_events row,
+-- which is what per-item analysis (and a future guest-ordering mode) reads.
 
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
@@ -193,17 +183,12 @@ CREATE INDEX IF NOT EXISTS idx_staff_shift_action ON staff_shift_events (shift_a
 -- ---------------------------------------------------------------------
 -- service_timing_events
 --
--- Field set was already confirmed correct in the prior revision (taken
--- directly from service_timing.py's event construction). The one
--- substantive change here is the `stage` CHECK constraint, which now
--- enforces the schema's post-revision enum rather than being
--- unconstrained TEXT. See the file-level comment at the top of this
--- file: this constraint will reject events from the producer code as it
--- currently exists, since that code has not been updated to match the
--- schema's 2026-08-26 revision. The constraint is left in place
--- (not loosened to match the producer) so that the mismatch surfaces as
--- a hard ingestion failure rather than silently persisting
--- schema-noncompliant data.
+-- The `stage` CHECK enforces the schema's enum (order_fired, cook_started,
+-- plated, picked_up_by_server, delivered). The schema was revised on
+-- 2026-08-26 to split the old expo_hold/delivered ambiguity; the
+-- simulator's STAGES constant now matches it. The constraint is strict
+-- on purpose: a producer that drifts from the schema should fail
+-- ingestion loudly, not persist non-compliant data.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS service_timing_events (
     event_id                            UUID NOT NULL,

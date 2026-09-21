@@ -1,5 +1,7 @@
 # Phase 3 Resume Brief
 
+> **Historical.** Written mid-Phase 3 to resume a session. Phase 3 was completed long ago (see the Section 4 table in `restaurant-platform-implementation-status.md`); the checklist below is kept for the record and is no longer actionable. Paths of the form `k8s/charts/...` are outdated: charts live directly under `k8s/`.
+
 Paste this as the first message in a new chat to continue.
 
 ## Where things stand

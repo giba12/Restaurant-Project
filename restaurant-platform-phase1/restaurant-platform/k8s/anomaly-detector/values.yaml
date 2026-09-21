@@ -11,7 +11,7 @@ env:
   PGPORT: "5432"
   PGDATABASE: "restaurant_platform"
   PGUSER: "restaurant_app"
-  RESTAURANT_ID: "restaurant-01"
+  RESTAURANT_ID: "rest-001"
   SCHEMA_VERSION: "1.0.0"
   ANOMALY_WINDOW_SIZE: "200"
   ANOMALY_MIN_WINDOW_SIZE: "30"

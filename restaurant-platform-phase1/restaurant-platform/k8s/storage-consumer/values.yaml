@@ -16,7 +16,7 @@ kafka:
   consumerGroup: "storage-consumer"
 
 timescaledb:
-  # Host/port/database name for the timescaledb-single release deployed
+  # Host/port/database name for the release deployed
   # by the sibling `timescaledb` chart. Update if that release name
   # changes.
   existingSecret: timescaledb-credentials

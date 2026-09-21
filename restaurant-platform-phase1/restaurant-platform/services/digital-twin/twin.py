@@ -10,9 +10,8 @@ twin_*_state tables holds one current row per entity, upserted as events
 arrive, mirroring storage-consumer's "one process, several topics" shape
 rather than ticket-timing-aggregator's per-ticket accumulation.
 
-No REST API in this revision -- nothing consumes this state yet (that's
-Phase 7's dashboard); the three tables are directly queryable in the
-meantime, which is enough until an actual caller exists.
+This service has no API of its own. The three tables are read directly
+by dashboard-api (Phase 7) and can be queried by hand.
 """
 import json
 import logging

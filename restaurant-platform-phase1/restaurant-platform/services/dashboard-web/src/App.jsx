@@ -123,6 +123,17 @@ function NarratedFindingsFeed() {
           <li key={f.finding_id}>
             <p className="narrative">{f.narrative_text}</p>
             <p className="meta">
+              <span
+                className="badge"
+                title={
+                  f.model_used === "template-fallback"
+                    ? "The language model's draft failed the number/claim checks, so a fixed template built from the finding's own fields was used instead."
+                    : "Written by the language model and passed the number/claim checks."
+                }
+              >
+                {f.model_used === "template-fallback" ? "template" : "model · verified"}
+              </span>
+              {" "}
               {f.treatment_variable} → {f.outcome_variable} · effect {f.effect_estimate?.toFixed(2)} {f.effect_estimate_unit}
               {" · "}refutation {f.refutation_passed ? "passed" : "not passed"}
               {" · "}{new Date(f.narrated_at).toLocaleString()}

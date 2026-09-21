@@ -70,7 +70,7 @@ data:
         },
         {
           "type": "timeseries",
-          "title": "Kafka bytes out by topic (cumulative)",
+          "title": "Kafka bytes out by topic (rate, 5m)",
           "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
           "targets": [
             {"expr": "sum by (topic) (rate(kafka_server_brokertopicmetrics_bytesout_total[5m]))"}

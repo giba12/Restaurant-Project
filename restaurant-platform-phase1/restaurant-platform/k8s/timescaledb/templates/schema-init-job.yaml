@@ -1,7 +1,8 @@
-# Runs 001_hypertables.sql against the TimescaleDB primary on every
-# install/upgrade. Idempotent by construction -- every statement in the
-# SQL file uses IF NOT EXISTS / if_not_exists, so re-running it against an
-# already-initialized database is a no-op.
+# Applies the numbered SQL migrations (001 to 004, in order) against the
+# TimescaleDB primary on every install/upgrade. Idempotent by
+# construction -- every statement uses IF NOT EXISTS / if_not_exists or,
+# for 004, drops and re-adds a constraint -- so re-running against an
+# already-initialized database changes nothing.
 #
 # Unlike the earlier dependency-chart version, there is no separate
 # operator (e.g. Patroni) guaranteeing the database is ready before this

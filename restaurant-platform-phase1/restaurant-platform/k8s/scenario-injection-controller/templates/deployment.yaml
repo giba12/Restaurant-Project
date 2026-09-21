@@ -25,7 +25,7 @@ spec:
           # restart policy). Actual invocations happen via:
           #   kubectl exec -n kafka deploy/scenario-injection-controller -it -- \
           #     python controller.py run --scenario-type staffing_shortage \
-          #     --target service-timing --stations-removed station-grill-01 \
+          #     --target service-timing --stations-removed station-grill \
           #     --duration-seconds 300
           command: ["sleep", "infinity"]
           env:

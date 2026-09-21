@@ -1,7 +1,8 @@
 image:
   # Actively published; only the timescaledb-single Helm *chart* was
   # abandoned, not the underlying image. Confirm license scope of
-  # whichever tag is pulled against PHASE4-DESIGN.md before relying on
+  # whichever tag is pulled against restaurant-platform-implementation-status.md
+  # (Section 8, TimescaleDB licensing) before relying on
   # anything beyond core (Apache-2.0) hypertable features -- this
   # project currently uses none of the TSL-gated features (no
   # compression, no continuous aggregates), so the "-all" tag's bundled

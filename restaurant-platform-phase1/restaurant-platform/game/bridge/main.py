@@ -16,9 +16,10 @@ source_kind, schema_version, restaurant_id) and everything derived
 (elapsed_since_previous_stage_ms), so a client can't produce a malformed or
 self-inconsistent event even by accident.
 
-Roles and the crew. A player clocks in as a line_cook (owns cook_started and
-plated, for tickets at their own station) or a server (owns picked_up_by_server
-and delivered). Every stage a player does not own is done by the crew: a
+Roles and the crew. A player clocks in as a line_cook (owns cook_started, at
+their own station), an expo (owns plated, the whole floor -- expo works the
+pass for every station, not one) or a server (owns picked_up_by_server and
+delivered, the whole floor). Every stage a player does not own is done by the crew: a
 background "director" thread advances it after a random delay, tagged
 source_kind "crew" / source_id "game-crew" so the pipeline can tell the crew
 from the player -- and so the ticket-timing aggregator can mark every ticket
@@ -96,11 +97,19 @@ ROLES: list[str] = SHIFT_SCHEMA["properties"]["role"]["enum"]
 # Game rules (not contract): which stages each playable role performs, and the
 # stations a line cook can stand at. Checked against the schema and world at
 # import so a renamed stage or station fails loudly here, not mid-game.
+# order_fired -> cook_started (line_cook, at their station) -> plated (expo, whole floor,
+# since expo works the pass for every station) -> picked_up_by_server -> delivered (server,
+# whole floor). Only line_cook is station-scoped (see _can_act); real kitchens don't scope
+# expo or server to one station.
 PLAYABLE_ROLES: dict[str, list[str]] = {
-    "line_cook": ["cook_started", "plated"],
+    "line_cook": ["cook_started"],
+    "expo": ["plated"],
     "server": ["picked_up_by_server", "delivered"],
 }
-PLAYABLE_STATIONS: list[str] = ["station-grill", "station-saute", "station-salad", "station-expo"]
+# Cooking stations only -- where a line cook stands and a ticket is fired. station-expo is
+# deliberately not here: it is the pass expo works, not a place a ticket is cooked, so a
+# ticket is never fired "at" it. (It used to be, before the expo role existed; fixed 2026-09-22.)
+PLAYABLE_STATIONS: list[str] = ["station-grill", "station-saute", "station-salad"]
 for _role, _stages in PLAYABLE_ROLES.items():
     if _role not in ROLES or any(st not in STAGES for st in _stages):
         raise ValueError(f"PLAYABLE_ROLES[{_role!r}] does not match the schemas' roles/stages")
@@ -312,7 +321,11 @@ def post_service_timing(req: ServiceTimingRequest):
         state = _clocked_in.get(staff_id)
 
         if req.stage == STAGES[0]:
-            _require_known(req.station_id, world.STATIONS, "station_id")
+            # PLAYABLE_STATIONS, not world.STATIONS: a ticket is only ever cooked at a real
+            # cooking station. Firing one at, say, station-expo or station-bar would create a
+            # ticket no line cook could ever be staffed at, so the crew would silently cook
+            # every one of them forever.
+            _require_known(req.station_id, PLAYABLE_STATIONS, "station_id")
             _require_known(req.table_id, world.TABLES, "table_id")
             if state is None or state["on_break"]:
                 raise HTTPException(status_code=409, detail=f"{staff_id} must be clocked in (and not on break) to fire a ticket")

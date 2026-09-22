@@ -20,8 +20,8 @@ The game depends on the platform in exactly these places, and nowhere else:
 
 | Dependency | Where it lives | Why it is in version 1's tree |
 |---|---|---|
-| `source_kind: "player"` on the four event schemas | `schemas/*.schema.json` | It is a contract change, and the contract must be one shared definition. Simulators and vendor integrations ignore it. |
-| Migration `004`, which lets the database accept `player` | `storage/schema/004_player_source_kind.sql` (and its copy under `k8s/timescaledb/files/`) | It has to reach every database, including ones created before the game existed, or player events would fail a `CHECK`. It is idempotent and harmless without the game. |
+| `source_kind: "player"` on the four event schemas, and `"crew"` on `ServiceTimingEvent` | `schemas/*.schema.json` | It is a contract change, and the contract must be one shared definition. Simulators and vendor integrations ignore it. |
+| Migrations `004` and `005`, which let the database accept `player` and `crew`, and add the ticket `origin` column | `storage/schema/004_player_source_kind.sql`, `005_ticket_origin.sql` (and their copies under `k8s/timescaledb/files/`) | It has to reach every database, including ones created before the game existed, or player events would fail a `CHECK`. It is idempotent and harmless without the game. |
 | The simulated world's ids (stations, tables, `RESTAURANT_ID`) | `edge-simulators/common/world.py`, copied into the bridge image at build time | So player events join with simulated ones. The bridge reads it; nothing reads the bridge. |
 | A running Kafka and TimescaleDB | the base Compose stack | The bridge publishes to the same topics. |
 
@@ -99,18 +99,39 @@ Out-of-order stages, unknown tables or stations, and bad clock-in sequences are 
 
 Every stage a player can't do is done by the **crew**, a background "director" thread in the bridge. A stage is crew-owned whenever no clocked-in player *who is not on a break* can do it (for a cook: at that ticket's station). The crew acts after a random delay (6 to 14 s by default), so if you cook slowly the server waits, and if you serve slowly the guest waits. Clock out or take a break and the crew covers your stages. The director also fires new tickets (the dining room) every few seconds while someone is on shift: at the cooks' stations, or anywhere in the kitchen if only servers are working.
 
-Pacing is set by environment variables on the bridge (defaults in brackets): `SPAWN_SECONDS` [8], `MAX_OPEN_TICKETS` [5, per staffed station], `CREW_MIN_SECONDS` [6], `CREW_MAX_SECONDS` [14], `DIRECTOR_TICK_SECONDS` [0.5], `GAME_DIRECTOR=0` to turn the director off.
+Pacing is set by environment variables on the bridge (defaults in brackets): `SPAWN_SECONDS` [8], `MAX_OPEN_TICKETS` [5, per staffed station], `CREW_MIN_SECONDS` [6], `CREW_MAX_SECONDS` [14], `DIRECTOR_TICK_SECONDS` [0.5], `GAME_DIRECTOR=0` to turn the director off. The Compose overlay passes the first four through from your shell, so `SPAWN_SECONDS=1 CREW_MIN_SECONDS=1 CREW_MAX_SECONDS=2 docker compose -f docker-compose.yml -f game/docker-compose.game.yml up -d game-bridge` gives a fast test run.
+
+## Quarantine and comparison
+
+Your play must not change what the platform treats as normal for everyone else. Measured on real data, a station worked at game pace fills the detector's 200-ticket rolling window in about half an hour (the simulators complete around 5 tickets an hour per station; a played station up to about 450), and with a window that game-dominated, 82% of ordinary simulated tickets would be flagged. So:
+
+- **Flag.** Every ticket in an interactive session gets `origin = interactive` in `ticket_timing_summaries`, from its first event (the crew fires the ticket, so the crew's `crew` source kind is what marks it, before any player acts). Simulated tickets stay `simulated`.
+- **Quarantine.** The anomaly detector skips interactive tickets: they are never evaluated and never enter a baseline window. The causal engine's staffing-level query leaves out interactive tickets and staff events from human-driven sources. The tickets are still stored, so nothing is lost.
+- **Compare.** `GET /api/comparison` on the dashboard API (the game and the dashboard both use it) reports two things: **you against the crew** over the same window and clock, and **game tickets against the simulated restaurant's**, per stage, as medians and 90th percentiles. Clocking out shows this as a shift report in the client; the dashboard has a matching panel.
+
+Read the comparison as pace, not a score: player and crew usually do different stages, the crew's times are largely set by `CREW_MIN_SECONDS`/`CREW_MAX_SECONDS`, and the game and the simulators run on different clocks.
+
+If you are reusing a database that recorded game tickets before this change, apply migration `005` and then the one-off backfill (it re-tags the earlier crew events and marks their tickets interactive; idempotent):
+
+```bash
+docker compose exec -T timescaledb psql -U restaurant_app -d restaurant_platform -v ON_ERROR_STOP=1 \
+  < storage/schema/005_ticket_origin.sql
+docker compose exec -T timescaledb psql -U restaurant_app -d restaurant_platform \
+  < game/bridge/backfill-crew-origin.sql
+```
+
+Migration `005` changes tables the pipeline services are reading. If it appears to hang, a session is holding a lock (see the codebase guide, section 11); stop the services that read the database, or terminate the idle session it names, then re-run it. A fresh volume applies it automatically.
 
 ## How the game maps onto the platform
 
 | In the game | Event | Tagged |
 |---|---|---|
 | Clock in, take a station, break, clock out | `StaffShiftEvent` | `player`, `source_id = game-<name>`; `staff_id` is `player-<name>` so players never collide with the simulators' roster |
-| A ticket arrives | `ServiceTimingEvent` `order_fired` | `simulated`, `game-crew` (the dining room); table is random, station is a cook's |
+| A ticket arrives | `ServiceTimingEvent` `order_fired` | `crew`, `game-crew` (the dining room); table is random, station is a cook's |
 | Your button press | `ServiceTimingEvent` for the next stage | `player`, `game-<name>`; the bridge computes `elapsed_since_previous_stage_ms` |
-| The crew's stages | `ServiceTimingEvent` | `simulated`, `game-crew` |
+| The crew's stages | `ServiceTimingEvent` | `crew`, `game-crew` |
 
-Crew events are `simulated`, not `player`, so anything downstream can tell a human's actions from the bridge's. The bridge owns the rules (stage order, roles, stations, clock-in sequencing) and the timing of everything the crew does; the game only polls `GET /api/tickets`, presents it, and reports what the bridge rejected.
+Crew events are `crew`, not `player` or `simulated`, so anything downstream can tell a human's actions, the bridge's automated staff and the simulators apart. The bridge owns the rules (stage order, roles, stations, clock-in sequencing) and the timing of everything the crew does; the game only polls `GET /api/tickets`, presents it, and reports what the bridge rejected.
 
 ## Tests
 
@@ -129,7 +150,7 @@ The smoke test uses the fixed player id `smoke-test`, so repeated runs reuse one
 - Placeholder UI on Godot's default theme; no art, audio, or export presets yet.
 - Godot prints a few harmless lines at start-up under WSL2/WSLg: `xkbcommon ... unrecognized keysym "dead_hamza"` (the Godot snap's bundled keyboard table has a symbol its own library does not know; it only affects Arabic compose-key sequences) and `Could not set V-Sync mode` (the software OpenGL driver, Mesa llvmpipe, does not support it). Neither can be fixed from the project, and neither affects the game.
 - Only two roles are playable (line cook, server). Expo, host, bartender and dishwasher exist in the schema but have no game rules yet, and the guest side (ordering, eating, paying) is not built.
-- Crew and player timings are game-paced (seconds), against the simulators' ~30 s baselines, so game tickets can look like fast outliers to the anomaly detector. Whether they share the baseline or get their own is undecided.
+- Game timings are on a shorter clock (seconds per stage) than the simulators' (about 20 s by median), so they are quarantined from the anomaly baseline and compared instead (next section). Interactive tickets therefore produce no anomalies or causal findings of their own; the shift report is the player's feedback.
 - Two players in the same role share the tickets first come, first served; there is no queue or seating.
 - Bridge state (open tickets, clocked-in players) is in memory. If the bridge restarts mid-shift the board empties and you need to clock in again.
 - The director holds the bridge's state lock while it publishes, so a slow Kafka delays both the crew and the API.

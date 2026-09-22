@@ -92,9 +92,9 @@ Nothing declares these topics. There are no `KafkaTopic` objects on k3s and no t
 
 | Table | Kind | Written by | Read by |
 |---|---|---|---|
-| `plate_waste_events`, `pos_transaction_events`, `service_timing_events`, `staff_shift_events` | hypertable, append-only | storage-consumer | causal-engine (plate waste, staff shift); otherwise queried by hand |
+| `plate_waste_events`, `pos_transaction_events`, `service_timing_events`, `staff_shift_events` | hypertable, append-only | storage-consumer | causal-engine (plate waste, staff shift); dashboard-api (`service_timing_events`, for the player-vs-crew comparison); otherwise queried by hand |
 | `pos_transaction_line_items` | hypertable, append-only | storage-consumer (one row per entry in a POS event's `line_items`, same transaction as the parent row) | queried by hand; the data a per-item analysis or a guest-ordering game mode would use |
-| `ticket_timing_summaries` | plain table, upserted per ticket | ticket-timing-aggregator | causal-engine |
+| `ticket_timing_summaries` (has an `origin` column: `simulated`, `vendor_integration` or `interactive`) | plain table, upserted per ticket | ticket-timing-aggregator | causal-engine (simulated tickets only), dashboard-api (comparison) |
 | `anomaly_events` | hypertable | anomaly-detector | dashboard-api |
 | `causal_findings` | hypertable | causal-engine (insert), finding-reviewer (sets `narrative_ready`) | finding-narrator, dashboard-api |
 | `narrated_findings` | plain table | finding-narrator | dashboard-api |
@@ -139,7 +139,7 @@ These recur in nearly every file, so they are stated once here and referred to b
 
 Version 1 is the simulated platform, everything outside `game/`. Version 2 is the human-playable game, and all of it lives under `game/` (`game/bridge`, `game/client`, `game/docker-compose.game.yml`, `game/README.md`). **Version 1 never references version 2**; the dependency runs one way, from the game onto the platform. The base `docker-compose.yml` starts 21 services and has no game in it; the game is added by layering the overlay: `docker compose -f docker-compose.yml -f game/docker-compose.game.yml up -d --build` (22 services).
 
-The game touches version 1 in exactly four places, all intentional: the `player` value of `source_kind` in the event schemas and its database migration `004` (a shared contract, so it has to live in the shared tree and reach every database), `edge-simulators/common/world.py` (copied into the bridge image so entity ids match), and the base stack's Kafka and TimescaleDB. `game/README.md` states this and includes a one-line check for the rule.
+The game touches version 1 in exactly four places, all intentional: the shared contract (the `player` value of `source_kind` in the event schemas, the `crew` value in `ServiceTimingEvent`, the ticket `origin` field, and migrations `004` and `005`, which have to live in the shared tree and reach every database); the **quarantine** that contract enables (the aggregator stamps each ticket's origin, the anomaly detector keeps `interactive` tickets out of its baselines, the causal engine leaves them out of its analysis, and `dashboard-api` and the dashboard compare them with the rest, all worded generically, with nothing naming the game); `edge-simulators/common/world.py` (copied into the bridge image so entity ids match); and the base stack's Kafka and TimescaleDB. `game/README.md` states this and includes a one-line check for the rule.
 
 ---
 
@@ -252,6 +252,7 @@ Seven JSON Schema (draft 2020-12) files. Four describe events that leave a produ
 - **Why it works this way:** `plated` and `picked_up_by_server` are separate stages so kitchen cook time and front-of-house pickup delay can be measured independently; the file records that split. The producer computes the elapsed time, which is why the game bridge does too rather than trusting a client.
 - **Connects to:** `simulators/service_timing.py`, `game/bridge`, the aggregator, the digital twin, `storage/consumer`.
 - **Purpose:** The most heavily used contract; it drives anomaly detection and the twin's kitchen state.
+- **`source_kind` here has a fourth value, `crew` (2026-09-21):** an automated participant working alongside a human-driven source, used by the game bridge for the staff nobody is playing. It exists so the aggregator can recognise an interactive ticket from its very first event (the crew fires the ticket, before any player acts); it is only in this schema because the crew only ever publishes stage events.
 
 ### `schemas/StaffShiftEvent.schema.json`
 - **What it does:** A staffing state change: `clock_in`, `clock_out`, `break_start`, `break_end` or `station_reassign`, with role, optional station, and `scheduled_vs_actual`.
@@ -259,12 +260,13 @@ Seven JSON Schema (draft 2020-12) files. Four describe events that leave a produ
 - **Connects to:** `simulators/staff_shift.py`, `game/bridge`, the digital twin, `storage/consumer`, the causal engine's `staffing_level` query.
 - **Purpose:** The staffing contract.
 
-All four event schemas share a `source_kind` field with values `simulated`, `vendor_integration` and `player`. `player` was added on 2026-09-20 for the game; the change is recorded in each schema's description and in migration `004`.
+All four event schemas share a `source_kind` field with values `simulated`, `vendor_integration` and `player`. `player` was added on 2026-09-20 for the game; the change is recorded in each schema's description and in migration `004`. `ServiceTimingEvent` alone also accepts `crew` (migration `005`).
 
 ### `schemas/TicketTimingSummary.schema.json`
 - **What it does:** One row per ticket summarising its stage timestamps and derived durations (`cook_duration_ms`, `pickup_delay_ms`, `service_delay_ms`, and so on), with `is_complete`.
 - **Why it works this way:** It is a mutable per-ticket record (a summary is updated as later stages arrive), unlike the append-only event schemas. The description warns that incomplete summaries have provisional durations, which is why the anomaly detector ignores them.
 - **Connects to:** produced by `aggregator.py`, consumed by `detector.py`, stored in `ticket_timing_summaries`, mounted into three k8s pods through `k8s/phase5-schemas`.
+- **`origin` (added 2026-09-21):** `simulated`, `vendor_integration` or `interactive`. It is `interactive` if any event on the ticket has `source_kind` `player` or `crew`, otherwise the events' own kind. Its description states the rule downstream consumers follow: keep interactive tickets out of the baseline for the others.
 - **Purpose:** The feature record that anomaly detection runs on.
 
 ### `schemas/AnomalyEvent.schema.json`
@@ -416,6 +418,12 @@ One image runs all four sensors; an environment variable picks which. Every simu
 - **Connects to:** the four schema files' `source_kind` enum; `game/bridge`; applied by the k8s schema-init Job, Compose `initdb.d`, and by hand on old volumes. It lives in the shared tree on purpose (see section 1.7).
 - **Purpose:** Lets human-driven events into the database. It is the one piece of version 2 that is deliberately part of version 1's tree, because the contract must be shared.
 
+### `storage/schema/005_ticket_origin.sql`
+- **What it does:** Widens `service_timing_events.source_kind` to include `crew`, adds `ticket_timing_summaries.origin` (`TEXT NOT NULL DEFAULT 'simulated'`, checked against `simulated`, `vendor_integration`, `interactive`) and an index on `(origin, computed_at)`.
+- **Why it works this way:** The same idempotent pattern as `004`: constraints are dropped and re-added, the column and index use `IF NOT EXISTS`, and it is a numbered migration rather than an edit to `002` because `CREATE TABLE IF NOT EXISTS` never alters an existing table. Existing rows default to `simulated`; a database that already holds game tickets is fixed by the one-off `game/bridge/backfill-crew-origin.sql`, which lives under `game/` so version 1 never names the game. **A live gotcha:** its `ALTER TABLE` needs an exclusive lock, so it waits for any session sitting idle inside a transaction. Applied by hand to a running Compose stack it hung until the causal engine's 42-minute-old idle read was terminated; see section 11.
+- **Connects to:** `ServiceTimingEvent` and `TicketTimingSummary` schemas; the aggregator (writes `origin`); applied by the k8s schema-init Job (which lists it), Compose `initdb.d`, and by hand on old volumes.
+- **Purpose:** Makes interactive sessions recognisable in the stored data, which is what the quarantine and the comparison both stand on.
+
 ---
 
 ## 6. `docker-compose/`: Compose-only support files
@@ -469,14 +477,19 @@ All Python services follow the same skeleton: read configuration from environmen
 - **Purpose:** The shared plumbing layer.
 
 ### `services/ticket-timing-aggregator/aggregator.py`
-- **What it does:** Consumes `service-timing-events` and keeps an in-memory state machine per `ticket_id`. On each event it updates the ticket's stage timestamps, computes the five duration fields, validates a `TicketTimingSummary`, upserts it into `ticket_timing_summaries`, and publishes it to `ticket-timing-summaries`. A finished ticket is dropped from memory.
+- **What it does:** Consumes `service-timing-events` and keeps an in-memory state machine per `ticket_id`. On each event it updates the ticket's stage timestamps, computes the five duration fields, stamps the ticket's `origin`, validates a `TicketTimingSummary`, upserts it into `ticket_timing_summaries`, and publishes it to `ticket-timing-summaries`. A finished ticket is dropped from memory.
 - **Why it works this way:**
   - It does not re-validate the incoming events (the producer already did) but does validate its own output, since that is its contract to everything after it.
   - The offset is committed only after both the database upsert and the Kafka publish succeed.
   - The in-memory state means a ticket already mid-sequence when the pod restarts loses its earlier stages. Such a ticket never gets a summary rather than crashing the consumer. The docstring names this as an accepted gap.
   - Durations are computed from event timestamps, not wall-clock arrival, so processing lag does not distort them.
+  - **Origin is decided by `origin_of()`:** a `player` or `crew` event makes the ticket `interactive`, otherwise the event's own `source_kind` is used, and once a ticket is interactive it stays so. It is read from the first event because the crew fires interactive tickets, which is why `crew` is its own source kind rather than `simulated`.
 - **Connects to:** Kafka in (`service-timing-events`) and out (`ticket-timing-summaries`); `ticket_timing_summaries`; `TicketTimingSummary.schema.json`.
 - **Purpose:** Turns a stream of stage events into per-ticket features for anomaly detection.
+
+### `services/ticket-timing-aggregator/test_origin.py`
+- **What it does:** 9 pytest cases on `TicketState.apply` with the Kafka import stubbed: all-simulated stays simulated; a crew-fired ticket is interactive from its first event; any player or crew event on any stage makes it interactive; origin is sticky; `vendor_integration` is its own origin; a missing `source_kind` means simulated; tickets don't leak origin into each other; and summaries validate against the schema. Disabling the sticky rule fails a test.
+- **Purpose:** Guards the flag the whole quarantine depends on.
 
 ### `services/ticket-timing-aggregator/Dockerfile`, `requirements.txt`
 - **What they do:** Python 3.11 image (the comment explains the `kafka-python` and Python 3.12 incompatibility) with `kafka-python`, `jsonschema`, `psycopg2-binary`. Schemas are deliberately not baked in: a ConfigMap (k8s) or a volume mount (Compose) supplies them at `/app/schemas`, so a schema fix does not need an image rebuild.
@@ -490,8 +503,13 @@ All Python services follow the same skeleton: read configuration from environmen
   - A ticket is judged against the window before it is added, so an outlier is not compared with a baseline it has already contaminated.
   - The forest is refit only every 20 tickets because refitting each time wastes CPU. That CPU cost is also why it can miss a Kafka poll deadline on a loaded machine; the pod then crashes and restarts, which is expected behaviour rather than a logic bug.
   - Severity thresholds are explicitly labelled a starting calibration, not derived from data.
+  - **Interactive tickets are quarantined** (2026-09-21): a summary whose `origin` is in `QUARANTINE_ORIGINS` (default `interactive`, env-configurable) is neither evaluated nor added to any window, and its offset is still committed. Reason, measured on real data: a station worked at game pace completes tickets up to about 90 times faster than the simulators do, so about half an hour of play would replace that station's whole 200-ticket window, and 82% of ordinary simulated tickets would then be flagged. A summary with no `origin` counts as simulated. It logs the window sizes every 25 quarantined tickets so the isolation is visible. Confirmed live: 89 game tickets on `station-grill` produced no window for that station and no anomalies.
 - **Connects to:** Kafka in and out; `anomaly_events`; `AnomalyEvent.schema.json`; scikit-learn and numpy.
 - **Purpose:** Detects unusual ticket timings that the causal engine then tries to explain.
+
+### `services/anomaly-detector/test_quarantine.py`
+- **What it does:** 4 pytest cases with the Kafka import stubbed: interactive is quarantined by default; simulated, vendor and unlabelled summaries are not; the set is configurable; and, driving `main()` with a fake consumer, no interactive ticket ever enters a `StationWindow` while every ticket's offset is still committed. Removing the quarantine gate fails it.
+- **Purpose:** Protects the property that matters: quarantined tickets cannot move a baseline.
 
 ### `services/anomaly-detector/Dockerfile`, `requirements.txt`
 - **What they do:** Python 3.11 image with `kafka-python`, `jsonschema`, `psycopg2-binary`, `numpy==1.26.4`, `scikit-learn==1.5.1`.
@@ -505,7 +523,9 @@ All Python services follow the same skeleton: read configuration from environmen
   - Findings are written with `narrative_ready = false`. Flipping it is a separate step, so "computed" and "safe to narrate" stay distinct.
   - `run_reviewer()` marks a finding ready only when `refutation_passed` is true, then publishes to `narration-ready-events`. That extra topic is necessary because the finding message was published before review, so it always says not-ready and nothing else could learn when a finding became ready.
   - "Insufficient data" is a warning and a skip, not a crash.
-  - `staffing_level` is a coarse proxy (staff clocked in and not out, counted at pickup time) and is flagged as unvalidated in the code.
+  - `staffing_level` is a coarse proxy (staff clocked in and not out, counted at pickup time) and is flagged as unvalidated in the code. It counts staff across the whole restaurant, not per station, despite an older comment saying otherwise.
+  - **Interactive sessions are quarantined from the analysis** (2026-09-21): the staffing query keeps only tickets whose `origin` is not `interactive` and ignores staff events with `source_kind = 'player'`; the plate-waste query ignores player-sourced rows. Otherwise a player clocking in would raise the staffing count for every ticket, and game tickets (about twice as fast by median) would be pooled with simulated ones, so the estimate would partly measure who was playing. On real data the query returns 1,042 rows instead of 1,168, and the largest staffing count drops from 11 to 10.
+  - **Its database read now ends its transaction** (`_load_data` commits): the long-lived connection used to sit idle inside a transaction for hours after each read, which blocked every schema migration.
 - **Connects to:** Kafka (`anomaly-events` in; `causal-findings-events` and `narration-ready-events` out); `plate_waste_events`, `staff_shift_events`, `ticket_timing_summaries` (read); `causal_findings` (write); `CausalFinding.schema.json`; DoWhy, pandas, statsmodels.
 - **Purpose:** The project's core analytical step: attributing an anomaly to a cause while controlling for confounders, plus the gate that decides what may be narrated.
 
@@ -561,16 +581,26 @@ All Python services follow the same skeleton: read configuration from environmen
 - **Purpose:** The narrator's image.
 
 ### `services/dashboard-api/main.py`
-- **What it does:** A FastAPI service with read-only endpoints: `/api/health`, `/api/twin/tables|staff|stations`, `/api/findings/narrated?limit=` (narrations joined with their finding's numbers), and `/api/anomalies/summary`.
+- **What it does:** A FastAPI service with read-only endpoints: `/api/health`, `/api/twin/tables|staff|stations`, `/api/findings/narrated?limit=` (narrations joined with their finding's numbers), `/api/anomalies/summary`, and `/api/comparison`. The last takes optional `source_id` (one player's events, e.g. `game-ana`), `since` (ISO 8601 start of the interactive window) and `hours` (how far back the simulated reference reaches, default 24). It fetches raw rows in two small functions (player and crew stage events; completed interactive and simulated ticket summaries) and hands them to `comparison.py`. The response has `same_clock` (player against crew), `vs_simulated` (per timing metric), a `scope` echo and explanatory `notes`.
 - **Why it works this way:** It only ever `SELECT`s and uses the ordinary application role, because there is no "must not see raw data" rule for a dashboard as there is for the narrator. CORS is open for a local demo. Each request opens its own connection, which is fine at demo scale.
 - **Connects to:** `twin_*`, `anomaly_events`, `causal_findings`, `narrated_findings`; called by `dashboard-web` through nginx and by the game's findings panel.
 - **Purpose:** The read side of the platform for any user interface.
 
+### `services/dashboard-api/comparison.py`
+- **What it does:** Pure statistics, no database. `same_clock` compares a player's *response time* (`elapsed_since_previous_stage_ms`: how long a ticket waited for whoever handled it) with the crew's over the same window: pooled and per stage, medians and 90th percentiles, and a `player_to_crew_median_ratio` (below 1 means the player was faster). `vs_simulated` compares interactive with simulated tickets on the five timing metrics, and for each gives the share of simulated tickets slower than the interactive median. Percentiles interpolate linearly like Postgres' `percentile_cont`.
+- **Why it works this way:** Medians and p90, not means, because the simulated timings have a heavy tail (a few tickets stalled for up to about 79 minutes) that makes means misleading. Player and crew usually perform *different* stages (a cook does cook and plate, the crew pickup and delivery), so the ratio compares response time, which is measured identically, and `by_stage` shows the stages both did side by side. It is separate from `main.py` so the arithmetic can be tested exactly. Checked against Postgres on live data: counts, medians and p90 match.
+- **Connects to:** `main.py`; consumed by the dashboard panel and the game's shift report.
+- **Purpose:** The game-versus-simulated comparison, and the reason for keeping interactive data out of the baseline rather than throwing it away.
+
+### `services/dashboard-api/test_comparison.py`
+- **What it does:** 16 pytest cases: percentile and stats against hand-computed values, the same-clock ratio and per-stage split (including missing sides), the vs-simulated share-slower figure, other origins and nulls skipped, empty inputs, and the endpoint's defaults, pass-through of `source_id`/`since`/`hours`, timezone-less `since` read as UTC, and rejection of bad parameters. The two fetch functions are replaced, so no database is needed.
+- **Purpose:** Tests the arithmetic behind every number the comparison shows.
+
 ### `services/dashboard-api/Dockerfile`, `requirements.txt`
-- **What they do:** Python 3.11 with FastAPI, uvicorn and `psycopg2-binary`, serving on port 8000. Note that the k8s chart also passes `KAFKA_BOOTSTRAP_SERVERS`, which this service never uses.
+- **What they do:** Python 3.11 with FastAPI, uvicorn and `psycopg2-binary`, serving on port 8000; the Dockerfile copies `main.py` and `comparison.py`. Note that the k8s chart also passes `KAFKA_BOOTSTRAP_SERVERS`, which this service never uses.
 
 ### `services/dashboard-web/src/App.jsx`
-- **What it does:** The whole dashboard: a `useApi` hook that fetches a path on a timer (4 s, 5 s for findings), and four panels: station load, staff, anomaly counts and the narrated-findings feed. Each narrated finding carries a small badge: "model · verified" when the language model's text passed the checks, "template" when the stored text is the deterministic fallback (`model_used = template-fallback`), with a hover explanation, so the page never presents template text as model output. `API_BASE` is `/api` in production and `VITE_API_BASE` in local development.
+- **What it does:** The whole dashboard: a `useApi` hook that fetches a path on a timer (4 s, 5 s for findings), and five panels: station load, staff, anomaly counts, an interactive-versus-simulated comparison and the narrated-findings feed. The comparison panel polls `/comparison` and shows, per timing stage, the interactive median against the simulated median and 90th percentile and the share of simulated tickets the interactive median beats, plus the players-versus-crew medians; with no interactive tickets it says so and what to do. It states that interactive tickets are quarantined from the anomaly baseline and that the game runs on a shorter clock, so it reads as pace rather than a score. Each narrated finding carries a small badge: "model · verified" when the language model's text passed the checks, "template" when the stored text is the deterministic fallback (`model_used = template-fallback`), with a hover explanation, so the page never presents template text as model output. `API_BASE` is `/api` in production and `VITE_API_BASE` in local development.
 - **Why it works this way:** Polling is the simplest correct approach for a demo. Because the browser calls a same-origin `/api`, nginx can proxy to the API with no CORS or hostnames in the frontend.
 - **Connects to:** `dashboard-api` via nginx.
 - **Purpose:** What a recruiter sees in a browser.
@@ -621,20 +651,20 @@ Everything for the human-playable version lives here, and nothing outside `game/
 - **Purpose:** The single entry point for anything to do with the game.
 
 ### `game/docker-compose.game.yml`
-- **What it does:** A Compose overlay that adds one service, `game-bridge`, to the base stack: built from `game/bridge/Dockerfile`, waiting for a healthy Kafka, published on `127.0.0.1:8001`. Used as `docker compose -f docker-compose.yml -f game/docker-compose.game.yml up -d --build`.
+- **What it does:** A Compose overlay that adds one service, `game-bridge`, to the base stack: built from `game/bridge/Dockerfile`, waiting for a healthy Kafka, published on `127.0.0.1:8001`, and passing four pacing variables through from the shell (`SPAWN_SECONDS`, `MAX_OPEN_TICKETS`, `CREW_MIN_SECONDS`, `CREW_MAX_SECONDS`, each with the bridge's default) so a fast test run needs no file edit. Used as `docker compose -f docker-compose.yml -f game/docker-compose.game.yml up -d --build`.
 - **Why it works this way:** An overlay keeps the base file version 1 only, so the platform can be run, read and shipped without the game. Relative paths in it resolve against the first `-f` file's directory (the base file's), not its own, which is why `context: .` is correct here. The bridge is published on the host because the Godot client runs outside the Compose network, and bound to localhost because it has no authentication.
 - **Connects to:** `docker-compose.yml` (the `kafka` service it depends on); `game/bridge/Dockerfile`.
 - **Purpose:** The only place the game is wired into a deployment.
 
 ### `game/bridge/main.py`
-- **What it does:** A FastAPI service (port 8001) that turns a game's actions into schema-validated events on the existing topics, and runs the rest of the kitchen. `POST /api/service-timing` takes a player, a stage and (for the first stage) a table and station; `POST /api/staff-shift` takes a role and a shift action; `GET /api/world` lists valid stations, tables, stages, roles and which stages each playable role performs; `GET /api/tickets?player_id=` is the ticket board (each open ticket, its next stage, how long it has waited, who it is waiting on, and whether that player can act). It enforces ticket stage order, clock-in/break/clock-out sequencing, **roles** (a `line_cook` performs `cook_started` and `plated` and only at their own station; a `server` performs `picked_up_by_server` and `delivered`; anything else is 403) and a fixed role per shift. It fills in the event envelope (id, timestamp, `source_id`, `source_kind`), computes `elapsed_since_previous_stage_ms`, validates the finished event against the JSON Schema, publishes with an acknowledged send, and only then updates its in-memory state. A daemon **director** thread (started by the FastAPI lifespan, ticking every 0.5 s) is the crew and the dining room: it fires a ticket every 8 s while a playable player is on shift (at a cook's station, or anywhere if only servers are working; at most 5 open per staffed station), and advances every ticket whose next stage no clocked-in, not-on-break player can do, after a random 6 to 14 s delay. Its events are `source_kind = simulated`, `source_id = game-crew`; a player's are `player` / `game-<name>`. All pacing is environment-tunable.
+- **What it does:** A FastAPI service (port 8001) that turns a game's actions into schema-validated events on the existing topics, and runs the rest of the kitchen. `POST /api/service-timing` takes a player, a stage and (for the first stage) a table and station; `POST /api/staff-shift` takes a role and a shift action; `GET /api/world` lists valid stations, tables, stages, roles and which stages each playable role performs; `GET /api/tickets?player_id=` is the ticket board (each open ticket, its next stage, how long it has waited, who it is waiting on, and whether that player can act). It enforces ticket stage order, clock-in/break/clock-out sequencing, **roles** (a `line_cook` performs `cook_started` and `plated` and only at their own station; a `server` performs `picked_up_by_server` and `delivered`; anything else is 403) and a fixed role per shift. It fills in the event envelope (id, timestamp, `source_id`, `source_kind`), computes `elapsed_since_previous_stage_ms`, validates the finished event against the JSON Schema, publishes with an acknowledged send, and only then updates its in-memory state. A daemon **director** thread (started by the FastAPI lifespan, ticking every 0.5 s) is the crew and the dining room: it fires a ticket every 8 s while a playable player is on shift (at a cook's station, or anywhere if only servers are working; at most 5 open per staffed station), and advances every ticket whose next stage no clocked-in, not-on-break player can do, after a random 6 to 14 s delay. Its events are `source_kind = crew`, `source_id = game-crew`; a player's are `player` / `game-<name>`. All pacing is environment-tunable.
 - **Why it works this way:**
   - The client sends only domain fields, so it cannot produce a malformed or self-inconsistent event even by accident, and validation lives in exactly one place.
   - Enum values are read from the schema files, not copied, so a schema change flows through.
   - Player ids are turned into staff ids `player-<name>`, which never collide with the simulators' ten-person roster, and station and table ids must come from `world.py`, which keeps player events joinable with simulated ones.
   - State advances only after a successful publish, so a Kafka outage cannot leave the bridge believing a stage happened.
   - The Kafka client is imported lazily, because `kafka-python` cannot load on Python 3.12 and the tests do not need it.
-  - The crew makes the player's speed matter: a slow cook delays the server, a slow server delays the guest, and the platform sees that as real timing data. Crew events are tagged `simulated` rather than `player`, so downstream analysis can separate a human's actions from the bridge's.
+  - The crew makes the player's speed matter: a slow cook delays the server, a slow server delays the guest, and the platform sees that as real timing data. Crew events are tagged `crew` (a source kind of their own since 2026-09-21; they were `simulated` at first), so downstream analysis can separate a human's actions, the bridge's automated staff and the simulators, and so the aggregator can mark a whole game ticket interactive from the crew's `order_fired`.
   - The crew stands back the moment a player can do a stage (and covers when they clock out or go on break), so the ownership rule is one function, `_can_act`, used by the API, the ticket board and the director alike.
   - The director publishes through the same `_publish_stage` path as a player action, so crew events get the same schema validation and the same publish-then-advance guarantee. A failed crew publish backs off and retries rather than hammering a down Kafka; a failed spawn waits a full spawn interval.
   - Time goes through one function, `_clock`, so the tests can fake it.
@@ -644,12 +674,17 @@ Everything for the human-playable version lives here, and nothing outside `game/
 - **Purpose:** The seam between a human player and the platform; the reason the rest of the pipeline needed no changes for the game.
 
 ### `game/bridge/test_bridge.py`
-- **What it does:** 27 pytest cases with Kafka replaced by a recorder and time replaced by a fake clock (the director is called directly, so a 5 s crew delay is tested exactly, instantly). Covers the ticket lifecycle, envelope ownership, out-of-order and unknown-ticket rejection, duplicate ids, bad player ids and stages, a failed publish not advancing state, the shift sequence and fixed role, role and station gating (403s), players needing to be clocked in and off break, the crew doing exactly the stages no player can (and tagging its events `simulated`/`game-crew`), the crew covering a break and a clock-out, retry after a failed crew publish, spawn timing and caps (including the per-station cap), a failed spawn not retrying every tick, and the ticket board's `waiting_on` values. Deliberately breaking the station gate and the crew-yields rule each makes tests fail.
+- **What it does:** 27 pytest cases with Kafka replaced by a recorder and time replaced by a fake clock (the director is called directly, so a 5 s crew delay is tested exactly, instantly). Covers the ticket lifecycle, envelope ownership, out-of-order and unknown-ticket rejection, duplicate ids, bad player ids and stages, a failed publish not advancing state, the shift sequence and fixed role, role and station gating (403s), players needing to be clocked in and off break, the crew doing exactly the stages no player can (and tagging its events `crew`/`game-crew`), the crew covering a break and a clock-out, retry after a failed crew publish, spawn timing and caps (including the per-station cap), a failed spawn not retrying every tick, and the ticket board's `waiting_on` values. Deliberately breaking the station gate and the crew-yields rule each makes tests fail.
 - **Purpose:** Tests the state machines and the crew, which is where the bugs would be. Run from `game/bridge`.
 
 ### `game/bridge/Dockerfile`, `game/bridge/requirements.txt`
 - **What they do:** Python 3.11 with FastAPI, uvicorn, `kafka-python` and `jsonschema`. Built from the platform directory (the Compose context) so it can copy `schemas/` and `edge-simulators/common/world.py`, the single source of truth for entity ids, instead of duplicating them.
 - **Purpose:** The bridge's image.
+
+### `game/bridge/backfill-crew-origin.sql`
+- **What it does:** A one-off, idempotent backfill for a database that recorded game tickets before migration `005`: it re-tags events the crew published as `simulated` (source id `game-crew`) to `crew` (typed column and stored payload), then marks every ticket with any `player` or `crew` event as `interactive` in `ticket_timing_summaries`. Applied to the Compose database on 2026-09-21: 137 events re-tagged and 44 tickets marked; a second run changed nothing.
+- **Why it works this way:** It lives under `game/`, not with the migrations, because it names the game's crew (`game-crew`), and version 1 must never reference version 2. A fresh database has nothing to backfill.
+- **Purpose:** Makes history recorded before the quarantine consistent with what is recorded after it.
 
 ### `game/client/project.godot`
 - **What it does:** The Godot project file: name and description, the main scene (`res://scenes/main.tscn`), engine feature version 4.5, a 1024 by 680 window, canvas-items stretch scaling, and the OpenGL "Compatibility" renderer. The renderer is set explicitly because the game is 2D UI: the default (Vulkan) fails on WSL2 machines with no Vulkan driver and prints two errors and a warning before falling back to OpenGL anyway. Compatibility is also the only renderer a web export supports.
@@ -662,7 +697,7 @@ Everything for the human-playable version lives here, and nothing outside `game/
 - **Purpose:** The entry scene.
 
 ### `game/client/scripts/main.gd`
-- **What it does:** The game. It builds the UI in code (title, status line, a setup panel with a name box, role picker, a station picker shown only for line cooks and a Clock in button, a shift panel with a ticket board and Clock out button, and a findings panel). The role and station lists come from `/api/world`. It clocks the player in (and a cook onto a station), then polls `GET /api/tickets` every 1.5 s and shows each ticket the player should see (a cook sees their own station, a server the whole floor). A ticket waiting on the player has a live button labelled for the action ("Start cooking", "Plate it", "Pick up", "Deliver"); any other ticket is disabled and says who it is waiting on ("waiting on crew"). It colours the wait timer red past 15 seconds on tickets waiting on you, tracks your action count and the average time a ticket waited for you, polls the dashboard API every 15 seconds for the latest narration, retries the bridge every 3 seconds if it is unreachable, and clocks the player out if the window is closed mid-shift.
+- **What it does:** The game. It builds the UI in code (title, status line, a setup panel with a name box, role picker, a station picker shown only for line cooks and a Clock in button, a shift panel with a ticket board and Clock out button, and a findings panel). The role and station lists come from `/api/world`. It clocks the player in (and a cook onto a station), then polls `GET /api/tickets` every 1.5 s and shows each ticket the player should see (a cook sees their own station, a server the whole floor). A ticket waiting on the player has a live button labelled for the action ("Start cooking", "Plate it", "Pick up", "Deliver"); any other ticket is disabled and says who it is waiting on ("waiting on crew"). It colours the wait timer red past 15 seconds on tickets waiting on you, tracks your action count and the average time a ticket waited for you, polls the dashboard API every 15 seconds for the latest narration, retries the bridge every 3 seconds if it is unreachable, and clocks the player out if the window is closed mid-shift. **At clock-out it shows a shift report** (2026-09-21): it calls the dashboard API's `GET /api/comparison` with the shift's `source_id` and start time (both taken from the clock-in event the bridge returned) and `format_report()` renders it as text: you against the crew on the same clock (actions, median, slowest 10%, a plain-English ratio such as "4.2x faster than the crew", and the stages both did side by side), then game tickets against the simulated restaurant per stage with the share of simulated tickets the game median beats, ending with a reminder that this compares pace, not a score. Closing the window skips the report.
 - **Why it works this way:**
   - The bridge decides what is valid, when tickets arrive and what the crew does, so the game holds no ticket rules and no spawn timer; it re-reads the board after every action instead of guessing what happens next, and a ticket that disappears (bridge restart, or the crew finished it) just vanishes from the board.
   - Stage names, roles and stations come from `/api/world`, not from constants, so they follow the bridge.
@@ -681,7 +716,7 @@ Everything for the human-playable version lives here, and nothing outside `game/
 - **Purpose:** The game's only network layer.
 
 ### `game/client/tests/smoke_test.gd`
-- **What it does:** A headless integration test against a live bridge (`godot4 --headless --path game/client -s res://tests/smoke_test.gd`). It checks the client and rules end to end (reachability, the playable roles, tagging, 403/409/422 rejections, a server refused a cook's stage and a cook refused a server's), waits for the crew to pick up and deliver a ticket the cook plated, and then drives the real main scene through its own handlers (clock in as a line cook, wait for a fresh ticket to arrive on its own, cook and plate it, see the card say "waiting on crew", clock out). It takes up to about a minute because it waits on the crew and the dining room. It exits non-zero on failure.
+- **What it does:** A headless integration test against a live bridge (`godot4 --headless --path game/client -s res://tests/smoke_test.gd`). It checks the client and rules end to end (reachability, the playable roles, tagging, 403/409/422 rejections, a server refused a cook's stage and a cook refused a server's), waits for the crew to pick up and deliver a ticket the cook plated, and then drives the real main scene through its own handlers (clock in as a line cook, wait for a fresh ticket to arrive on its own, cook and plate it, see the card say "waiting on crew", clock out and see a shift report that counts the two actions and shows the crew). It also checks `format_report()` offline on canned data: the title, the player and crew lines, the ratio wording in three cases (faster, slower, about the same), a stage only one side did being left out, the vs-simulated line, and the empty-data wording. It takes up to about a minute because it waits on the crew and the dining room. It exits non-zero on failure.
 - **Why it works this way:** It uses a fixed player id (`smoke-test`) so repeat runs reuse one staff row in the twin. It preloads scripts by path instead of relying on `class_name`, so it works on a fresh clone before Godot has built its class cache.
 - **Connects to:** a running `game/bridge`; `bridge_client.gd`, `main.gd`.
 - **Purpose:** Verifies the client and UI logic without a display.
@@ -780,17 +815,17 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 - **Why it works this way:** A local-development convenience; a real deployment would supply existing Secrets and set `create: false`.
 
 #### `k8s/timescaledb/templates/schema-configmap.yaml`
-- **What it does:** Packs the four SQL files from `files/` into one ConfigMap.
+- **What it does:** Packs the five SQL files from `files/` into one ConfigMap.
 - **Why it works this way:** Helm can only read files inside the chart directory, which is why the SQL is duplicated under `files/`.
 
 #### `k8s/timescaledb/templates/schema-init-job.yaml`
-- **What it does:** A Helm `post-install,post-upgrade` hook Job. An init container waits for Postgres, then `psql -v ON_ERROR_STOP=1` applies the four SQL files in order, with the narrator password passed as an environment variable.
-- **Why it works this way:** A hook only waits for the previous hook weight, not for Postgres readiness, so the wait is explicit. Every statement is idempotent, so re-running on each upgrade is safe. Its header comment (updated 2026-09-20) now says it applies all four numbered migrations in order.
+- **What it does:** A Helm `post-install,post-upgrade` hook Job. An init container waits for Postgres, then `psql -v ON_ERROR_STOP=1` applies the five SQL files in order, with the narrator password passed as an environment variable.
+- **Why it works this way:** A hook only waits for the previous hook weight, not for Postgres readiness, so the wait is explicit. Every statement is idempotent, so re-running on each upgrade is safe. Its header comment says it applies migrations 001 to 005 in order.
 - **Purpose:** Creates and updates the schema on k3s.
 
-#### `k8s/timescaledb/files/001_hypertables.sql`, `002_phase5_hypertables.sql`, `003_phase6.sql`, `004_player_source_kind.sql`
+#### `k8s/timescaledb/files/001_hypertables.sql`, `002_phase5_hypertables.sql`, `003_phase6.sql`, `004_player_source_kind.sql`, `005_ticket_origin.sql`
 - **What they do:** Byte-for-byte copies of `storage/schema/*.sql`.
-- **Why it works this way:** Helm cannot reach outside the chart, so a copy is needed. They must be kept identical by hand. The `001` copy had silently drifted to an older version, which is the root cause of the early k3s column-name bugs; it was re-synced and all four were verified identical (checked again after the 2026-09-20 header rewrite). The live k3s database was created from the older `001`, so it does not match these files (section 11).
+- **Why it works this way:** Helm cannot reach outside the chart, so a copy is needed. They must be kept identical by hand. The `001` copy had silently drifted to an older version, which is the root cause of the early k3s column-name bugs; it was re-synced and all five were verified identical (checked again after adding `005`). The live k3s database was created from the older `001`, so it does not match these files (section 11).
 - **Purpose:** The SQL the schema Job applies.
 
 #### `k8s/minio/Chart.yaml`, `values.yaml`
@@ -809,10 +844,10 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 - **Purpose:** Runs the Phase 4 ingest consumer.
 
 #### `k8s/realign/realign-live-cluster.sh` and `k8s/realign/drop-legacy-raw-tables.sql`
-- **What they do:** A one-time repair for a k3s database built before the raw-table corrections (section 11.1). The SQL is a guarded `DO` block: if `plate_waste_events` still has `menu_item_id`, or `pos_transaction_events` still has `staff_id`/`menu_item_id`/`quantity`/`unit_price`, it drops the five raw tables (one `DROP TABLE` each) and otherwise reports "nothing to do". The script chains the whole sequence: build the storage-consumer, narrator and dashboard-web images; scale every database client (eight deployments) to 0; run the SQL in the `timescaledb-0` pod; `helm upgrade` the `timescaledb` release (its schema-init Job recreates the tables from `001` to `004`); import the images into k3s (`sudo`); restart the three workloads; print row counts. `--dry-run` prints the steps only.
+- **What they do:** Brings k3s back in line with the repo. It began as a one-time repair for a database built before the raw-table corrections, and now also carries later changes (section 11.1). The SQL is a guarded `DO` block: if `plate_waste_events` still has `menu_item_id`, or `pos_transaction_events` still has `staff_id`/`menu_item_id`/`quantity`/`unit_price`, it drops the five raw tables (one `DROP TABLE` each) and otherwise reports "nothing to do". The script chains the whole sequence: build seven images (storage-consumer, narrator, dashboard-web, ticket-timing-aggregator, anomaly-detector, causal-engine, dashboard-api); scale every database client (eight deployments) to 0; run the SQL in the `timescaledb-0` pod; `helm upgrade` the `timescaledb` release (its schema-init Job applies `001` to `005`, recreating dropped tables) and `phase5-schemas`; import the images into k3s (`sudo`); restart the workloads; print row counts. `--dry-run` prints the steps only.
 - **Why they work this way:** The steps only work together: `001` is all `IF NOT EXISTS`, so it never alters an old table and then fails on an index over a missing column, and a new consumer writes columns the old tables lack. Dropping is acceptable because the raw tables hold simulated, regenerable data. The script stops *all* database clients, and the SQL disconnects stragglers and sets a 30 s `lock_timeout`, because the first real run hung: the services read inside transactions they never end (psycopg2, no autocommit), so a `DROP TABLE` waited forever for its exclusive lock (reproduced in the scratch container, then fixed). The one-statement-per-table drops exist because TimescaleDB refuses a single `DROP TABLE` naming several hypertables; that was found by testing the SQL against a scratch TimescaleDB container that had been given the legacy layout, not by running it on the cluster.
-- **Connects to:** `storage/schema/001` to `004` (via the Helm chart), `k8s/timescaledb`, the `storage-consumer`, `llm-narrator` and `dashboard-web` deployments.
-- **Purpose:** Makes the pending k3s realignment a single command that can be re-run safely. Not run yet (needs `sudo`; see 11.1). It is not part of any chart and nothing else references it.
+- **Connects to:** `storage/schema/001` to `005` (via the Helm chart), `k8s/timescaledb`, `k8s/phase5-schemas`, and the storage-consumer, narrator, dashboard, aggregator, detector and causal-engine deployments.
+- **Purpose:** Makes bringing k3s up to date a single command that can be re-run safely. The original repair was run successfully on 2026-09-21; the later extension is not run yet (needs `sudo`; see 11.1). It is not part of any chart and nothing else references it.
 
 ### 9.3 Simulators and analytics
 
@@ -822,7 +857,7 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 - **Purpose:** Deploys the four fake sensors.
 
 #### `k8s/phase5-schemas/Chart.yaml`, `templates/configmap.yaml`, `files/AnomalyEvent.schema.json`, `CausalFinding.schema.json`, `TicketTimingSummary.schema.json`
-- **What they do:** A chart whose only job is a ConfigMap, literally named `phase5-schemas`, built from every JSON file in `files/`. The three files are identical copies of the corresponding `schemas/` files.
+- **What they do:** A chart whose only job is a ConfigMap, literally named `phase5-schemas`, built from every JSON file in `files/`. The three files are identical copies of the corresponding `schemas/` files (`TicketTimingSummary` was refreshed for the new `origin` field).
 - **Why they work this way:** The ConfigMap is owned by exactly one chart, because the same ConfigMap in two charts triggers Helm ownership conflicts. It has a fixed name so the three consuming charts can mount it by that name, and it must be installed first.
 - **Purpose:** Supplies schemas to the aggregator, detector and causal engine without baking them into images.
 
@@ -908,14 +943,16 @@ There are no automated tests for the simulators, the storage consumer or the Pha
 
 A first version of this section (2026-09-20) listed a set of stale comments, dangling references and unused files. Those were cleaned up the same day (see the end of this section); what remains below is what genuinely remains. Each item was checked against the files or the running systems.
 
-### 11.1 The k3s deployment has drifted from the repo (the important one)
+### 11.1 The k3s deployment is behind the repo again (the important one)
 
-k3s was built before several fixes and is consistent with itself but not with the repo:
+**History.** k3s was once out of step with the repo (old raw-table layout, old images). `k8s/realign/realign-live-cluster.sh` repaired that; the user ran it on 2026-09-21 and it worked (all workloads rolled out on the new images, and the recreated tables filled, including `pos_transaction_line_items`).
 
-- Its database still has the **original** table shapes: `plate_waste_events` has `menu_item_id` and no `plate_item_ids`; `pos_transaction_events` has `menu_item_id`, `staff_id`, `quantity`, `unit_price` and no `transaction_id` or `total_amount_cents`; there is no `pos_transaction_line_items`. (Checked directly against the live database on 2026-09-20; not re-read on 2026-09-21.)
-- Its `storage-consumer`, narrator and dashboard-web images are the older builds.
-- Consequences: importing a rebuilt `storage-consumer` image on its own would crash on inserts, and `helm upgrade` on the `timescaledb` release would fail (the current `001` indexes `plate_item_ids`, which the live table lacks; confirmed by running that statement in a rolled-back transaction).
-- **The fix is written and tested against a scratch database, but not run.** `bash k8s/realign/realign-live-cluster.sh` does the whole sequence in order (see its entry in section 9.1), and `--dry-run` shows it. It has to be run by someone with `sudo`, because importing images into k3s's containerd needs root; this shell has none. The Compose path is unaffected, and the game bridge is not deployed on k3s, so none of this blocks game work.
+**Now.** The interactive-session quarantine (2026-09-21) changed the shared contract and several services after that run, so the live cluster lacks:
+
+- migration `005` (the `origin` column and the `crew` source kind), and the updated `phase5-schemas` ConfigMap (`TicketTimingSummary.origin`);
+- the rebuilt `ticket-timing-aggregator`, `anomaly-detector`, `causal-engine`, `dashboard-api` and `dashboard-web` images (plus the storage-consumer and narrator, unchanged since but rebuilt by the script).
+
+Nothing on k3s breaks meanwhile: the game bridge is not deployed there, so no interactive tickets exist, and the old images simply do not know about `origin`. But the new causal engine's query needs the `origin` column, so **the images and the migration must go together**, which is what the script does. It was extended for this (four more image builds, `helm upgrade phase5-schemas`), its dry run is clean, the four new build commands were run for real, and both charts lint and render; **the extension has not been run against the cluster** (it needs `sudo`, and this shell has none). Run `bash k8s/realign/realign-live-cluster.sh` (dry run first) to bring k3s up to date. The Compose path is already current.
 
 ### 11.2 Defined but not used
 
@@ -953,3 +990,9 @@ For the record, so the earlier version of this section can be reconciled with th
 ### 11.7 Resolved on 2026-09-21
 
 `pos_transaction_line_items` is now populated by the storage-consumer (older Compose rows were backfilled once from `raw_payload`); the dashboard labels each narration as model-written or template; the narrator's CPU-path policy was decided (keep verify-or-template); the k3s realignment was turned into a tested script (not yet run, needs `sudo`); and the SSH key note was closed (`~/.ssh` holds the standard `id_ed25519` pair).
+
+### 11.8 Added on 2026-09-21: interactive sessions are quarantined
+
+Game tickets no longer feed the anomaly baseline or the causal analysis (sections 5 and 7); they are compared with the simulated restaurant instead (`GET /api/comparison`). Consequences worth knowing: interactive tickets produce **no anomalies or causal findings of their own**, so the game's findings panel shows findings about the *simulated* restaurant and the player's own feedback is the shift report; the aggregator's origin is derived from `source_kind`, so a future producer that publishes human-driven events must use `player` or `crew`; and the detector is still nearly blind to a 3x slowdown on simulated data (its 200-ticket windows contain a few tickets stalled for up to about 79 minutes, which inflate the standard deviation to about 110 s on a 31 s mean), a pre-existing weakness that quarantine neither causes nor fixes.
+
+**Idle transactions block migrations.** psycopg2 opens a transaction on a `SELECT` and holds it until told otherwise. The causal engine kept one connection idle inside a transaction for 42 minutes, and applying migration `005` to the running database hung on it (an `ALTER TABLE` waits for an exclusive lock, and every insert behind that pending lock waits too, which stalled the aggregator). The causal engine now commits after each read, which fixes that offender; after the rebuild a check found no other session idle in a transaction for over 30 seconds. The same trap caught the k3s realign earlier, which is why that script stops every database client first. Any future migration on a live database should do the same, or terminate the named idle session.

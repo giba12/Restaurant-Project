@@ -1,28 +1,35 @@
 #!/usr/bin/env bash
-# One-time: bring a k3s deployment that was built before the raw-table
-# corrections back in line with the repo. Run from the repo root:
+# Bring the k3s deployment back in line with the repo: database schema
+# (migrations 001 to 005), the phase5-schemas ConfigMap, and every locally
+# built image that has changed. Safe to re-run whenever the repo has moved on.
+# Run from the repo root:
 #
 #   bash k8s/realign/realign-live-cluster.sh           # do it
 #   bash k8s/realign/realign-live-cluster.sh --dry-run # print the steps only
 #
-# Why this exists and why it must be one step: the live database still has
+# History. It first repaired a database built before the raw-table
+# corrections; since then it also carries later changes (ticket origin, the
+# interactive-session quarantine). Why it must be one step: the live database still has
 # the original layout of the raw event tables, and the storage-consumer /
 # narrator / dashboard images in k3s are older builds. Importing a new
 # storage-consumer alone would crash on inserts (it writes the corrected
 # columns); running `helm upgrade` on timescaledb alone would fail (the
 # current 001 indexes a column the old table lacks). So, in order:
 #
-#   1. build the three changed images
+#   1. build the changed images
 #   2. stop every workload that talks to the database (a DROP TABLE cannot
 #      get its lock while any of them holds a transaction open)
 #   3. drop the raw tables if they are in the legacy layout
-#   4. helm upgrade timescaledb  -> its schema-init Job recreates them from 001..004
+#   4. helm upgrade timescaledb  -> its schema-init Job applies 001..005 (it
+#      recreates dropped tables; 005 adds ticket_timing_summaries.origin and the
+#      'crew' source kind), and phase5-schemas -> the updated JSON Schemas
 #   5. import the images into k3s (needs sudo: containerd is root-only)
 #   6. start the workloads again on the new images; check line items are landing
 #
 # The dropped tables hold simulated data. Kafka offsets are already
 # committed, so the dropped rows are not replayed; history starts fresh.
-# Safe to re-run: step 3 does nothing once the layout is current.
+# Safe to re-run: step 3 does nothing once the layout is current, and steps 1,
+# 4 and 5 just repeat.
 #
 # Needs: sudo, kubectl, helm, and a container CLI. Under rootless Podman on
 # WSL2:  export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock
@@ -59,6 +66,10 @@ echo "== 1. build images"
 run docker build --network=host -t local/storage-consumer:1.0 -f storage/consumer/Dockerfile .
 run docker build --network=host -t local/finding-narrator:1.0 -f services/finding-narrator/Dockerfile services
 run docker build --network=host -t local/dashboard-web:1.0 services/dashboard-web
+# The four Phase 5 to 7 services below build from the services/ directory, like the narrator.
+for svc in ticket-timing-aggregator anomaly-detector causal-engine dashboard-api; do
+  run docker build --network=host -t "local/$svc:1.0" -f "services/$svc/Dockerfile" services
+done
 
 echo "== 2. stop every database client"
 for d in $DB_CLIENTS; do run kubectl scale "deploy/$d" -n "$NS" --replicas=0; done
@@ -74,11 +85,12 @@ else
     < k8s/realign/drop-legacy-raw-tables.sql
 fi
 
-echo "== 4. helm upgrade timescaledb (schema-init recreates the tables)"
+echo "== 4. helm upgrade timescaledb (schema-init applies 001..005) and phase5-schemas"
 run helm upgrade --install timescaledb k8s/timescaledb -n "$NS" --wait --timeout 10m
+run helm upgrade --install phase5-schemas k8s/phase5-schemas -n "$NS" --wait
 
 echo "== 5. import images into k3s"
-for img in storage-consumer finding-narrator dashboard-web; do
+for img in storage-consumer finding-narrator dashboard-web ticket-timing-aggregator anomaly-detector causal-engine dashboard-api; do
   echo "+ docker save local/$img:1.0 | sudo k3s ctr images import -"
   [ "$DRY" = 1 ] || docker save "local/$img:1.0" | sudo k3s ctr images import -
 done

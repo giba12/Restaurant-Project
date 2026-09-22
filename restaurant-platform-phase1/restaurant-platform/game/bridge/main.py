@@ -41,7 +41,14 @@ been delivered, and publishes a POSTransactionEvent (source_kind "player",
 already an allowed value on that schema) for the same line items. This closes
 the loop the schemas already supported: a guest's order and payment are real
 data alongside a staff player's, quarantined from the simulators' baseline
-the same way (see ticket-timing-aggregator's origin_of()).
+the same way (see ticket-timing-aggregator's origin_of()). POST
+/api/guest/leave frees the table on request at any point before paying; a
+guest who never calls it and never pays is freed automatically
+MAX_GUEST_AGE_SECONDS after delivery, or immediately if their ticket was
+itself evicted first (_evict_stale_guests). Every table holds one open
+ticket at a time -- ordering, a staff order_fired and the dining room all
+check the same thing (_table_occupied) before seating one, so a guest, the
+crew and a staff order can never be seated at the same table together.
 
 Per-ticket and per-player state is in memory and resets on restart, same as
 the simulators' TicketLifecycle/ShiftState. A ticket left open across a
@@ -76,6 +83,9 @@ KAFKA_BOOTSTRAP_SERVERS = os.environ.get(
 SCHEMA_DIR = os.environ.get("SCHEMA_DIR", "/app/schemas")
 # A ticket a player abandons mid-lifecycle would otherwise sit in memory forever.
 MAX_TICKET_AGE_SECONDS = int(os.environ.get("MAX_TICKET_AGE_SECONDS", "3600"))
+# A guest who never pays would otherwise hold their table forever. Counted from delivery,
+# not from ordering, so a legitimately slow (but progressing) meal is never evicted mid-course.
+MAX_GUEST_AGE_SECONDS = int(os.environ.get("MAX_GUEST_AGE_SECONDS", "3600"))
 
 # Game pacing. Environment-tunable so tests (and a slower or faster game) need no code change.
 SPAWN_SECONDS = float(os.environ.get("SPAWN_SECONDS", "8"))          # gap between new tickets
@@ -251,6 +261,26 @@ def _evict_stale_tickets() -> None:
         del _open_tickets[tid]
 
 
+def _evict_stale_guests() -> None:
+    """A guest record is freed (and their table with it) once there is nothing left to wait
+    for: their ticket was evicted above before ever being delivered (abandoned), or it was
+    delivered but they never paid within MAX_GUEST_AGE_SECONDS. Call after _evict_stale_tickets."""
+    now = _clock()
+    for player_id, guest in list(_guests.items()):
+        abandoned = not guest["delivered"] and guest["ticket_id"] not in _open_tickets
+        forgotten = guest["delivered"] and now - guest["delivered_at"] > MAX_GUEST_AGE_SECONDS
+        if abandoned or forgotten:
+            _ticket_to_guest.pop(guest["ticket_id"], None)
+            del _guests[player_id]
+
+
+def _table_occupied(table_id: str) -> bool:
+    """One open ticket per table -- true whether the table was seated by a guest, the crew's
+    dining room, or a staff-fired order. Derived from _open_tickets, so no separate state to
+    keep in sync (and no separate cleanup needed when a ticket closes or is evicted)."""
+    return any(t["table_id"] == table_id for t in _open_tickets.values())
+
+
 class ServiceTimingRequest(BaseModel):
     player_id: str = Field(pattern=PLAYER_ID_PATTERN)
     stage: str
@@ -348,6 +378,7 @@ def _publish_stage(actor: tuple[str, str], stage: str, ticket_id: str,
         guest_id = _ticket_to_guest.pop(ticket_id, None)
         if guest_id is not None and guest_id in _guests:
             _guests[guest_id]["delivered"] = True
+            _guests[guest_id]["delivered_at"] = _clock()
     else:
         _open_tickets[ticket_id] = {
             "stage_index": STAGES.index(stage) + 1,
@@ -375,6 +406,8 @@ def post_service_timing(req: ServiceTimingRequest):
             # every one of them forever.
             _require_known(req.station_id, PLAYABLE_STATIONS, "station_id")
             _require_known(req.table_id, world.TABLES, "table_id")
+            if _table_occupied(req.table_id):
+                raise HTTPException(status_code=409, detail=f"table {req.table_id} is already occupied")
             if state is None or state["on_break"]:
                 raise HTTPException(status_code=409, detail=f"{staff_id} must be clocked in (and not on break) to fire a ticket")
             ticket_id = req.ticket_id or str(uuid.uuid4())
@@ -473,6 +506,8 @@ def post_guest_order(req: GuestOrderRequest):
         _require_known(req.table_id, world.TABLES, "table_id")
         if req.player_id in _guests:
             raise HTTPException(status_code=409, detail=f"{req.player_id} already has an open order; pay before ordering again")
+        if _table_occupied(req.table_id):
+            raise HTTPException(status_code=409, detail=f"table {req.table_id} is already occupied")
         for item in req.items:
             if item.menu_item_id not in world.MENU:
                 raise HTTPException(status_code=422, detail=f"menu_item_id must be one of {world.MENU_ITEM_IDS}, got {item.menu_item_id!r}")
@@ -487,6 +522,7 @@ def post_guest_order(req: GuestOrderRequest):
             "ticket_id": ticket_id,
             "items": [item.model_dump() for item in req.items],
             "delivered": False,
+            "delivered_at": None,
         }
         _ticket_to_guest[ticket_id] = req.player_id
         return _guest_status_locked(req.player_id)
@@ -534,6 +570,20 @@ def post_guest_pay(req: GuestPayRequest):
         _publish(POS_TRANSACTION_TOPIC, event)
         del _guests[req.player_id]
         return event
+
+
+@app.post("/api/guest/leave")
+def post_guest_leave(player_id: str = Query(pattern=PLAYER_ID_PATTERN)):
+    """Frees the guest's table on request, at any point before paying -- otherwise the only
+    way out is MAX_GUEST_AGE_SECONDS after delivery (_evict_stale_guests). Does not touch the
+    ticket: the kitchen has no "cancelled" stage, so whatever the crew already started stays
+    real; leaving only stops this player from being billed for it or holding the table."""
+    with _lock:
+        guest = _guests.pop(player_id, None)
+        if guest is None:
+            raise HTTPException(status_code=404, detail=f"no open order for {player_id!r}")
+        _ticket_to_guest.pop(guest["ticket_id"], None)
+        return {"left": True, "table_id": guest["table_id"]}
 
 
 @app.post("/api/staff-shift")
@@ -605,9 +655,12 @@ def _spawn_ticket(now: float) -> None:
     eligible = _eligible_stations()
     if not eligible:
         return
+    free_tables = [t for t in world.TABLES if not _table_occupied(t)]
+    if not free_tables:
+        return  # every table has an open ticket; try again next tick rather than double-seat one
     _last_spawn = now  # set first: a failed publish then retries after SPAWN_SECONDS, not every tick
     station_id = random.choice(eligible)
-    table_id = random.choice(world.TABLES)
+    table_id = random.choice(free_tables)
     try:
         _publish_stage(CREW_ACTOR, STAGES[0], str(uuid.uuid4()), table_id, station_id)
     except HTTPException as exc:
@@ -621,6 +674,7 @@ def director_tick() -> None:
     with _lock:
         now = _clock()
         _evict_stale_tickets()
+        _evict_stale_guests()
         _spawn_ticket(now)
         for ticket_id, t in list(_open_tickets.items()):
             stage = STAGES[t["stage_index"]]

@@ -68,6 +68,7 @@ var guest_table := ""
 var guest_cart: Dictionary = {}       # menu_item_id -> quantity, while building an order
 var cart_spinboxes: Dictionary = {}   # menu_item_id -> SpinBox
 var guest_delivered := false
+var guest_paid := false
 var tickets: Dictionary = {}  # ticket_id -> {card, info, age, button, stage_started_ms, busy, table, station_id, next_stage, can_act, waiting_on}
 var actions_done := 0
 var response_ms_total := 0
@@ -454,6 +455,7 @@ func _start_guest_setup() -> void:
 	# "Place order" talks to the bridge (that is what actually fires the kitchen ticket).
 	guest_table = table_picker.get_item_text(table_picker.selected)
 	guest_cart.clear()
+	guest_paid = false
 	for menu_item_id in cart_spinboxes:
 		var spin: SpinBox = cart_spinboxes[menu_item_id]
 		spin.value = 0  # triggers _on_cart_changed, which clears guest_cart for each row
@@ -549,9 +551,15 @@ func _on_pay_pressed() -> void:
 		return
 	order_status_label.text = "Paid $%.2f. Thanks for dining with us!" % (float(r.data.total_amount_cents) / 100.0)
 	pay_row.visible = false
+	guest_paid = true
 
 
 func _on_guest_leave_pressed() -> void:
+	# Only tell the bridge if an order was actually placed and not already paid for -- before
+	# ordering there is nothing server-side to leave, and after paying the bridge has already
+	# cleared the session itself.
+	if status_section.visible and not guest_paid:
+		await bridge.post_guest_leave(player_id)
 	is_guest = false
 	guest_poll_timer.stop()
 	guest_panel.visible = false

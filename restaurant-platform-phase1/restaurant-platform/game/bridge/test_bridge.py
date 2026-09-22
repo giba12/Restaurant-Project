@@ -249,8 +249,8 @@ def test_expo_and_server_are_not_scoped_to_a_station(client):
     on_shift(client, "ana", "line_cook", "station-grill")
     on_shift(client, "cy", "line_cook", "station-saute")
     on_shift(client, "cleo", "expo")
-    t1 = fire(client, player="ana", station_id="station-grill").json()["ticket_id"]
-    t2 = fire(client, player="cy", station_id="station-saute", ticket_id="t-2").json()["ticket_id"]
+    t1 = fire(client, player="ana", station_id="station-grill", table_id="table-01").json()["ticket_id"]
+    t2 = fire(client, player="cy", station_id="station-saute", table_id="table-02", ticket_id="t-2").json()["ticket_id"]
     assert stage(client, "cook_started", t1, player="ana").status_code == 200
     assert stage(client, "cook_started", t2, player="cy").status_code == 200
     assert stage(client, "plated", t1, player="cleo").status_code == 200
@@ -423,8 +423,8 @@ def test_ticket_board_says_who_each_ticket_waits_on(client):
     on_shift(client, "ana", "line_cook", "station-grill")
     on_shift(client, "cleo", "expo")
     on_shift(client, "bo", "server")
-    t1 = fire(client, station_id="station-grill").json()["ticket_id"]
-    t2 = fire(client, station_id="station-saute").json()["ticket_id"]
+    t1 = fire(client, station_id="station-grill", table_id="table-01").json()["ticket_id"]
+    t2 = fire(client, station_id="station-saute", table_id="table-02").json()["ticket_id"]
     client.clock.advance(4)
     stage(client, "cook_started", t1)
     stage(client, "plated", t1, player="cleo")
@@ -537,9 +537,101 @@ def test_an_invalid_payment_method_is_422(client):
     assert r.status_code == 422
 
 
-def test_a_stale_evicted_ticket_does_not_falsely_mark_an_order_delivered(client):
+def leave(client, player="gwen"):
+    return client.post("/api/guest/leave", params={"player_id": player})
+
+
+# ------------------------------------------------ table exclusivity
+
+def test_a_guest_cannot_order_at_a_table_another_guest_is_using(client):
+    assert order(client, player="gwen", table_id="table-05").status_code == 200
+    r = order(client, player="dana", table_id="table-05")
+    assert r.status_code == 409 and "table-05" in r.text
+
+
+def test_a_staff_order_cannot_be_fired_at_a_table_a_guest_is_using(client):
+    on_shift(client)
+    order(client, table_id="table-03")  # fire()'s default table
+    r = fire(client)
+    assert r.status_code == 409 and "table-03" in r.text
+
+
+def test_a_guest_cannot_order_at_a_table_a_staff_ticket_is_using(client):
+    on_shift(client)
+    fire(client, table_id="table-05")
+    r = order(client, table_id="table-05")
+    assert r.status_code == 409 and "table-05" in r.text
+
+
+def test_the_table_is_free_again_once_the_ticket_closes(client):
+    on_shift(client)
+    ticket_id = fire(client, table_id="table-05").json()["ticket_id"]
+    shift(client, "clock_out")  # nobody staffed -- the crew finishes it on its own
+    for _ in range(12):
+        tick(client, 5.0)
+    assert ticket_id not in main._open_tickets
+    assert order(client, table_id="table-05").status_code == 200
+
+
+def test_the_dining_room_never_double_books_a_table(client, monkeypatch):
+    monkeypatch.setattr(main, "CREW_MIN_SECONDS", 10_000.0)
+    monkeypatch.setattr(main, "CREW_MAX_SECONDS", 10_000.0)
+    monkeypatch.setattr(main.world, "TABLES", ["table-01", "table-02"])  # force a collision fast
+    spawner_on(client)
+    on_shift(client, "ana", "line_cook", "station-grill")
+    for _ in range(20):
+        tick(client, 8.0)
+    tables = [t["table_id"] for t in main._open_tickets.values()]
+    assert len(tables) == len(set(tables)), f"a table was double-booked: {tables}"
+    # capped at 2 tables even though MAX_OPEN_TICKETS (5) would otherwise allow more
+    assert len(main._open_tickets) == 2
+
+
+# ------------------------------------------------ leaving, and guest eviction
+
+def test_leaving_frees_the_guest_but_not_a_table_the_kitchen_is_still_using(client):
+    order(client, table_id="table-05")
+    r = leave(client)
+    assert r.status_code == 200 and r.json() == {"left": True, "table_id": "table-05"}
+    assert client.get("/api/guest/status", params={"player_id": "gwen"}).status_code == 404
+    # gwen is free to sit down again immediately, at a different table
+    assert order(client, player="gwen", table_id="table-06").status_code == 200
+    # but table-05 is still occupied -- the kitchen is still cooking that ticket
+    assert order(client, player="dana", table_id="table-05").status_code == 409
+
+
+def test_leaving_twice_or_leaving_nobody_is_404(client):
+    assert leave(client).status_code == 404
     order(client)
-    tick(client, main.MAX_TICKET_AGE_SECONDS + 1)  # evicted, never delivered
-    assert client.get("/api/guest/status", params={"player_id": "gwen"}).json()["delivered"] is False
-    r = client.post("/api/guest/pay", json={"player_id": "gwen"})
-    assert r.status_code == 409
+    assert leave(client).status_code == 200
+    assert leave(client).status_code == 404
+
+
+def test_an_abandoned_undelivered_order_is_evicted_and_frees_the_table_immediately(client):
+    order(client, table_id="table-05")
+    tick(client, main.MAX_TICKET_AGE_SECONDS + 1)  # the ticket itself is evicted, never delivered
+    assert client.get("/api/guest/status", params={"player_id": "gwen"}).status_code == 404
+    assert order(client, player="dana", table_id="table-05").status_code == 200
+
+
+def test_a_delivered_but_unpaid_order_is_evicted_after_max_guest_age(client, monkeypatch):
+    monkeypatch.setattr(main, "MAX_GUEST_AGE_SECONDS", 100.0)
+    order(client, table_id="table-05")
+    for _ in range(10):
+        tick(client, 5.0)  # delivered well within MAX_TICKET_AGE_SECONDS
+    assert client.get("/api/guest/status", params={"player_id": "gwen"}).json()["delivered"] is True
+    tick(client, 50.0)
+    assert client.get("/api/guest/status", params={"player_id": "gwen"}).status_code == 200  # not yet
+    tick(client, 51.0)  # now over 100s since delivery
+    assert client.get("/api/guest/status", params={"player_id": "gwen"}).status_code == 404
+    assert order(client, player="dana", table_id="table-05").status_code == 200
+
+
+def test_a_slow_but_still_progressing_order_is_not_evicted_early(client, monkeypatch):
+    # MAX_GUEST_AGE_SECONDS is shorter than how long this order takes to even arrive --
+    # eviction is counted from delivery, not from ordering, so this must survive.
+    monkeypatch.setattr(main, "MAX_GUEST_AGE_SECONDS", 10.0)
+    order(client, table_id="table-05")
+    for _ in range(10):
+        tick(client, 5.0)
+    assert client.get("/api/guest/status", params={"player_id": "gwen"}).status_code == 200

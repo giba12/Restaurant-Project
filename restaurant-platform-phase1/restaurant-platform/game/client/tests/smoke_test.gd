@@ -28,6 +28,29 @@ func _wait(seconds: float) -> void:
 	await create_timer(seconds).timeout
 
 
+func _a_free_table(bridge_client: BridgeClient, tables: Array) -> String:
+	# The live dining room fires its first ticket the instant anyone is staffed at all (its
+	# spawn cooldown starts already elapsed), and every ticket anywhere -- staff, guest, dining
+	# room -- now holds its table exclusively. A hardcoded table is therefore a real, if
+	# infrequent, collision risk throughout this whole test; ask the board what is actually
+	# free right now instead of assuming one.
+	var used := {}
+	for row in (await bridge_client.request_json(HTTPClient.METHOD_GET, bridge_client.base_url + "/api/tickets")).data:
+		used[row.table_id] = true
+	for t in tables:
+		if not used.has(t):
+			return t
+	return tables[0]  # every table is somehow busy; fall back and let the caller's check fail visibly
+
+
+func _select_a_free_table(main_scene: Control) -> void:
+	var t := await _a_free_table(main_scene.bridge, main_scene.world.tables)
+	for i in main_scene.table_picker.item_count:
+		if main_scene.table_picker.get_item_text(i) == t:
+			main_scene.table_picker.select(i)
+			return
+
+
 func _test_report_format() -> void:
 	var main_script: GDScript = load("res://scripts/main.gd")
 	var stat := func(n: int, med: Variant, p90: Variant) -> Dictionary: return {"n": n, "median_ms": med, "p90_ms": p90}
@@ -101,9 +124,9 @@ func _run() -> void:
 	check(r.ok and r.data.source_kind == "player", "clock_in as server accepted, tagged player")
 	r = await bridge.post_staff_shift("smoke-test", "server", "clock_in")
 	check(not r.ok and r.status == 409, "second clock_in rejected with 409 (%s)" % r.error)
-	r = await bridge.post_service_timing("smoke-test", "order_fired", null, "table-01", "station-grill")
-	check(r.ok, "a clocked-in player can fire a ticket")
-	var server_ticket: String = r.data.ticket_id
+	r = await bridge.post_service_timing("smoke-test", "order_fired", null, await _a_free_table(bridge, world.data.tables), "station-grill")
+	check(r.ok, "a clocked-in player can fire a ticket (%s)" % r.error)
+	var server_ticket: String = r.data.get("ticket_id", "")
 	r = await bridge.post_service_timing("smoke-test", "cook_started", server_ticket)
 	check(not r.ok and r.status == 403, "a server may not cook (403: %s)" % r.error)
 	r = await bridge.post_staff_shift("smoke-test", "server", "clock_out")
@@ -113,9 +136,9 @@ func _run() -> void:
 	check(r.ok, "clock_in as line_cook accepted")
 	r = await bridge.post_staff_shift("smoke-test", "line_cook", "station_reassign", "station-saute")
 	check(r.ok, "took station-saute")
-	r = await bridge.post_service_timing("smoke-test", "order_fired", null, "table-02", "station-saute")
-	check(r.ok, "fired a ticket at my station")
-	var ticket_id: String = r.data.ticket_id
+	r = await bridge.post_service_timing("smoke-test", "order_fired", null, await _a_free_table(bridge, world.data.tables), "station-saute")
+	check(r.ok, "fired a ticket at my station (%s)" % r.error)
+	var ticket_id: String = r.data.get("ticket_id", "")
 	r = await bridge.post_service_timing("smoke-test", "plated", ticket_id)
 	check(not r.ok and r.status == 409, "skipping a stage rejected with 409 (%s)" % r.error)
 	r = await bridge.post_service_timing("smoke-test", "order_fired", null, "table-99", "station-saute")
@@ -160,12 +183,12 @@ func _run() -> void:
 	check(world.data.has("menu") and world.data.menu.has("menu-burger-classic"), "world lists the menu")
 	check(world.data.has("payment_methods") and world.data.payment_methods.has("card"), "world lists payment methods")
 
-	r = await bridge.post_guest_order("smoke-test-guest", "table-09",
+	r = await bridge.post_guest_order("smoke-test-guest", await _a_free_table(bridge, world.data.tables),
 		[{"menu_item_id": "menu-burger-classic", "quantity": 2}, {"menu_item_id": "menu-drink-soda", "quantity": 1}])
 	check(r.ok, "guest order accepted with no clock-in (%s)" % r.error)
 	var expected_total: int = 2 * world.data.menu["menu-burger-classic"] + world.data.menu["menu-drink-soda"]
-	check(r.data.total_amount_cents == expected_total, "order total matches the menu prices")
-	check(r.data.delivered == false, "not delivered yet")
+	check(r.data.get("total_amount_cents", -1) == expected_total, "order total matches the menu prices")
+	check(r.data.get("delivered", true) == false, "not delivered yet")
 
 	r = await bridge.post_guest_pay("smoke-test-guest", "cash")
 	check(not r.ok and r.status == 409, "can't pay before delivery (409: %s)" % r.error)
@@ -187,6 +210,28 @@ func _run() -> void:
 
 	r = await bridge.get_guest_status("smoke-test-guest")
 	check(not r.ok and r.status == 404, "the order is gone after paying (404: %s)" % r.error)
+
+	print("== table exclusivity and leaving ==")
+	# Start from a known state regardless of how a previous run ended (see the top of this
+	# function): the section below deliberately leaves smoke-guest-a holding an order.
+	await bridge.post_guest_leave("smoke-guest-a")
+	await bridge.post_guest_leave("smoke-guest-b")
+	var table_a: String = await _a_free_table(bridge, world.data.tables)
+	r = await bridge.post_guest_order("smoke-guest-a", table_a, [{"menu_item_id": "menu-soup-of-day"}])
+	check(r.ok, "first guest seats %s (%s)" % [table_a, r.error])
+	r = await bridge.post_guest_order("smoke-guest-b", table_a, [{"menu_item_id": "menu-soup-of-day"}])
+	check(not r.ok and r.status == 409, "a second guest can't use the same table (409: %s)" % r.error)
+	r = await bridge.post_guest_leave("smoke-guest-a")
+	check(r.ok and r.data.get("table_id", "") == table_a, "leaving reports the table")
+	r = await bridge.get_guest_status("smoke-guest-a")
+	check(not r.ok and r.status == 404, "the guest is gone right after leaving (404: %s)" % r.error)
+	var table_b: String = await _a_free_table(bridge, world.data.tables)
+	r = await bridge.post_guest_order("smoke-guest-a", table_b, [{"menu_item_id": "menu-soup-of-day"}])
+	check(r.ok, "the same name can sit down again immediately, elsewhere (%s)" % r.error)
+	r = await bridge.post_guest_order("smoke-guest-b", table_a, [{"menu_item_id": "menu-soup-of-day"}])
+	check(not r.ok and r.status == 409, "%s is still occupied -- the kitchen is still cooking that ticket" % table_a)
+	r = await bridge.post_guest_leave("smoke-guest-b")
+	check(not r.ok and r.status == 404, "leaving with no open order is 404 (%s)" % r.error)
 
 	print("== main scene, driven through its own handlers ==")
 	var main: Control = load("res://scenes/main.tscn").instantiate()
@@ -241,6 +286,7 @@ func _run() -> void:
 	main._on_role_selected(main.role_picker.selected)
 	check(main.table_row.visible and not main.station_row.visible, "guest is asked for a table, not a station")
 	check(main.clock_in_button.text == "Sit down", "the button reads 'Sit down' for a guest")
+	await _select_a_free_table(main)
 	main.name_edit.text = "Smoke Guest"
 	main._on_clock_in_pressed()  # no bridge call yet -- sitting down is local
 	check(main.is_guest and main.guest_panel.visible and main.cart_section.visible, "sitting down shows the menu, not the bridge")
@@ -263,6 +309,16 @@ func _run() -> void:
 	check(main.order_status_label.text.begins_with("Paid $"), "paying shows a receipt (%s)" % main.order_status_label.text)
 	main._on_guest_leave_pressed()
 	check(not main.is_guest and main.setup_panel.visible, "leaving returns to setup")
+
+	print("== main scene, leaving before paying reaches the bridge ==")
+	await _select_a_free_table(main)
+	main._on_clock_in_pressed()  # still "guest" selected; sits at whichever table is free now
+	main.cart_spinboxes["menu-drink-soda"].value = 1
+	await main._on_place_order_pressed()
+	check(main.status_section.visible and not main.guest_paid, "a second order placed, not yet paid")
+	await main._on_guest_leave_pressed()
+	r = await bridge.get_guest_status("smoke-guest")
+	check(not r.ok and r.status == 404, "the client's Leave button told the bridge (404: %s)" % r.error)
 
 	print("failures: ", failures)
 	quit(1 if failures > 0 else 0)

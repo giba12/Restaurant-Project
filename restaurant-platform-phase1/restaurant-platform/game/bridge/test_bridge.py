@@ -37,6 +37,8 @@ class FakeClock:
 def client(monkeypatch):
     main._open_tickets.clear()
     main._clocked_in.clear()
+    main._guests.clear()
+    main._ticket_to_guest.clear()
     published = []
     clock = FakeClock()
     monkeypatch.setattr(main, "_publish", lambda topic, event: published.append((topic, event)))
@@ -93,22 +95,22 @@ def tick(client, seconds=0.0):
 
 # ------------------------------------------------ envelope and ticket state machine
 
-def test_a_cook_takes_a_ticket_to_plated_then_the_crew_finishes_it(client):
+def test_a_cook_cooks_and_the_crew_finishes_the_rest(client):
     on_shift(client)
     ticket_id = fire(client).json()["ticket_id"]
-    for name in ["cook_started", "plated"]:
-        client.clock.advance(3)
-        r = stage(client, name, ticket_id)
-        assert r.status_code == 200, r.text
-        assert r.json()["elapsed_since_previous_stage_ms"] == 3000
-        assert r.json()["table_id"] == "table-03" and r.json()["station_id"] == "station-grill"
+    client.clock.advance(3)
+    r = stage(client, "cook_started", ticket_id)
+    assert r.status_code == 200, r.text
+    assert r.json()["elapsed_since_previous_stage_ms"] == 3000
+    assert r.json()["table_id"] == "table-03" and r.json()["station_id"] == "station-grill"
 
-    tick(client)          # crew notices nobody can pick it up and starts its 5 s delay
-    tick(client, 4.9)
-    assert ticket_id in main._open_tickets
-    tick(client, 0.2)     # picked_up_by_server
-    tick(client)          # restarts the delay for the next stage
-    tick(client, 5.0)     # delivered
+    # nobody can plate, pick up or deliver -- the crew does all three, each after its own delay
+    for _ in range(3):
+        tick(client)          # crew notices and starts its 5 s delay for the next stage
+        tick(client, 4.9)
+        assert ticket_id in main._open_tickets
+        tick(client, 0.2)     # fires
+
     assert [e["stage"] for e in service_events(client)] == main.STAGES
     assert ticket_id not in main._open_tickets
 
@@ -206,28 +208,53 @@ def test_world_endpoint_matches_schema_enums(client):
     assert w["stages"][0] == "order_fired" and w["stages"][-1] == "delivered"
     assert "line_cook" in w["roles"] and "clock_in" in w["shift_actions"]
     assert "station-grill" in w["stations"] and "table-01" in w["tables"]
-    assert w["playable_roles"]["line_cook"] == ["cook_started", "plated"]
+    assert w["playable_roles"]["line_cook"] == ["cook_started"]
+    assert w["playable_roles"]["expo"] == ["plated"]
     assert w["playable_roles"]["server"] == ["picked_up_by_server", "delivered"]
     assert set(w["playable_stations"]) <= set(w["stations"])
+
+
+def test_station_expo_is_not_a_cooking_station(client):
+    # station-expo is where expo works the pass, not somewhere a ticket is cooked or fired.
+    w = client.get("/api/world").json()
+    assert "station-expo" not in w["playable_stations"]
+    assert "station-expo" in w["stations"]  # still a real station -- staff can clock in there
+    assert fire(client, station_id="station-expo").status_code == 422
 
 
 # ------------------------------------------------ roles
 
 def test_roles_only_perform_their_own_stages(client):
     on_shift(client, "ana", "line_cook", "station-grill")
+    on_shift(client, "cleo", "expo")
     on_shift(client, "bo", "server")
     ticket_id = fire(client).json()["ticket_id"]
 
-    r = stage(client, "cook_started", ticket_id, player="bo")
-    assert r.status_code == 403 and "server" in r.text
+    r = stage(client, "cook_started", ticket_id, player="cleo")
+    assert r.status_code == 403 and "expo" in r.text
     assert stage(client, "cook_started", ticket_id, player="ana").status_code == 200
-    assert stage(client, "plated", ticket_id, player="ana").status_code == 200
-    r = stage(client, "picked_up_by_server", ticket_id, player="ana")
+    r = stage(client, "plated", ticket_id, player="ana")
     assert r.status_code == 403 and "line_cook" in r.text
+    assert stage(client, "plated", ticket_id, player="cleo").status_code == 200
+    r = stage(client, "picked_up_by_server", ticket_id, player="cleo")
+    assert r.status_code == 403 and "expo" in r.text
     assert stage(client, "picked_up_by_server", ticket_id, player="bo").status_code == 200
     assert stage(client, "delivered", ticket_id, player="bo").status_code == 200
     assert [e["source_id"] for e in service_events(client)] == \
-        ["game-ana", "game-ana", "game-ana", "game-bo", "game-bo"]
+        ["game-ana", "game-ana", "game-cleo", "game-bo", "game-bo"]
+
+
+def test_expo_and_server_are_not_scoped_to_a_station(client):
+    # unlike line_cook, expo works the pass for every station and a server the whole floor.
+    on_shift(client, "ana", "line_cook", "station-grill")
+    on_shift(client, "cy", "line_cook", "station-saute")
+    on_shift(client, "cleo", "expo")
+    t1 = fire(client, player="ana", station_id="station-grill").json()["ticket_id"]
+    t2 = fire(client, player="cy", station_id="station-saute", ticket_id="t-2").json()["ticket_id"]
+    assert stage(client, "cook_started", t1, player="ana").status_code == 200
+    assert stage(client, "cook_started", t2, player="cy").status_code == 200
+    assert stage(client, "plated", t1, player="cleo").status_code == 200
+    assert stage(client, "plated", t2, player="cleo").status_code == 200
 
 
 def test_a_cook_only_works_their_own_station(client):
@@ -286,20 +313,22 @@ def test_crew_events_are_tagged_crew(client):
     assert {(e["source_kind"], e["source_id"]) for e in events} == {("crew", "game-crew")}
 
 
-def test_crew_covers_while_the_player_is_on_break(client):
-    on_shift(client)
-    ticket_id = fire(client).json()["ticket_id"]
-    shift(client, "break_start")
-    tick(client)
-    tick(client, 5.0)  # crew starts the cook_started delay only now; check it fires
+def test_crew_covers_a_break_but_stands_back_once_the_player_returns(client):
+    on_shift(client, "ana", "expo")
+    ticket_id = fire(client, player="ana").json()["ticket_id"]
+    shift(client, "break_start", "ana", "expo")
+    # nobody cooks at all -- the crew does cook_started regardless of expo's break
     tick(client)
     tick(client, 5.0)
-    assert [e["stage"] for e in service_events(client)][:2] == ["order_fired", "cook_started"]
-    assert service_events(client)[1]["source_id"] == "game-crew"
-    shift(client, "break_end")
+    assert [e["stage"] for e in service_events(client)] == ["order_fired", "cook_started"]
+    assert service_events(client)[-1]["source_id"] == "game-crew"
+    # plated is expo's stage; the crew starts counting down since expo is on break...
+    tick(client)
+    # ...but expo returns before the delay elapses, so the crew stands back
+    shift(client, "break_end", "ana", "expo")
     n = len(client.published)
     tick(client, 60)
-    assert len(client.published) == n  # the player has plated to do; the crew stands back
+    assert len(client.published) == n
 
 
 def test_crew_finishes_tickets_after_the_player_clocks_out(client):
@@ -392,12 +421,13 @@ def test_a_backed_up_station_does_not_starve_a_cook_at_another(client, monkeypat
 
 def test_ticket_board_says_who_each_ticket_waits_on(client):
     on_shift(client, "ana", "line_cook", "station-grill")
+    on_shift(client, "cleo", "expo")
     on_shift(client, "bo", "server")
     t1 = fire(client, station_id="station-grill").json()["ticket_id"]
     t2 = fire(client, station_id="station-saute").json()["ticket_id"]
     client.clock.advance(4)
     stage(client, "cook_started", t1)
-    stage(client, "plated", t1)
+    stage(client, "plated", t1, player="cleo")
 
     def board(player):
         return {r["ticket_id"]: r for r in client.get("/api/tickets", params={"player_id": player}).json()}
@@ -409,3 +439,107 @@ def test_ticket_board_says_who_each_ticket_waits_on(client):
     assert bo[t2]["waiting_on"] == "crew"
     assert ana[t1]["last_stage"] == "plated" and ana[t1]["next_stage"] == "picked_up_by_server"
     assert client.get("/api/tickets", params={"player_id": "Bad Id"}).status_code == 422
+
+
+# ------------------------------------------------ guests (ordering, eating, paying)
+
+def order(client, player="gwen", table_id="table-05", items=None):
+    return client.post("/api/guest/order", json={
+        "player_id": player, "table_id": table_id,
+        "items": items or [{"menu_item_id": "menu-burger-classic", "quantity": 2}],
+    })
+
+
+def pos_events(client):
+    return [e for t, e in client.published if t == "pos-transaction-events"]
+
+
+def test_ordering_needs_no_clock_in_and_fires_a_ticket(client):
+    r = order(client)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["table_id"] == "table-05" and body["delivered"] is False
+    assert body["total_amount_cents"] == 2 * main.world.MENU["menu-burger-classic"]
+    assert {t for t, _ in client.published} == {"service-timing-events"}  # no StaffShiftEvent at all
+    order_event = service_events(client)[0]
+    assert order_event["stage"] == "order_fired" and order_event["source_kind"] == "player"
+    assert order_event["source_id"] == "game-gwen" and order_event["table_id"] == "table-05"
+    # nobody is staffed, so the ticket waits on the crew like any other
+    board = client.get("/api/tickets").json()
+    assert board[0]["ticket_id"] == body["ticket_id"] and board[0]["waiting_on"] == "crew"
+
+
+def test_order_total_sums_every_item_at_its_menu_price(client):
+    r = order(client, items=[
+        {"menu_item_id": "menu-burger-classic", "quantity": 2},
+        {"menu_item_id": "menu-drink-soda"},  # quantity defaults to 1
+    ])
+    expected = 2 * main.world.MENU["menu-burger-classic"] + main.world.MENU["menu-drink-soda"]
+    assert r.json()["total_amount_cents"] == expected
+    assert r.json()["items"][1]["quantity"] == 1
+
+
+def test_order_rejects_unknown_table_or_menu_item(client):
+    assert order(client, table_id="table-99").status_code == 422
+    assert order(client, items=[{"menu_item_id": "menu-unicorn", "quantity": 1}]).status_code == 422
+
+
+def test_a_guest_cannot_order_twice_before_paying(client):
+    assert order(client).status_code == 200
+    r = order(client)
+    assert r.status_code == 409 and "pay" in r.text
+
+
+def test_kitchen_full_is_503_and_does_not_open_a_ticket(client, monkeypatch):
+    monkeypatch.setattr(main, "MAX_OPEN_TICKETS", 0)
+    r = order(client)
+    assert r.status_code == 503
+    assert main._open_tickets == {} and main._guests == {}
+
+
+def test_guest_status_for_an_unknown_player_is_404(client):
+    assert client.get("/api/guest/status", params={"player_id": "nobody"}).status_code == 404
+
+
+def test_paying_before_delivery_is_409(client):
+    order(client)
+    r = client.post("/api/guest/pay", json={"player_id": "gwen"})
+    assert r.status_code == 409 and "delivered" in r.text
+    assert pos_events(client) == []
+
+
+def test_paying_after_delivery_publishes_a_pos_transaction_and_clears_the_guest(client):
+    ticket_id = order(client).json()["ticket_id"]
+    for _ in range(10):
+        tick(client, 5.0)  # the crew (nobody is staffed) cooks, plates, picks up and delivers
+    assert client.get("/api/guest/status", params={"player_id": "gwen"}).json()["delivered"] is True
+
+    r = client.post("/api/guest/pay", json={"player_id": "gwen", "payment_method": "cash"})
+    assert r.status_code == 200, r.text
+    event = r.json()
+    assert event["event_type"] == "POSTransactionEvent" and event["source_kind"] == "player"
+    assert event["source_id"] == "game-gwen" and event["table_id"] == "table-05"
+    assert event["payment_method"] == "cash"
+    assert event["total_amount_cents"] == 2 * main.world.MENU["menu-burger-classic"]
+    assert [li["menu_item_id"] for li in event["line_items"]] == ["menu-burger-classic"]
+    assert pos_events(client) == [event]
+
+    assert client.get("/api/guest/status", params={"player_id": "gwen"}).status_code == 404
+    assert client.post("/api/guest/pay", json={"player_id": "gwen"}).status_code == 404
+    assert ticket_id not in main._open_tickets
+
+
+def test_an_invalid_payment_method_is_422(client):
+    order(client)
+    for _ in range(10):
+        tick(client, 5.0)
+    r = client.post("/api/guest/pay", json={"player_id": "gwen", "payment_method": "crypto"})
+    assert r.status_code == 422
+
+
+def test_a_stale_evicted_ticket_does_not_falsely_mark_an_order_delivered(client):
+    order(client)
+    tick(client, main.MAX_TICKET_AGE_SECONDS + 1)  # evicted, never delivered
+    assert client.get("/api/guest/status", params={"player_id": "gwen"}).json()["delivered"] is False
+    r = client.post("/api/guest/pay", json={"player_id": "gwen"})
+    assert r.status_code == 409

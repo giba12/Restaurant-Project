@@ -19,6 +19,12 @@ extends Control
 ## platform's dashboard API (GET /api/comparison): your response times against
 ## the crew's over the same shift (same clock), and game tickets against the
 ## simulated restaurant's.
+##
+## A fourth option in the role picker, "guest", is not staff at all: pick a
+## table and build an order from the menu, place it (this is what fires the
+## kitchen ticket), watch it move through the same stages the staff work, and
+## pay once it is delivered. No clock-in, no role gate -- the bridge does not
+## require either for a guest.
 
 const BridgeClient := preload("res://scripts/bridge_client.gd")
 
@@ -32,7 +38,9 @@ const STAGE_ACTIONS := {
 	"delivered": "Deliver",
 }
 const LINE_COOK := "line_cook"
+const GUEST_ROLE := "guest"  # not a bridge role -- a client-side option that skips staff-shift entirely
 const TICKET_POLL_SECONDS := 1.5
+const GUEST_POLL_SECONDS := 2.0
 const FINDINGS_POLL_SECONDS := 15.0
 const WORLD_RETRY_SECONDS := 3.0
 const METRIC_LABELS := {
@@ -55,6 +63,11 @@ var shift_started := ""    # clock-in timestamp (ISO 8601), where the shift repo
 var role := ""
 var station := ""
 var on_shift := false
+var is_guest := false
+var guest_table := ""
+var guest_cart: Dictionary = {}       # menu_item_id -> quantity, while building an order
+var cart_spinboxes: Dictionary = {}   # menu_item_id -> SpinBox
+var guest_delivered := false
 var tickets: Dictionary = {}  # ticket_id -> {card, info, age, button, stage_started_ms, busy, table, station_id, next_stage, can_act, waiting_on}
 var actions_done := 0
 var response_ms_total := 0
@@ -77,6 +90,21 @@ var findings_label: Label
 var poll_timer: Timer
 var findings_timer: Timer
 var retry_timer: Timer
+var guest_poll_timer: Timer
+
+var table_row: HBoxContainer
+var table_picker: OptionButton
+var guest_panel: VBoxContainer
+var guest_header: Label
+var cart_section: VBoxContainer
+var cart_items_box: VBoxContainer
+var cart_total_label: Label
+var place_order_button: Button
+var status_section: VBoxContainer
+var order_status_label: Label
+var pay_row: HBoxContainer
+var payment_picker: OptionButton
+var pay_button: Button
 
 
 func _ready() -> void:
@@ -96,6 +124,7 @@ func _ready() -> void:
 	_build_ui()
 
 	poll_timer = _make_timer(TICKET_POLL_SECONDS, _refresh_tickets)
+	guest_poll_timer = _make_timer(GUEST_POLL_SECONDS, _refresh_guest_status)
 	findings_timer = _make_timer(FINDINGS_POLL_SECONDS, _refresh_findings)
 	retry_timer = _make_timer(WORLD_RETRY_SECONDS, _load_world)
 	findings_timer.start()
@@ -183,6 +212,13 @@ func _build_ui() -> void:
 	station_row.add_child(station_picker)
 	setup_panel.add_child(station_row)
 
+	table_row = _labeled_row("Table")
+	table_picker = OptionButton.new()
+	table_picker.custom_minimum_size.x = 240
+	table_row.add_child(table_picker)
+	table_row.visible = false
+	setup_panel.add_child(table_row)
+
 	clock_in_button = Button.new()
 	clock_in_button.text = "Clock in"
 	clock_in_button.disabled = true
@@ -219,6 +255,61 @@ func _build_ui() -> void:
 	tickets_box.add_theme_constant_override("separation", 6)
 	shift_panel.add_child(tickets_box)
 
+	# --- guest: build an order, place it, watch it, pay
+	guest_panel = VBoxContainer.new()
+	guest_panel.add_theme_constant_override("separation", 8)
+	guest_panel.visible = false
+	root_box.add_child(guest_panel)
+
+	var guest_header_row := HBoxContainer.new()
+	guest_header = Label.new()
+	guest_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var guest_leave_button := Button.new()
+	guest_leave_button.text = "Leave"
+	guest_leave_button.pressed.connect(_on_guest_leave_pressed)
+	guest_header_row.add_child(guest_header)
+	guest_header_row.add_child(guest_leave_button)
+	guest_panel.add_child(guest_header_row)
+
+	cart_section = VBoxContainer.new()
+	cart_section.add_theme_constant_override("separation", 4)
+	guest_panel.add_child(cart_section)
+
+	cart_items_box = VBoxContainer.new()  # one row per menu item, built once the menu loads
+	cart_items_box.add_theme_constant_override("separation", 2)
+	cart_section.add_child(cart_items_box)
+
+	cart_total_label = Label.new()
+	cart_section.add_child(cart_total_label)
+
+	place_order_button = Button.new()
+	place_order_button.text = "Place order"
+	place_order_button.disabled = true
+	place_order_button.custom_minimum_size = Vector2(160, 36)
+	place_order_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	place_order_button.pressed.connect(_on_place_order_pressed)
+	cart_section.add_child(place_order_button)
+
+	status_section = VBoxContainer.new()
+	status_section.add_theme_constant_override("separation", 8)
+	status_section.visible = false
+	guest_panel.add_child(status_section)
+
+	order_status_label = Label.new()
+	order_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status_section.add_child(order_status_label)
+
+	pay_row = HBoxContainer.new()
+	pay_row.add_theme_constant_override("separation", 8)
+	pay_row.visible = false
+	payment_picker = OptionButton.new()
+	pay_button = Button.new()
+	pay_button.text = "Pay"
+	pay_button.pressed.connect(_on_pay_pressed)
+	pay_row.add_child(payment_picker)
+	pay_row.add_child(pay_button)
+	status_section.add_child(pay_row)
+
 	# --- findings from the platform
 	root_box.add_child(HSeparator.new())
 	var findings_title := Label.new()
@@ -250,8 +341,28 @@ func _update_stats() -> void:
 	stats_label.text = "Actions: %d    Average time a ticket waited for you: %.1fs" % [actions_done, avg]
 
 
+func _build_cart_rows(menu: Dictionary) -> void:
+	for menu_item_id in menu:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		var label := Label.new()
+		label.text = "%s   $%.2f" % [str(menu_item_id).trim_prefix("menu-").replace("-", " "), float(menu[menu_item_id]) / 100.0]
+		label.custom_minimum_size.x = 260
+		var spin := SpinBox.new()
+		spin.min_value = 0
+		spin.max_value = 5
+		spin.value_changed.connect(_on_cart_changed.bind(menu_item_id))
+		row.add_child(label)
+		row.add_child(spin)
+		cart_items_box.add_child(row)
+		cart_spinboxes[menu_item_id] = spin
+
+
 func _on_role_selected(_index: int) -> void:
-	station_row.visible = role_picker.get_item_text(role_picker.selected) == LINE_COOK
+	var selected := role_picker.get_item_text(role_picker.selected)
+	station_row.visible = selected == LINE_COOK
+	table_row.visible = selected == GUEST_ROLE
+	clock_in_button.text = "Sit down" if selected == GUEST_ROLE else "Clock in"
 
 
 func _short(id: String) -> String:
@@ -274,8 +385,14 @@ func _load_world() -> void:
 	if role_picker.item_count == 0:
 		for role_name in world.get("playable_roles", {}).keys():
 			role_picker.add_item(role_name)
+		role_picker.add_item(GUEST_ROLE)  # not a bridge role; see the class doc comment
 		for s in world.get("playable_stations", []):
 			station_picker.add_item(s)
+		for t in world.get("tables", []):
+			table_picker.add_item(t)
+		for m in world.get("payment_methods", []):
+			payment_picker.add_item(m)
+		_build_cart_rows(world.get("menu", {}))
 		_on_role_selected(0)
 	clock_in_button.disabled = on_shift or role_picker.item_count == 0
 	_set_status("Connected. Pick a role and clock in.")
@@ -295,10 +412,13 @@ func _sanitize_player_id(raw: String) -> String:
 
 
 func _on_clock_in_pressed() -> void:
-	if on_shift or world.is_empty() or role_picker.item_count == 0:
+	if on_shift or is_guest or world.is_empty() or role_picker.item_count == 0:
 		return
 	player_id = _sanitize_player_id(name_edit.text)
 	role = role_picker.get_item_text(role_picker.selected)
+	if role == GUEST_ROLE:
+		_start_guest_setup()
+		return
 	station = station_picker.get_item_text(station_picker.selected) if role == LINE_COOK else ""
 	clock_in_button.disabled = true
 	var r: Dictionary = await bridge.post_staff_shift(player_id, role, "clock_in")
@@ -325,6 +445,120 @@ func _on_clock_in_pressed() -> void:
 	board_hint.text = "Waiting for the first ticket..."
 	poll_timer.start()
 	await _refresh_tickets()
+
+
+# ---------------------------------------------------------------- guest: order, wait, pay
+
+func _start_guest_setup() -> void:
+	# No bridge call yet -- sitting down and building an order is purely local; only
+	# "Place order" talks to the bridge (that is what actually fires the kitchen ticket).
+	guest_table = table_picker.get_item_text(table_picker.selected)
+	guest_cart.clear()
+	for menu_item_id in cart_spinboxes:
+		var spin: SpinBox = cart_spinboxes[menu_item_id]
+		spin.value = 0  # triggers _on_cart_changed, which clears guest_cart for each row
+	_update_cart_total()
+	is_guest = true
+	report_label.visible = false
+	setup_panel.visible = false
+	guest_panel.visible = true
+	guest_header.text = "%s  |  %s" % [player_id, guest_table]
+	cart_section.visible = true
+	status_section.visible = false
+	_set_status("Pick what you'd like, then place your order.")
+
+
+func _on_cart_changed(value: float, menu_item_id: String) -> void:
+	var qty := int(value)
+	if qty <= 0:
+		guest_cart.erase(menu_item_id)
+	else:
+		guest_cart[menu_item_id] = qty
+	_update_cart_total()
+
+
+func _cart_total_cents() -> int:
+	var total := 0
+	for id in guest_cart:
+		total += guest_cart[id] * int(world.menu[id])
+	return total
+
+
+func _on_place_order_pressed() -> void:
+	if guest_cart.is_empty():
+		return
+	place_order_button.disabled = true
+	var items: Array = []
+	for id in guest_cart:
+		items.append({"menu_item_id": id, "quantity": guest_cart[id]})
+	var r: Dictionary = await bridge.post_guest_order(player_id, guest_table, items)
+	if not is_guest:
+		return  # left while the request was in flight
+	if not r.ok:
+		place_order_button.disabled = false
+		_set_status("Couldn't place the order: %s" % r.error)
+		return
+	guest_delivered = false
+	cart_section.visible = false
+	status_section.visible = true
+	pay_row.visible = false
+	order_status_label.text = "Order placed. Waiting on the kitchen..."
+	_set_status("Order placed. Sit tight -- this updates on its own.")
+	guest_poll_timer.start()
+	await _refresh_guest_status()
+
+
+func _update_cart_total() -> void:
+	var count := 0
+	for id in guest_cart:
+		count += guest_cart[id]
+	cart_total_label.text = "Cart: %d item(s), $%.2f" % [count, _cart_total_cents() / 100.0]
+	place_order_button.disabled = count == 0
+
+
+func _refresh_guest_status() -> void:
+	if not is_guest:
+		return
+	var r: Dictionary = await bridge.get_guest_status(player_id)
+	if not is_guest or not status_section.visible:
+		return  # left, or already paid, while the request was in flight
+	if not r.ok:
+		order_status_label.text = "Can't check your order: %s" % r.error
+		return
+	guest_delivered = bool(r.data.delivered)
+	var total := "$%.2f" % (float(r.data.total_amount_cents) / 100.0)
+	if guest_delivered:
+		guest_poll_timer.stop()
+		order_status_label.text = "Order delivered! Total: %s" % total
+		pay_row.visible = true
+	else:
+		var next_stage: String = str(r.data.get("next_stage", "order_fired")).replace("_", " ")
+		var secs := int(float(r.data.get("seconds_in_stage", 0.0)))
+		order_status_label.text = "Waiting: %s (%ds so far)   Total so far: %s" % [next_stage, secs, total]
+
+
+func _on_pay_pressed() -> void:
+	pay_button.disabled = true
+	var method := payment_picker.get_item_text(payment_picker.selected)
+	var r: Dictionary = await bridge.post_guest_pay(player_id, method)
+	pay_button.disabled = false
+	if not is_guest:
+		return
+	if not r.ok:
+		order_status_label.text = "Payment failed: %s" % r.error
+		return
+	order_status_label.text = "Paid $%.2f. Thanks for dining with us!" % (float(r.data.total_amount_cents) / 100.0)
+	pay_row.visible = false
+
+
+func _on_guest_leave_pressed() -> void:
+	is_guest = false
+	guest_poll_timer.stop()
+	guest_panel.visible = false
+	setup_panel.visible = true
+	clock_in_button.text = "Clock in" if role_picker.get_item_text(role_picker.selected) != GUEST_ROLE else "Sit down"
+	clock_in_button.disabled = world.is_empty()
+	_set_status("Connected. Pick a role and clock in.")
 
 
 func _on_clock_out_pressed(show_report: bool = true) -> void:

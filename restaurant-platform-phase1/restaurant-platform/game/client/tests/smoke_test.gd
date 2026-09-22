@@ -89,7 +89,9 @@ func _run() -> void:
 	var stages: Array = world.data.stages
 	check(stages.size() == 5 and stages[0] == "order_fired", "world lists the five stages")
 	check(world.data.playable_roles.has("line_cook") and world.data.playable_roles.has("server"), "world lists the playable roles")
-	check(world.data.playable_roles.line_cook == ["cook_started", "plated"], "a line cook owns cook_started and plated")
+	check(world.data.playable_roles.line_cook == ["cook_started"], "a line cook owns cook_started")
+	check(world.data.playable_roles.expo == ["plated"], "an expo owns plated")
+	check(not world.data.playable_stations.has("station-expo"), "station-expo is not a cooking station")
 
 	# Start from a known state regardless of how a previous run ended.
 	await bridge.post_staff_shift("smoke-test", "line_cook", "clock_out")
@@ -121,9 +123,18 @@ func _run() -> void:
 	r = await bridge.post_service_timing("smoke-test", "cook_started", ticket_id)
 	check(r.ok and r.data.elapsed_since_previous_stage_ms != null, "cook_started accepted with elapsed")
 	r = await bridge.post_service_timing("smoke-test", "plated", ticket_id)
-	check(r.ok, "plated accepted")
+	check(not r.ok and r.status == 403, "a cook may not plate (403: %s)" % r.error)
+	r = await bridge.post_staff_shift("smoke-test", "line_cook", "clock_out")
+	check(r.ok, "clock_out as line_cook accepted")
+
+	r = await bridge.post_staff_shift("smoke-test", "expo", "clock_in")
+	check(r.ok, "clock_in as expo accepted")
+	r = await bridge.post_service_timing("smoke-test", "plated", ticket_id)
+	check(r.ok, "plated accepted from expo")
 	r = await bridge.post_service_timing("smoke-test", "picked_up_by_server", ticket_id)
-	check(not r.ok and r.status == 403, "a cook may not pick up (403: %s)" % r.error)
+	check(not r.ok and r.status == 403, "an expo may not pick up (403: %s)" % r.error)
+	r = await bridge.post_staff_shift("smoke-test", "expo", "clock_out")
+	check(r.ok, "clock_out as expo accepted")
 
 	r = await bridge.get_tickets("smoke-test")
 	var mine := {}
@@ -143,8 +154,39 @@ func _run() -> void:
 		if gone:
 			break
 	check(gone, "the crew finished the ticket (pickup and delivery)")
-	r = await bridge.post_staff_shift("smoke-test", "line_cook", "clock_out")
-	check(r.ok, "clock_out accepted")
+	# already clocked out (as expo) above, so smoke-test is off shift here
+
+	print("== guest (ordering, eating, paying) ==")
+	check(world.data.has("menu") and world.data.menu.has("menu-burger-classic"), "world lists the menu")
+	check(world.data.has("payment_methods") and world.data.payment_methods.has("card"), "world lists payment methods")
+
+	r = await bridge.post_guest_order("smoke-test-guest", "table-09",
+		[{"menu_item_id": "menu-burger-classic", "quantity": 2}, {"menu_item_id": "menu-drink-soda", "quantity": 1}])
+	check(r.ok, "guest order accepted with no clock-in (%s)" % r.error)
+	var expected_total: int = 2 * world.data.menu["menu-burger-classic"] + world.data.menu["menu-drink-soda"]
+	check(r.data.total_amount_cents == expected_total, "order total matches the menu prices")
+	check(r.data.delivered == false, "not delivered yet")
+
+	r = await bridge.post_guest_pay("smoke-test-guest", "cash")
+	check(not r.ok and r.status == 409, "can't pay before delivery (409: %s)" % r.error)
+
+	print("   (waiting for the crew to cook, plate, pick up and deliver the guest's order; up to 60 s)")
+	var delivered := false
+	for i in 60:
+		await _wait(1.0)
+		r = await bridge.get_guest_status("smoke-test-guest")
+		if r.ok and r.data.delivered:
+			delivered = true
+			break
+	check(delivered, "the guest's order was delivered with nobody staffed")
+
+	r = await bridge.post_guest_pay("smoke-test-guest", "cash")
+	check(r.ok, "pay accepted once delivered (%s)" % r.error)
+	check(r.data.event_type == "POSTransactionEvent" and r.data.source_kind == "player", "a real, player-tagged POS transaction")
+	check(r.data.payment_method == "cash" and r.data.total_amount_cents == expected_total, "the transaction matches the order")
+
+	r = await bridge.get_guest_status("smoke-test-guest")
+	check(not r.ok and r.status == 404, "the order is gone after paying (404: %s)" % r.error)
 
 	print("== main scene, driven through its own handlers ==")
 	var main: Control = load("res://scenes/main.tscn").instantiate()
@@ -152,7 +194,7 @@ func _run() -> void:
 	if main.world.is_empty():
 		await main.world_loaded
 	check(main.stages.size() == 5, "main scene loaded the world from the bridge")
-	check(main.role_picker.item_count == 2 and main.station_picker.item_count == 4, "role and station pickers filled from the world")
+	check(main.role_picker.item_count == 4 and main.station_picker.item_count == 3, "role and station pickers filled from the world")
 
 	main.name_edit.text = "Smoke Test"
 	main.role_picker.select(main.role_picker.get_item_index(0))
@@ -182,16 +224,45 @@ func _run() -> void:
 		var t: Dictionary = main.tickets[actionable]
 		check(t.next_stage == "cook_started" and not t.button.disabled, "its button is live: %s" % t.button.text)
 		await main._advance(actionable)
-		await main._advance(actionable)
-		check(main.actions_done == 2, "two actions counted (cook, plate)")
+		check(main.actions_done == 1, "one action counted (cook_started)")
 		t = main.tickets[actionable]
-		check(t.waiting_on == "crew" and t.button.disabled, "after plating, the card says '%s'" % t.button.text)
+		check(t.next_stage == "plated" and t.waiting_on == "crew" and t.button.disabled, "plating isn't mine: card says '%s'" % t.button.text)
 	await _wait(4.0)  # let the events reach the database before the report reads them
 	await main._on_clock_out_pressed()
 	check(not main.on_shift and main.setup_panel.visible, "clock out returns to setup")
 	check(main.report_label.visible and main.report_label.text.begins_with("Shift report"), "clock out shows a shift report")
-	check(main.report_label.text.contains("You:   2 action(s)"), "the report counts my two actions (%s)" % main.report_label.text.split("\n")[3].strip_edges())
+	check(main.report_label.text.contains("You:   1 action(s)"), "the report counts my one action (%s)" % main.report_label.text.split("\n")[3].strip_edges())
 	check(main.report_label.text.contains("Crew:"), "the report shows the crew alongside")
+
+	print("== main scene, guest ordering ==")
+	for i in main.role_picker.item_count:
+		if main.role_picker.get_item_text(i) == "guest":
+			main.role_picker.select(i)
+	main._on_role_selected(main.role_picker.selected)
+	check(main.table_row.visible and not main.station_row.visible, "guest is asked for a table, not a station")
+	check(main.clock_in_button.text == "Sit down", "the button reads 'Sit down' for a guest")
+	main.name_edit.text = "Smoke Guest"
+	main._on_clock_in_pressed()  # no bridge call yet -- sitting down is local
+	check(main.is_guest and main.guest_panel.visible and main.cart_section.visible, "sitting down shows the menu, not the bridge")
+	check(main.place_order_button.disabled, "can't place an empty order")
+	main.cart_spinboxes["menu-soup-of-day"].value = 1
+	check(not main.place_order_button.disabled and main.cart_total_label.text.contains("1 item"), "picking an item enables ordering")
+	await main._on_place_order_pressed()
+	check(not main.cart_section.visible and main.status_section.visible, "placing the order switches to waiting")
+
+	var guest_delivered := false
+	for i in 60:
+		await _wait(1.0)
+		await main._refresh_guest_status()
+		if main.guest_delivered:
+			guest_delivered = true
+			break
+	check(guest_delivered, "the guest's own order arrives on its own")
+	check(main.pay_row.visible, "the pay button appears once delivered")
+	await main._on_pay_pressed()
+	check(main.order_status_label.text.begins_with("Paid $"), "paying shows a receipt (%s)" % main.order_status_label.text)
+	main._on_guest_leave_pressed()
+	check(not main.is_guest and main.setup_panel.visible, "leaving returns to setup")
 
 	print("failures: ", failures)
 	quit(1 if failures > 0 else 0)

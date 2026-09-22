@@ -29,6 +29,20 @@ player can do it. The director also fires new tickets (the dining room) while
 anyone is on shift, up to MAX_OPEN_TICKETS per staffed station. So the player's speed moves the
 whole chain: a slow cook delays the server, a slow server delays the guest.
 
+Guests. A guest is not staff: their events are tagged "player" like a staff
+player's, but they never clock in, hold no role, and are gated by nothing
+StaffShiftEvent's role enum defines (it has no "guest"). POST /api/guest/order
+picks a table and a menu (world.MENU, the same one PlateWaste/POS simulators
+use), fires the kitchen ticket exactly as order_fired does, and records the
+order; the kitchen decides which station cooks it, the same as the dining
+room's own tickets. GET /api/guest/status reports the ticket's progress and
+the running total; POST /api/guest/pay is only accepted once the ticket has
+been delivered, and publishes a POSTransactionEvent (source_kind "player",
+already an allowed value on that schema) for the same line items. This closes
+the loop the schemas already supported: a guest's order and payment are real
+data alongside a staff player's, quarantined from the simulators' baseline
+the same way (see ticket-timing-aggregator's origin_of()).
+
 Per-ticket and per-player state is in memory and resets on restart, same as
 the simulators' TicketLifecycle/ShiftState. A ticket left open across a
 bridge restart gets a 404 on its next stage; the client re-reads GET
@@ -75,6 +89,10 @@ log = logging.getLogger("uvicorn.error")
 
 SERVICE_TIMING_TOPIC = "service-timing-events"
 STAFF_SHIFT_TOPIC = "staff-shift-events"
+POS_TRANSACTION_TOPIC = "pos-transaction-events"
+
+MAX_ORDER_ITEMS = 10
+DEFAULT_PAYMENT_METHOD = "card"
 
 PLAYER_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{0,31}$"
 
@@ -87,6 +105,8 @@ def _load_validator(filename: str) -> tuple[dict, jsonschema.Draft202012Validato
 
 TIMING_SCHEMA, TIMING_VALIDATOR = _load_validator("ServiceTimingEvent.schema.json")
 SHIFT_SCHEMA, SHIFT_VALIDATOR = _load_validator("StaffShiftEvent.schema.json")
+POS_SCHEMA, POS_VALIDATOR = _load_validator("POSTransactionEvent.schema.json")
+PAYMENT_METHODS: list[str] = POS_SCHEMA["properties"]["payment_method"]["enum"]
 
 # Enum values come from the schemas, not from a second copy in this file --
 # contract-first: if a schema's stage list changes, this follows.
@@ -152,6 +172,13 @@ _open_tickets: dict[str, dict] = {}
 # staff_id -> {"on_break": bool, "role": str, "station_id": str | None}; presence means clocked in
 _clocked_in: dict[str, dict] = {}
 _last_spawn = float("-inf")
+# A guest is not staff -- no clock-in, no StaffShiftEvent (its role enum has no "guest"). Keyed
+# by the guest's own player_id (not staff's "player-<name>"), so the two never collide.
+# player_id -> {"table_id", "ticket_id", "items": [{"menu_item_id","quantity"}], "delivered": bool}
+_guests: dict[str, dict] = {}
+# ticket_id -> player_id, cleared when the ticket is delivered (see _publish_stage). Lets
+# _publish_stage mark a guest's order delivered without every caller needing to know about guests.
+_ticket_to_guest: dict[str, str] = {}
 
 
 def _clock() -> float:
@@ -240,6 +267,22 @@ class StaffShiftRequest(BaseModel):
     scheduled_vs_actual: str | None = None
 
 
+class GuestOrderItem(BaseModel):
+    menu_item_id: str
+    quantity: int = Field(default=1, ge=1, le=10)
+
+
+class GuestOrderRequest(BaseModel):
+    player_id: str = Field(pattern=PLAYER_ID_PATTERN)
+    table_id: str
+    items: list[GuestOrderItem] = Field(min_length=1, max_length=MAX_ORDER_ITEMS)
+
+
+class GuestPayRequest(BaseModel):
+    player_id: str = Field(pattern=PLAYER_ID_PATTERN)
+    payment_method: str = DEFAULT_PAYMENT_METHOD
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
@@ -257,6 +300,8 @@ def world_info():
         "shift_actions": SHIFT_ACTIONS,
         "playable_roles": PLAYABLE_ROLES,  # role -> the stages that role performs
         "playable_stations": PLAYABLE_STATIONS,
+        "menu": world.MENU,  # menu_item_id -> unit_price_cents
+        "payment_methods": PAYMENT_METHODS,
     }
 
 
@@ -300,6 +345,9 @@ def _publish_stage(actor: tuple[str, str], stage: str, ticket_id: str,
     # Only advance state once the event is actually on the topic.
     if stage == STAGES[-1]:
         _open_tickets.pop(ticket_id, None)
+        guest_id = _ticket_to_guest.pop(ticket_id, None)
+        if guest_id is not None and guest_id in _guests:
+            _guests[guest_id]["delivered"] = True
     else:
         _open_tickets[ticket_id] = {
             "stage_index": STAGES.index(stage) + 1,
@@ -394,6 +442,100 @@ def list_tickets(player_id: str | None = Query(default=None, pattern=PLAYER_ID_P
         return rows
 
 
+# ---------------------------------------------------------------- guests (ordering, eating, paying)
+
+def _guest_status_locked(player_id: str) -> dict:
+    """Caller holds _lock. Raises 404 if player_id has no open order."""
+    guest = _guests.get(player_id)
+    if guest is None:
+        raise HTTPException(status_code=404, detail=f"no open order for {player_id!r}")
+    total_cents = sum(world.MENU[i["menu_item_id"]] * i["quantity"] for i in guest["items"])
+    row = {
+        "table_id": guest["table_id"],
+        "ticket_id": guest["ticket_id"],
+        "items": guest["items"],
+        "total_amount_cents": total_cents,
+        "delivered": guest["delivered"],
+    }
+    ticket = _open_tickets.get(guest["ticket_id"])
+    if ticket is not None:
+        row["next_stage"] = STAGES[ticket["stage_index"]]
+        row["seconds_in_stage"] = round(_clock() - ticket["last_stage_ts"], 1)
+    return row
+
+
+@app.post("/api/guest/order")
+def post_guest_order(req: GuestOrderRequest):
+    """A guest is not staff: no clock-in, and no role gates what they may do. Ordering fires
+    the kitchen ticket exactly as an order_fired stage does, at whichever cooking station has
+    room -- the guest does not pick one, matching how a kitchen actually assigns tickets."""
+    with _lock:
+        _require_known(req.table_id, world.TABLES, "table_id")
+        if req.player_id in _guests:
+            raise HTTPException(status_code=409, detail=f"{req.player_id} already has an open order; pay before ordering again")
+        for item in req.items:
+            if item.menu_item_id not in world.MENU:
+                raise HTTPException(status_code=422, detail=f"menu_item_id must be one of {world.MENU_ITEM_IDS}, got {item.menu_item_id!r}")
+        eligible = _eligible_stations()
+        if not eligible:
+            raise HTTPException(status_code=503, detail="the kitchen has no room right now -- try again shortly")
+        station_id = random.choice(eligible)
+        ticket_id = str(uuid.uuid4())
+        _publish_stage(_player_actor(req.player_id), STAGES[0], ticket_id, req.table_id, station_id)
+        _guests[req.player_id] = {
+            "table_id": req.table_id,
+            "ticket_id": ticket_id,
+            "items": [item.model_dump() for item in req.items],
+            "delivered": False,
+        }
+        _ticket_to_guest[ticket_id] = req.player_id
+        return _guest_status_locked(req.player_id)
+
+
+@app.get("/api/guest/status")
+def get_guest_status(player_id: str = Query(pattern=PLAYER_ID_PATTERN)):
+    with _lock:
+        return _guest_status_locked(player_id)
+
+
+@app.post("/api/guest/pay")
+def post_guest_pay(req: GuestPayRequest):
+    with _lock:
+        guest = _guests.get(req.player_id)
+        if guest is None:
+            raise HTTPException(status_code=404, detail=f"no open order for {req.player_id!r}")
+        if not guest["delivered"]:
+            raise HTTPException(status_code=409, detail="the order has not been delivered yet")
+        if req.payment_method not in PAYMENT_METHODS:
+            raise HTTPException(status_code=422, detail=f"payment_method must be one of {PAYMENT_METHODS}, got {req.payment_method!r}")
+
+        line_items = [
+            {
+                "menu_item_id": i["menu_item_id"],
+                "quantity": i["quantity"],
+                "unit_price_cents": world.MENU[i["menu_item_id"]],
+                "modifiers": [],
+                "voided": False,
+            }
+            for i in guest["items"]
+        ]
+        event = _envelope("POSTransactionEvent", _player_actor(req.player_id))
+        event.update(
+            transaction_id=str(uuid.uuid4()),
+            table_id=guest["table_id"],
+            server_staff_id=None,
+            line_items=line_items,
+            total_amount_cents=sum(li["quantity"] * li["unit_price_cents"] for li in line_items),
+            currency="USD",
+            payment_method=req.payment_method,
+            discount_applied_cents=0,
+        )
+        _validated(POS_VALIDATOR, event)
+        _publish(POS_TRANSACTION_TOPIC, event)
+        del _guests[req.player_id]
+        return event
+
+
 @app.post("/api/staff-shift")
 def post_staff_shift(req: StaffShiftRequest):
     staff_id = f"player-{req.player_id}"
@@ -438,6 +580,21 @@ def post_staff_shift(req: StaffShiftRequest):
 
 # ---------------------------------------------------------------- the director
 
+def _eligible_stations() -> list[str]:
+    """Cooking stations with room for one more open ticket. The cap is per station a cook is
+    working, so a backed-up station never starves a cook who just arrived at another; with no
+    cook on shift (only servers, or a guest ordering with nobody clocked in at all) it falls
+    back to every cooking station, capped as a whole, so food can still go out."""
+    cook_stations = {
+        s["station_id"] for s in _clocked_in.values()
+        if not s["on_break"] and s["role"] == "line_cook" and s["station_id"]
+    }
+    open_at = lambda st: sum(1 for t in _open_tickets.values() if t["station_id"] == st)
+    if cook_stations:
+        return sorted(st for st in cook_stations if open_at(st) < MAX_OPEN_TICKETS)
+    return PLAYABLE_STATIONS if len(_open_tickets) < MAX_OPEN_TICKETS else []
+
+
 def _spawn_ticket(now: float) -> None:
     """The dining room: while anyone playable is on shift, fire a ticket every SPAWN_SECONDS
     (at one of the cooks' stations, or anywhere in the kitchen if only servers are working)."""
@@ -445,14 +602,7 @@ def _spawn_ticket(now: float) -> None:
     active = [s for s in _clocked_in.values() if not s["on_break"] and s["role"] in PLAYABLE_ROLES]
     if not active or now - _last_spawn < SPAWN_SECONDS:
         return
-    # The cap is per station a cook is working, so a backed-up station never starves a
-    # cook who just arrived at another; with only servers on shift it caps the whole floor.
-    cook_stations = {s["station_id"] for s in active if s["role"] == "line_cook" and s["station_id"]}
-    if cook_stations:
-        open_at = lambda st: sum(1 for t in _open_tickets.values() if t["station_id"] == st)
-        eligible = sorted(st for st in cook_stations if open_at(st) < MAX_OPEN_TICKETS)
-    else:
-        eligible = PLAYABLE_STATIONS if len(_open_tickets) < MAX_OPEN_TICKETS else []
+    eligible = _eligible_stations()
     if not eligible:
         return
     _last_spawn = now  # set first: a failed publish then retries after SPAWN_SECONDS, not every tick

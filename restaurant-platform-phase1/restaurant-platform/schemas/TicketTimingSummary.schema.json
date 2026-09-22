@@ -90,6 +90,13 @@
       "description": "order_time -> delivered_time (or -> picked_up_time if delivered_time is not yet known)."
     },
 
+    "origin": {
+      "type": "string",
+      "enum": ["simulated", "vendor_integration", "interactive"],
+      "default": "simulated",
+      "description": "Where the ticket came from. 'interactive' if any event on the ticket has source_kind 'player' or 'crew' (a human-driven session and its automated crew); otherwise the events' own source_kind ('simulated' or 'vendor_integration'). Consumers that build baselines from these summaries keep 'interactive' tickets out of the baseline for the others: they run at a different pace and volume. Added 2026-09-21."
+    },
+
     "is_complete": {
       "type": "boolean",
       "description": "True only once delivered_time is populated. Consumers should treat an incomplete summary's duration fields as provisional and expect a later update with the same summary_id."

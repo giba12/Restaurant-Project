@@ -5,7 +5,8 @@ HTTP-to-Kafka bridge for a human-driven game client. A player's actions
 become the same schema-validated events the edge simulators emit, published
 to the same Kafka topics -- so storage, anomaly detection, causal
 inference, the digital twin and the narrator run completely unmodified.
-The only contract change is source_kind="player" (schemas/*Event.schema.json).
+The contract additions are source_kind "player" (all four event schemas) and "crew"
+(ServiceTimingEvent only), plus the ticket `origin` the aggregator derives from them.
 
 Why a bridge instead of a Kafka client inside the game engine: game engines
 have no first-class Kafka client, and this keeps validation in exactly one
@@ -19,8 +20,10 @@ Roles and the crew. A player clocks in as a line_cook (owns cook_started and
 plated, for tickets at their own station) or a server (owns picked_up_by_server
 and delivered). Every stage a player does not own is done by the crew: a
 background "director" thread advances it after a random delay, tagged
-source_kind "simulated" / source_id "game-crew" so the pipeline can tell the
-crew from the player. A stage is crew-owned whenever no clocked-in, not-on-break
+source_kind "crew" / source_id "game-crew" so the pipeline can tell the crew
+from the player -- and so the ticket-timing aggregator can mark every ticket
+in an interactive session (which the crew fires) as such and keep it out of the
+simulators' anomaly baseline. A stage is crew-owned whenever no clocked-in, not-on-break
 player can do it. The director also fires new tickets (the dining room) while
 anyone is on shift, up to MAX_OPEN_TICKETS per staffed station. So the player's speed moves the
 whole chain: a slow cook delays the server, a slow server delays the guest.
@@ -105,7 +108,7 @@ if any(st not in world.STATIONS for st in PLAYABLE_STATIONS):
     raise ValueError("PLAYABLE_STATIONS does not match world.STATIONS")
 
 # Who an event is attributed to: (source_kind, source_id).
-CREW_ACTOR = ("simulated", "game-crew")
+CREW_ACTOR = ("crew", "game-crew")
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):

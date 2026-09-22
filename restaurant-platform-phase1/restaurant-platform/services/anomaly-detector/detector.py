@@ -22,6 +22,15 @@ schema's detection_method field exists precisely so downstream consumers
 can distinguish which method produced which finding rather than the
 detector suppressing one in favor of the other.
 
+Quarantine: a summary whose `origin` is in QUARANTINE_ORIGINS (default
+"interactive": tickets from a human-driven session and its crew) is neither
+evaluated nor added to any window. Those tickets run at a different pace and
+volume from the simulators -- at up to ~90x the rate, a few minutes of play
+would otherwise replace a station's whole rolling window and make ordinary
+tickets look anomalous. They are still stored (ticket_timing_summaries) and
+can be compared against the rest; they just cannot move the baseline.
+Summaries with no `origin` (older producers) count as "simulated".
+
 Cold-start behavior: both modes require MIN_WINDOW_SIZE observations
 before producing any output for a given (station_id, metric_name) pair.
 Before that, tickets are recorded into the window but not evaluated -- an
@@ -55,6 +64,12 @@ MIN_WINDOW_SIZE = int(os.environ.get("ANOMALY_MIN_WINDOW_SIZE", "30"))
 CONTROL_LIMIT_SIGMA = float(os.environ.get("CONTROL_LIMIT_SIGMA", "3.0"))
 ISOLATION_FOREST_REFIT_EVERY = int(os.environ.get("ISOLATION_FOREST_REFIT_EVERY", "20"))
 ISOLATION_FOREST_CONTAMINATION = float(os.environ.get("ISOLATION_FOREST_CONTAMINATION", "0.05"))
+QUARANTINE_ORIGINS = {o.strip() for o in os.environ.get("QUARANTINE_ORIGINS", "interactive").split(",") if o.strip()}
+STATUS_LOG_EVERY = 25  # log window sizes once per this many quarantined tickets
+
+
+def is_quarantined(summary: dict) -> bool:
+    return summary.get("origin", "simulated") in QUARANTINE_ORIGINS
 
 
 class StationWindow:
@@ -233,12 +248,24 @@ def main():
     )
     conn = common.pg_connect()
     windows: dict[str, StationWindow] = collections.defaultdict(StationWindow)
+    quarantined = 0
 
-    log.info("anomaly-detector started, consuming %s", SUMMARY_TOPIC)
+    log.info("anomaly-detector started, consuming %s (quarantining origins: %s)",
+             SUMMARY_TOPIC, sorted(QUARANTINE_ORIGINS) or "none")
     for msg in consumer:
         summary = msg.value
         try:
             if not summary.get("is_complete"):
+                consumer.commit()
+                continue
+
+            if is_quarantined(summary):
+                quarantined += 1
+                if quarantined % STATUS_LOG_EVERY == 1:
+                    log.info(
+                        "quarantined %d %s ticket(s) so far; baseline windows untouched: %s",
+                        quarantined, summary.get("origin"), {s: len(w.rows) for s, w in sorted(windows.items())},
+                    )
                 consumer.commit()
                 continue
 

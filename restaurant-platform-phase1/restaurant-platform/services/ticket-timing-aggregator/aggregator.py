@@ -45,6 +45,19 @@ RAW_TOPIC = "service-timing-events"
 SUMMARY_TOPIC = "ticket-timing-summaries"
 SOURCE_ID = "timing-aggregator-01"
 
+# A ticket touched by a human-driven session ('player') or its automated crew
+# ('crew') is "interactive" -- from its very first event, since the crew fires
+# the ticket. Downstream, interactive tickets are kept out of the baselines
+# built for everything else (see anomaly-detector).
+INTERACTIVE_KINDS = {"player", "crew"}
+
+
+def origin_of(raw_event: dict) -> str:
+    """'interactive' for player/crew events, otherwise the event's own source_kind."""
+    kind = raw_event.get("source_kind", "simulated")
+    return "interactive" if kind in INTERACTIVE_KINDS else kind
+
+
 # stage -> (field written on entry, field name of the *previous* stage's
 # timestamp used to compute the corresponding duration field)
 STAGE_FIELD_MAP = {
@@ -85,6 +98,7 @@ class TicketState:
                 "restaurant_id": raw_event.get("restaurant_id", common.RESTAURANT_ID),
                 "station_id": raw_event.get("station_id"),
                 "table_id": raw_event.get("table_id"),
+                "origin": origin_of(raw_event),
                 "order_time": None,
                 "cook_started_time": None,
                 "plated_time": None,
@@ -98,6 +112,10 @@ class TicketState:
             state["station_id"] = raw_event["station_id"]
         if raw_event.get("table_id"):
             state["table_id"] = raw_event["table_id"]
+
+        # Sticky: one interactive event makes the whole ticket interactive.
+        if origin_of(raw_event) == "interactive":
+            state["origin"] = "interactive"
 
         field = STAGE_FIELD_MAP.get(raw_event["stage"])
         if field is not None:
@@ -128,6 +146,7 @@ class TicketState:
             "ticket_id": ticket_id,
             "station_id": state["station_id"],
             "table_id": state["table_id"],
+            "origin": state["origin"],
             "order_time": state["order_time"],
             "cook_started_time": state["cook_started_time"],
             "plated_time": state["plated_time"],
@@ -161,13 +180,13 @@ def upsert_summary(conn, summary: dict):
             """
             INSERT INTO ticket_timing_summaries (
                 ticket_id, summary_id, event_type, schema_version, source_id,
-                computed_at, restaurant_id, station_id, table_id,
+                computed_at, restaurant_id, station_id, table_id, origin,
                 order_time, cook_started_time, plated_time, picked_up_time, delivered_time,
                 time_to_cook_start_ms, cook_duration_ms, pickup_delay_ms,
                 service_delay_ms, total_ticket_duration_ms, is_complete, updated_at
             ) VALUES (
                 %(ticket_id)s, %(summary_id)s, %(event_type)s, %(schema_version)s, %(source_id)s,
-                %(computed_at)s, %(restaurant_id)s, %(station_id)s, %(table_id)s,
+                %(computed_at)s, %(restaurant_id)s, %(station_id)s, %(table_id)s, %(origin)s,
                 %(order_time)s, %(cook_started_time)s, %(plated_time)s, %(picked_up_time)s, %(delivered_time)s,
                 %(time_to_cook_start_ms)s, %(cook_duration_ms)s, %(pickup_delay_ms)s,
                 %(service_delay_ms)s, %(total_ticket_duration_ms)s, %(is_complete)s, now()
@@ -177,6 +196,7 @@ def upsert_summary(conn, summary: dict):
                 computed_at = EXCLUDED.computed_at,
                 station_id = EXCLUDED.station_id,
                 table_id = EXCLUDED.table_id,
+                origin = EXCLUDED.origin,
                 order_time = EXCLUDED.order_time,
                 cook_started_time = EXCLUDED.cook_started_time,
                 plated_time = EXCLUDED.plated_time,

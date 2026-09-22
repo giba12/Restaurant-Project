@@ -1,7 +1,7 @@
-# Applies the numbered SQL migrations (001 to 004, in order) against the
+# Applies the numbered SQL migrations (001 to 005, in order) against the
 # TimescaleDB primary on every install/upgrade. Idempotent by
 # construction -- every statement uses IF NOT EXISTS / if_not_exists or,
-# for 004, drops and re-adds a constraint -- so re-running against an
+# for 004 and 005, drops and re-adds a constraint -- so re-running against an
 # already-initialized database changes nothing.
 #
 # Unlike the earlier dependency-chart version, there is no separate
@@ -57,6 +57,8 @@ spec:
             - /sql/003_phase6.sql
             - -f
             - /sql/004_player_source_kind.sql
+            - -f
+            - /sql/005_ticket_origin.sql
           env:
             - name: PGHOST
               value: {{ .Release.Name }}

@@ -275,7 +275,7 @@ def test_crew_cooks_when_no_cook_is_at_that_station(client):
     assert main._open_tickets[ticket_id]["stage_index"] == main.STAGES.index("picked_up_by_server")
 
 
-def test_crew_events_are_tagged_simulated(client):
+def test_crew_events_are_tagged_crew(client):
     spawner_on(client)
     on_shift(client, "bo", "server")
     tick(client)
@@ -283,7 +283,7 @@ def test_crew_events_are_tagged_simulated(client):
     tick(client, 5.0)
     events = service_events(client)
     assert len(events) >= 2
-    assert {(e["source_kind"], e["source_id"]) for e in events} == {("simulated", "game-crew")}
+    assert {(e["source_kind"], e["source_id"]) for e in events} == {("crew", "game-crew")}
 
 
 def test_crew_covers_while_the_player_is_on_break(client):

@@ -20,5 +20,11 @@ services:
       kafka: { condition: service_healthy }
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # Game pacing (see game/README.md); set any of these in your shell or a .env
+      # file to change it, e.g. SPAWN_SECONDS=1 for a fast test run.
+      SPAWN_SECONDS: ${SPAWN_SECONDS:-8}
+      MAX_OPEN_TICKETS: ${MAX_OPEN_TICKETS:-5}
+      CREW_MIN_SECONDS: ${CREW_MIN_SECONDS:-6}
+      CREW_MAX_SECONDS: ${CREW_MAX_SECONDS:-14}
     ports:
       - "127.0.0.1:8001:8001"

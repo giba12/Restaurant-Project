@@ -75,6 +75,7 @@ TREATMENT_MAP = {
             FROM plate_waste_events
             WHERE "timestamp" BETWEEN %(window_start)s AND %(window_end)s
               AND to_go_container_used IS NOT NULL
+              AND source_kind <> 'player'  -- human-driven sessions are quarantined from analysis
         """,
         "effect_unit": "grams",
     },
@@ -88,6 +89,12 @@ TREATMENT_MAP = {
         # by time overlap. This is a coarse proxy, not a validated causal
         # variable -- flagged for review once real staffing-density data
         # volume exists to check it against.
+        #
+        # Interactive sessions are quarantined from this analysis: their
+        # tickets (t.origin) run at a different pace than the simulators',
+        # and a player clocking in would raise the staffing count for every
+        # ticket -- each would confound the estimate. Staff events from
+        # human-driven sources (source_kind 'player') are not counted either.
         "query": """
             SELECT
                 t.pickup_delay_ms,
@@ -96,6 +103,7 @@ TREATMENT_MAP = {
                     SELECT COUNT(DISTINCT s.staff_id)
                     FROM staff_shift_events s
                     WHERE s.shift_action = 'clock_in'
+                      AND s.source_kind <> 'player'
                       AND s."timestamp" <= t.picked_up_time
                       AND NOT EXISTS (
                           SELECT 1 FROM staff_shift_events s2
@@ -107,6 +115,7 @@ TREATMENT_MAP = {
             FROM ticket_timing_summaries t
             WHERE t.computed_at BETWEEN %(window_start)s AND %(window_end)s
               AND t.pickup_delay_ms IS NOT NULL
+              AND t.origin <> 'interactive'
         """,
         "effect_unit": "milliseconds",
     },
@@ -114,7 +123,12 @@ TREATMENT_MAP = {
 
 
 def _load_data(conn, spec: dict, window_start: str, window_end: str) -> pd.DataFrame:
-    return pd.read_sql_query(spec["query"], conn, params={"window_start": window_start, "window_end": window_end})
+    df = pd.read_sql_query(spec["query"], conn, params={"window_start": window_start, "window_end": window_end})
+    # psycopg2 opens a transaction on the SELECT and holds it until told otherwise. Left
+    # open, this long-lived connection sat "idle in transaction" for hours and blocked
+    # every schema migration (ALTER TABLE waits for it). End it as soon as the read is done.
+    conn.commit()
+    return df
 
 
 def _run_dowhy(df: pd.DataFrame, treatment: str, outcome: str, confounders: list) -> dict:

@@ -109,6 +109,65 @@ function AnomaliesPanel() {
   );
 }
 
+const METRIC_LABELS = {
+  time_to_cook_start_ms: "Time to cook start",
+  cook_duration_ms: "Cook time",
+  pickup_delay_ms: "Pickup delay",
+  service_delay_ms: "Service delay",
+  total_ticket_duration_ms: "Whole ticket",
+};
+
+function secs(ms) {
+  return ms == null ? "–" : `${(ms / 1000).toFixed(1)} s`;
+}
+
+// Interactive sessions against the simulated restaurant, and a player
+// against the crew. Interactive tickets are kept out of the anomaly baseline,
+// so this comparison is where they show up. Empty until someone plays.
+function ComparisonPanel() {
+  const { data, error } = useApi("/comparison", 10000);
+  const vs = data?.vs_simulated;
+  const clock = data?.same_clock;
+  const hasGame = vs && vs.interactive_tickets > 0;
+  return (
+    <section className="panel wide">
+      <h2>Interactive sessions vs the simulated restaurant</h2>
+      {error && <p className="error">{error}</p>}
+      {data && !hasGame && (
+        <p className="muted">No completed interactive tickets in the last {data.scope.reference_hours} hours. Play a shift, then this compares it with the simulated restaurant.</p>
+      )}
+      {hasGame && (
+        <>
+          <p className="muted">
+            {vs.interactive_tickets} interactive tickets vs {vs.simulated_tickets} simulated (last {data.scope.reference_hours} h).
+            Interactive tickets are quarantined from the anomaly baseline, so they cannot make simulated tickets look abnormal.
+          </p>
+          <table>
+            <thead>
+              <tr><th>Stage</th><th>Interactive median</th><th>Simulated median</th><th>Simulated p90</th><th>Interactive median beats</th></tr>
+            </thead>
+            <tbody>
+              {vs.metrics.map((m) => (
+                <tr key={m.metric}>
+                  <td>{METRIC_LABELS[m.metric] || m.metric}</td>
+                  <td>{secs(m.interactive.median_ms)}</td>
+                  <td>{secs(m.simulated.median_ms)}</td>
+                  <td>{secs(m.simulated.p90_ms)}</td>
+                  <td>{m.interactive_median_faster_than_pct_of_simulated == null ? "–" : `${Math.round(m.interactive_median_faster_than_pct_of_simulated)}% of simulated`}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="muted">
+            Same clock, players vs crew: players {secs(clock.player.median_ms)} median over {clock.player.n} actions; crew {secs(clock.crew.median_ms)} over {clock.crew.n}.
+            Interactive sessions run on a shorter clock than the simulators, so read this as a comparison of pace, not a score.
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
 function NarratedFindingsFeed() {
   const { data, error } = useApi("/findings/narrated", 5000);
   return (
@@ -156,6 +215,7 @@ export default function App() {
         <StationsPanel />
         <StaffPanel />
         <AnomaliesPanel />
+        <ComparisonPanel />
         <NarratedFindingsFeed />
       </main>
     </div>

@@ -14,6 +14,11 @@ extends Control
 ## The bridge is the authority on rules (who may do which stage, at which
 ## station), on when tickets arrive, and on what the crew does; this script only
 ## polls the ticket board, presents it, and reports what the bridge rejected.
+##
+## When a shift ends, a report compares it two ways, both read from the
+## platform's dashboard API (GET /api/comparison): your response times against
+## the crew's over the same shift (same clock), and game tickets against the
+## simulated restaurant's.
 
 const BridgeClient := preload("res://scripts/bridge_client.gd")
 
@@ -30,6 +35,13 @@ const LINE_COOK := "line_cook"
 const TICKET_POLL_SECONDS := 1.5
 const FINDINGS_POLL_SECONDS := 15.0
 const WORLD_RETRY_SECONDS := 3.0
+const METRIC_LABELS := {
+	"time_to_cook_start_ms": "Time to cook start",
+	"cook_duration_ms": "Cook time",
+	"pickup_delay_ms": "Pickup delay",
+	"service_delay_ms": "Service delay",
+	"total_ticket_duration_ms": "Whole ticket",
+}
 const SLOW_STAGE_SECONDS := 15.0
 
 var bridge: BridgeClient
@@ -38,6 +50,8 @@ var dashboard_url := "http://127.0.0.1:8080"
 var world: Dictionary = {}
 var stages: Array = []
 var player_id := ""
+var source_id := ""        # the bridge's name for this player's events, from the clock-in event
+var shift_started := ""    # clock-in timestamp (ISO 8601), where the shift report's window starts
 var role := ""
 var station := ""
 var on_shift := false
@@ -57,6 +71,7 @@ var clock_out_button: Button
 var shift_header: Label
 var stats_label: Label
 var board_hint: Label
+var report_label: Label
 var tickets_box: VBoxContainer
 var findings_label: Label
 var poll_timer: Timer
@@ -91,7 +106,7 @@ func _ready() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		if on_shift:
-			await _on_clock_out_pressed()
+			await _on_clock_out_pressed(false)  # no report: the window is closing
 		get_tree().quit()
 
 
@@ -137,6 +152,11 @@ func _build_ui() -> void:
 	status_label.text = "Connecting to the bridge..."
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root_box.add_child(status_label)
+
+	report_label = Label.new()
+	report_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	report_label.visible = false
+	root_box.add_child(report_label)
 
 	# --- setup: name, role, station, clock in
 	setup_panel = VBoxContainer.new()
@@ -286,6 +306,9 @@ func _on_clock_in_pressed() -> void:
 		clock_in_button.disabled = false
 		_set_status("Couldn't clock in: %s" % r.error)
 		return
+	source_id = str(r.data.source_id)
+	shift_started = str(r.data.timestamp)
+	report_label.visible = false
 	if role == LINE_COOK:
 		# A line cook works one station; the bridge only lets them act on tickets there.
 		var r2: Dictionary = await bridge.post_staff_shift(player_id, role, "station_reassign", station)
@@ -304,7 +327,7 @@ func _on_clock_in_pressed() -> void:
 	await _refresh_tickets()
 
 
-func _on_clock_out_pressed() -> void:
+func _on_clock_out_pressed(show_report: bool = true) -> void:
 	if not on_shift:
 		return
 	on_shift = false
@@ -319,6 +342,8 @@ func _on_clock_out_pressed() -> void:
 	clock_in_button.disabled = world.is_empty()
 	if r.ok:
 		_set_status("Shift over. You did %d action(s). The crew finishes any open tickets. Clock in again any time." % actions_done)
+		if show_report:
+			await _show_report()
 	else:
 		_set_status("Clocked out locally, but the bridge said: %s" % r.error)
 
@@ -433,6 +458,64 @@ func _advance(ticket_id: String) -> void:
 		_set_status("Couldn't advance %s: %s" % [t.table, r.error])
 	# Take the bridge's word for what happens next, rather than guessing locally.
 	await _refresh_tickets()
+
+
+# ---------------------------------------------------------------- shift report
+
+func _show_report() -> void:
+	report_label.text = "Building your shift report..."
+	report_label.visible = true
+	var url := "%s/api/comparison?source_id=%s&since=%s" % [dashboard_url, source_id.uri_encode(), shift_started.uri_encode()]
+	var r: Dictionary = await bridge.request_json(HTTPClient.METHOD_GET, url)
+	if not r.ok or not (r.data is Dictionary):
+		report_label.text = "Shift report unavailable (dashboard at %s: %s)." % [dashboard_url, r.error]
+		return
+	report_label.text = format_report(r.data)
+
+
+static func _secs(ms: Variant) -> String:
+	return "-" if ms == null else "%.1fs" % (float(ms) / 1000.0)
+
+
+static func _who(label: String, s: Dictionary) -> String:
+	if int(s.n) == 0:
+		return "%s  no actions yet" % label
+	return "%s  %d action(s)   median %s   slowest 10%% over %s" % [label, int(s.n), _secs(s.median_ms), _secs(s.p90_ms)]
+
+
+static func format_report(d: Dictionary) -> String:
+	var sc: Dictionary = d.same_clock
+	var lines: PackedStringArray = ["Shift report", ""]
+	lines.append("You against the crew, same shift, same clock (how long a ticket waited for whoever handled it):")
+	lines.append("  " + _who("You: ", sc.player))
+	lines.append("  " + _who("Crew:", sc.crew))
+	var ratio: Variant = sc.player_to_crew_median_ratio
+	if ratio == null or float(ratio) <= 0.0:
+		lines.append("  Not enough on both sides yet to compare you with the crew.")
+	elif absf(float(ratio) - 1.0) < 0.05:
+		lines.append("  You responded about as fast as the crew.")
+	elif float(ratio) < 1.0:
+		lines.append("  You responded %.1fx faster than the crew." % (1.0 / float(ratio)))
+	else:
+		lines.append("  You responded %.1fx slower than the crew." % float(ratio))
+	for row in sc.by_stage:
+		if int(row.player.n) > 0 and int(row.crew.n) > 0:
+			lines.append("  %s: you %s (%d), crew %s (%d)" % [str(row.stage).replace("_", " "), _secs(row.player.median_ms), int(row.player.n), _secs(row.crew.median_ms), int(row.crew.n)])
+
+	var vs: Dictionary = d.vs_simulated
+	lines.append("")
+	if int(vs.interactive_tickets) == 0 or int(vs.simulated_tickets) == 0:
+		lines.append("Game tickets against the simulated restaurant: not enough completed tickets on both sides yet.")
+	else:
+		lines.append("Game tickets (%d) against the simulated restaurant (%d, last %d h), median per stage:" % [int(vs.interactive_tickets), int(vs.simulated_tickets), int(d.scope.reference_hours)])
+		for m in vs.metrics:
+			var beats: Variant = m.interactive_median_faster_than_pct_of_simulated
+			lines.append("  %s: game %s, simulated %s%s" % [
+				METRIC_LABELS.get(m.metric, m.metric), _secs(m.interactive.median_ms), _secs(m.simulated.median_ms),
+				"" if beats == null else "  (game median beats %d%% of simulated tickets)" % int(round(float(beats))),
+			])
+		lines.append("  The game and the simulators run on different clocks; read this as a comparison of pace, not a score.")
+	return "\n".join(lines)
 
 
 # ---------------------------------------------------------------- findings

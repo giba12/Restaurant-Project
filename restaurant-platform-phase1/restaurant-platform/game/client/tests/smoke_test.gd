@@ -28,12 +28,56 @@ func _wait(seconds: float) -> void:
 	await create_timer(seconds).timeout
 
 
+func _test_report_format() -> void:
+	var main_script: GDScript = load("res://scripts/main.gd")
+	var stat := func(n: int, med: Variant, p90: Variant) -> Dictionary: return {"n": n, "median_ms": med, "p90_ms": p90}
+	var data := {
+		"scope": {"reference_hours": 24},
+		"same_clock": {
+			"player": stat.call(3, 4000, 4800), "crew": stat.call(3, 10000, 11600),
+			"player_to_crew_median_ratio": 0.4,
+			"by_stage": [
+				{"stage": "cook_started", "player": stat.call(2, 3000, 5000), "crew": stat.call(1, 9000, 9000)},
+				{"stage": "plated", "player": stat.call(1, 4000, 4000), "crew": stat.call(0, null, null)},
+			],
+		},
+		"vs_simulated": {
+			"interactive_tickets": 89, "simulated_tickets": 1900,
+			"metrics": [{"metric": "pickup_delay_ms", "interactive": stat.call(89, 8900, 12000), "simulated": stat.call(1900, 20700, 64000),
+				"interactive_median_faster_than_pct_of_simulated": 69.7}],
+		},
+	}
+	var text: String = main_script.format_report(data)
+	check(text.begins_with("Shift report"), "report has a title")
+	check(text.contains("You:   3 action(s)   median 4.0s   slowest 10% over 4.8s"), "player line: n, median, p90")
+	check(text.contains("Crew:  3 action(s)   median 10.0s"), "crew line")
+	check(text.contains("2.5x faster than the crew"), "ratio 0.4 reads as 2.5x faster")
+	check(text.contains("cook started: you 3.0s (2), crew 9.0s (1)"), "a stage both did is shown side by side")
+	check(not text.contains("plated: you"), "a stage only one side did is left out")
+	check(text.contains("Pickup delay: game 8.9s, simulated 20.7s  (game median beats 70% of simulated tickets)"), "vs-simulated line with the percentage")
+	check(text.contains("Game tickets (89) against the simulated restaurant (1900, last 24 h)"), "vs-simulated header with counts")
+
+	data.same_clock.player_to_crew_median_ratio = 1.5
+	check(main_script.format_report(data).contains("1.5x slower than the crew"), "ratio 1.5 reads as 1.5x slower")
+	data.same_clock.player_to_crew_median_ratio = 1.02
+	check(main_script.format_report(data).contains("about as fast as the crew"), "ratio near 1 reads as about as fast")
+	data.same_clock.player_to_crew_median_ratio = null
+	data.same_clock.crew = stat.call(0, null, null)
+	data.vs_simulated.interactive_tickets = 0
+	var thin: String = main_script.format_report(data)
+	check(thin.contains("Not enough on both sides yet"), "no crew data: says so instead of a ratio")
+	check(thin.contains("Crew:  no actions yet") and thin.contains("not enough completed tickets"), "empty sides are stated plainly")
+
+
 func _run() -> void:
 	var bridge := BridgeClient.new()
 	root.add_child(bridge)
 	var env := OS.get_environment("BRIDGE_URL")
 	if env != "":
 		bridge.base_url = env
+
+	print("== shift report formatting (canned data, no network) ==")
+	_test_report_format()
 
 	print("== client ==")
 	var world: Dictionary = await bridge.get_world()
@@ -142,8 +186,12 @@ func _run() -> void:
 		check(main.actions_done == 2, "two actions counted (cook, plate)")
 		t = main.tickets[actionable]
 		check(t.waiting_on == "crew" and t.button.disabled, "after plating, the card says '%s'" % t.button.text)
+	await _wait(4.0)  # let the events reach the database before the report reads them
 	await main._on_clock_out_pressed()
 	check(not main.on_shift and main.setup_panel.visible, "clock out returns to setup")
+	check(main.report_label.visible and main.report_label.text.begins_with("Shift report"), "clock out shows a shift report")
+	check(main.report_label.text.contains("You:   2 action(s)"), "the report counts my two actions (%s)" % main.report_label.text.split("\n")[3].strip_edges())
+	check(main.report_label.text.contains("Crew:"), "the report shows the crew alongside")
 
 	print("failures: ", failures)
 	quit(1 if failures > 0 else 0)

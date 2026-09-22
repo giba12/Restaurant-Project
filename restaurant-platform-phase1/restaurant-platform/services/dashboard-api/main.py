@@ -10,14 +10,17 @@ dashboard the way there is for the LLM narrator.
 
 No write endpoints. This service only ever SELECTs.
 """
+import contextlib
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import phase5_common as common
+import comparison
 
 app = FastAPI(title="restaurant-platform dashboard-api")
 
@@ -97,3 +100,57 @@ def anomalies_summary():
             """
         )
         return _rows_as_dicts(cur)
+
+
+def _fetch_event_rows(since: datetime, source_id: str | None) -> list[tuple]:
+    """Player and crew stage events since `since` (the player's own, if source_id is given)."""
+    with contextlib.closing(common.pg_connect()) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT source_kind, stage, elapsed_since_previous_stage_ms
+            FROM service_timing_events
+            WHERE source_kind IN ('player', 'crew')
+              AND stage <> 'order_fired'
+              AND elapsed_since_previous_stage_ms IS NOT NULL
+              AND "timestamp" >= %(since)s
+              AND (source_kind = 'crew' OR %(source_id)s::text IS NULL OR source_id = %(source_id)s)
+            LIMIT 100000
+            """,
+            {"since": since, "source_id": source_id},
+        )
+        return cur.fetchall()
+
+
+def _fetch_summary_rows(since: datetime, hours: int) -> list[tuple]:
+    """Completed interactive tickets since `since`, and simulated ones from the last `hours`."""
+    with contextlib.closing(common.pg_connect()) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT origin, time_to_cook_start_ms, cook_duration_ms, pickup_delay_ms,
+                   service_delay_ms, total_ticket_duration_ms
+            FROM ticket_timing_summaries
+            WHERE is_complete
+              AND ((origin = 'interactive' AND computed_at >= %(since)s)
+                OR (origin = 'simulated' AND computed_at >= now() - make_interval(hours => %(hours)s)))
+            LIMIT 100000
+            """,
+            {"since": since, "hours": hours},
+        )
+        return cur.fetchall()
+
+
+@app.get("/api/comparison")
+def get_comparison(
+    source_id: str | None = Query(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,63}$",
+                                  description="Compare this one player's events (the source_id its events carry); default: all players."),
+    since: datetime | None = Query(default=None, description="Start of the interactive window, ISO 8601; default: `hours` ago."),
+    hours: int = Query(default=24, ge=1, le=720, description="How far back the simulated reference reaches."),
+):
+    """Interactive timings against the simulated restaurant, and a player against the crew."""
+    now = datetime.now(timezone.utc)
+    if since is None:
+        since = now - timedelta(hours=hours)
+    elif since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    scope = {"source_id": source_id, "since": since.isoformat(), "reference_hours": hours}
+    return comparison.build(_fetch_event_rows(since, source_id), _fetch_summary_rows(since, hours), scope)

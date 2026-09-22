@@ -1,0 +1,28 @@
+image:
+  repository: localhost/local/game-bridge
+  tag: "1.0"
+  pullPolicy: IfNotPresent
+
+# Same defaults as main.py / the Compose overlay; override any of these to
+# change pacing without a rebuild.
+env:
+  KAFKA_BOOTSTRAP_SERVERS: "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+  MAX_TICKET_AGE_SECONDS: "3600"
+  SPAWN_SECONDS: "8"
+  MAX_OPEN_TICKETS: "5"
+  CREW_MIN_SECONDS: "6"
+  CREW_MAX_SECONDS: "14"
+  DIRECTOR_TICK_SECONDS: "0.5"
+  GAME_DIRECTOR: "1"
+
+service:
+  type: ClusterIP
+  port: 8001
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi

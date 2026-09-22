@@ -1,6 +1,6 @@
 # Version 2: the game
 
-A human-playable front end for the platform. You clock in as a **line cook** (cook and plate the tickets at your station) or a **server** (pick up and deliver), and a crew inside the bridge does every stage you don't own, so your speed moves the whole chain. Every action becomes a real event on the same Kafka topics the simulators use, so storage, anomaly detection, causal inference, the digital twin and the narrator all run on your play without being changed.
+A human-playable front end for the platform. Work a shift as a **line cook**, **expo** or **server**, with a crew covering every stage nobody is playing so your speed moves the whole chain -- or sit down as a **guest**, order from the menu, and pay once your food arrives. Every action becomes a real event on the same Kafka topics the simulators use, so storage, anomaly detection, causal inference, the digital twin and the narrator all run on your play without being changed.
 
 Everything for version 2 lives in this directory. Version 1 (the simulated platform, everything outside `game/`) runs completely without it.
 
@@ -8,6 +8,7 @@ Everything for version 2 lives in this directory. Version 1 (the simulated platf
 game/
   bridge/                  HTTP-to-Kafka service (FastAPI): validates a player's actions and publishes events
   client/                  the Godot 4.5 project (the game itself)
+  k8s/bridge/              Helm chart that deploys the bridge to k3s (see "Deploying to Kubernetes")
   docker-compose.game.yml  Compose overlay that adds the bridge to the base stack
   README.md                this file
 ```
@@ -28,7 +29,7 @@ The game depends on the platform in exactly these places, and nowhere else:
 To confirm the rule still holds, this should print nothing:
 
 ```bash
-grep -rIl "game-bridge\|game/bridge\|game/client" --exclude-dir=game --exclude-dir=node_modules --exclude-dir=.git . \
+grep -rIl "game-bridge\|game/bridge\|game/client\|game/k8s" --exclude-dir=game --exclude-dir=node_modules --exclude-dir=.git . \
   | grep -v "CODEBASE-GUIDE.md\|restaurant-platform-implementation-status.md\|restaurant-platform-project-notes.md"
 ```
 
@@ -70,7 +71,7 @@ docker compose exec -T timescaledb psql -U restaurant_app -d restaurant_platform
 
 ## The bridge API
 
-`game/bridge/main.py` accepts a player's actions and publishes them as schema-validated events tagged `source_kind: "player"`. It has no authentication, so it is bound to localhost only.
+`game/bridge/main.py` accepts a player's or a guest's actions and publishes them as schema-validated events tagged `source_kind: "player"`. It has no authentication, so it is bound to localhost only (or reached by port-forward on k3s; see "Deploying to Kubernetes").
 
 ```bash
 curl -s localhost:8001/api/world     # stations, tables, stages, roles, and which stages each playable role performs
@@ -94,12 +95,31 @@ Out-of-order stages, unknown tables or stations, and bad clock-in sequences are 
 
 | Role | Performs | Works |
 |---|---|---|
-| `line_cook` | `cook_started`, `plated` | tickets at the one station they took |
+| `line_cook` | `cook_started` | tickets at the one station they took |
+| `expo` | `plated` | the whole floor -- expo works the pass for every station, not one |
 | `server` | `picked_up_by_server`, `delivered` | the whole floor |
+
+Only `line_cook` is scoped to a station; a ticket is only ever fired at a real cooking station (`station-grill`, `station-saute`, `station-salad`). `station-expo` is a real station (staff can clock in there) but not a cooking one, so no ticket is fired at it and no line cook can pick it as their station.
 
 Every stage a player can't do is done by the **crew**, a background "director" thread in the bridge. A stage is crew-owned whenever no clocked-in player *who is not on a break* can do it (for a cook: at that ticket's station). The crew acts after a random delay (6 to 14 s by default), so if you cook slowly the server waits, and if you serve slowly the guest waits. Clock out or take a break and the crew covers your stages. The director also fires new tickets (the dining room) every few seconds while someone is on shift: at the cooks' stations, or anywhere in the kitchen if only servers are working.
 
 Pacing is set by environment variables on the bridge (defaults in brackets): `SPAWN_SECONDS` [8], `MAX_OPEN_TICKETS` [5, per staffed station], `CREW_MIN_SECONDS` [6], `CREW_MAX_SECONDS` [14], `DIRECTOR_TICK_SECONDS` [0.5], `GAME_DIRECTOR=0` to turn the director off. The Compose overlay passes the first four through from your shell, so `SPAWN_SECONDS=1 CREW_MIN_SECONDS=1 CREW_MAX_SECONDS=2 docker compose -f docker-compose.yml -f game/docker-compose.game.yml up -d game-bridge` gives a fast test run.
+
+## Guests
+
+A guest is not staff: no clock-in, no role, none of the rules above apply. Sit at a table, order from the menu (the same `world.MENU` the POS and plate-waste simulators use), and the order fires a kitchen ticket exactly as `order_fired` does -- the kitchen decides which cooking station, same as any other ticket. Pay once it is delivered, and a real `POSTransactionEvent` is published for the items ordered, tagged `player` (already an allowed value on that schema).
+
+```bash
+curl -s -H 'content-type: application/json' localhost:8001/api/guest/order \
+  -d '{"player_id":"gwen","table_id":"table-05","items":[{"menu_item_id":"menu-burger-classic","quantity":2}]}'
+
+curl -s 'localhost:8001/api/guest/status?player_id=gwen'   # progress and running total
+
+curl -s -H 'content-type: application/json' localhost:8001/api/guest/pay \
+  -d '{"player_id":"gwen","payment_method":"cash"}'   # 409 until delivered
+```
+
+A guest can only have one open order at a time (409 to order again before paying), and the kitchen can say no if every cooking station is at its ticket cap (503). In the client, "guest" is a fourth option in the role picker; picking it swaps the ticket board for a menu and a Place order button, and skips the staff clock-in entirely.
 
 ## Quarantine and comparison
 
@@ -130,6 +150,8 @@ Migration `005` changes tables the pipeline services are reading. If it appears 
 | A ticket arrives | `ServiceTimingEvent` `order_fired` | `crew`, `game-crew` (the dining room); table is random, station is a cook's |
 | Your button press | `ServiceTimingEvent` for the next stage | `player`, `game-<name>`; the bridge computes `elapsed_since_previous_stage_ms` |
 | The crew's stages | `ServiceTimingEvent` | `crew`, `game-crew` |
+| A guest orders | `ServiceTimingEvent` `order_fired` | `player`, `game-<guest>`; same ticket lifecycle as a staff-fired one |
+| A guest pays | `POSTransactionEvent` | `player`, `game-<guest>`; `line_items` are exactly what they ordered |
 
 Crew events are `crew`, not `player` or `simulated`, so anything downstream can tell a human's actions, the bridge's automated staff and the simulators apart. The bridge owns the rules (stage order, roles, stations, clock-in sequencing) and the timing of everything the crew does; the game only polls `GET /api/tickets`, presents it, and reports what the bridge rejected.
 
@@ -139,7 +161,8 @@ Crew events are `crew`, not `player` or `simulated`, so anything downstream can 
 # Bridge rules, roles and the crew: no Kafka and no waiting (a fake clock drives the director)
 cd game/bridge && pip install -r requirements.txt pytest httpx && python -m pytest test_bridge.py
 
-# Godot client and main scene, headless, against a live bridge (about a minute: it waits for the crew)
+# Godot client and main scene, headless, against a live bridge (a couple of minutes: it waits
+# for the crew, and for a guest's own order to be cooked with nobody staffed)
 godot4 --headless --path game/client -s res://tests/smoke_test.gd
 ```
 
@@ -149,9 +172,27 @@ The smoke test uses the fixed player id `smoke-test`, so repeated runs reuse one
 
 - Placeholder UI on Godot's default theme; no art, audio, or export presets yet.
 - Godot prints a few harmless lines at start-up under WSL2/WSLg: `xkbcommon ... unrecognized keysym "dead_hamza"` (the Godot snap's bundled keyboard table has a symbol its own library does not know; it only affects Arabic compose-key sequences) and `Could not set V-Sync mode` (the software OpenGL driver, Mesa llvmpipe, does not support it). Neither can be fixed from the project, and neither affects the game.
-- Only two roles are playable (line cook, server). Expo, host, bartender and dishwasher exist in the schema but have no game rules yet, and the guest side (ordering, eating, paying) is not built.
+- Only three staff roles are playable (line cook, expo, server). Host, bartender and dishwasher exist in the schema but have no game rules yet.
+- A guest session never expires and there is no way to cancel one before paying (the bridge has `MAX_TICKET_AGE_SECONDS` for the ticket itself, but not for the guest record); leaving mid-order and sitting down again as the same name is rejected with 409 until you pay. Tables have no exclusivity either -- two guests, or a guest and the dining room, can be seated at the same one.
 - Game timings are on a shorter clock (seconds per stage) than the simulators' (about 20 s by median), so they are quarantined from the anomaly baseline and compared instead (next section). Interactive tickets therefore produce no anomalies or causal findings of their own; the shift report is the player's feedback.
 - Two players in the same role share the tickets first come, first served; there is no queue or seating.
 - Bridge state (open tickets, clocked-in players) is in memory. If the bridge restarts mid-shift the board empties and you need to clock in again.
 - The director holds the bridge's state lock while it publishes, so a slow Kafka delays both the crew and the API.
-- The bridge is not deployed on Kubernetes.
+
+## Deploying to Kubernetes
+
+The bridge has its own chart, `game/k8s/bridge/`, kept out of the shared `k8s/` directory on purpose: that directory is version 1, and this chart exists only for the game. `game/k8s/deploy-bridge.sh` builds the image, imports it into k3s and runs `helm upgrade --install` in one step (`--dry-run` to see the steps first); it needs `sudo` (importing into containerd is root-only).
+
+```bash
+bash game/k8s/deploy-bridge.sh --dry-run
+bash game/k8s/deploy-bridge.sh
+```
+
+It deploys as a `ClusterIP` Service (no authentication, so it is never exposed outside the cluster) with the same defaults as the Compose overlay, overridable in `game/k8s/bridge/values.yaml`. Reach it the same way the dashboard and Grafana are reached on k3s:
+
+```bash
+kubectl port-forward svc/game-bridge -n kafka 8001:8001
+BRIDGE_URL=http://127.0.0.1:8001 godot4 --path game/client
+```
+
+The bridge bakes its schemas into the image at build time, so unlike the Phase 5-7 services it needs no ConfigMap. It is unaffected by `k8s/realign/realign-live-cluster.sh`, which only touches the shared platform; a schema or migration change that affects the bridge (as `005` did) still needs that script run first.

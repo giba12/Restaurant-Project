@@ -1,0 +1,10 @@
+apiVersion: v2
+name: game-bridge
+description: >
+  Version 2 only. Deploys game/bridge (the HTTP-to-Kafka bridge for the
+  interactive client) to k3s. Deliberately not under the shared k8s/
+  directory: version 1 never references version 2 (see game/README.md), so
+  the one chart that exists purely for the game lives under game/ instead.
+type: application
+version: 0.1.0
+appVersion: "1.0"

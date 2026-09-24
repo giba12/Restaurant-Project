@@ -7,6 +7,13 @@ extends Node
 
 var base_url: String = "http://127.0.0.1:8001"
 var timeout_seconds: float = 5.0
+# Sent as X-API-Key on every request to base_url (the bridge) or to
+# dashboard_url (set by main.gd from DASHBOARD_URL) -- the two services check
+# different keys, so both are held here. Neither is a chart default; both
+# come from a Secret at deploy time (see game/README.md's auth section).
+var api_key: String = ""
+var dashboard_api_key: String = ""
+var dashboard_url: String = ""
 
 
 func get_world() -> Dictionary:
@@ -60,6 +67,9 @@ func request_json(method: int, url: String, body: Variant = null) -> Dictionary:
 	http.timeout = timeout_seconds
 	add_child(http)
 	var headers := PackedStringArray(["Content-Type: application/json"])
+	var key := dashboard_api_key if (dashboard_url != "" and url.begins_with(dashboard_url)) else api_key
+	if key != "":
+		headers.append("X-API-Key: " + key)
 	var payload := "" if body == null else JSON.stringify(body)
 	var err := http.request(url, headers, method, payload)
 	if err != OK:

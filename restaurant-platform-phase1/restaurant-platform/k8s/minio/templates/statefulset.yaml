@@ -14,7 +14,22 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: minio
+      annotations:
+        # Forces a rollout when the Secret's *content* changes (e.g. a
+        # password rotation), not just its name -- MinIO only reads
+        # MINIO_ROOT_PASSWORD at container start, so without this a `helm
+        # upgrade` that only changes the password leaves the running pod on
+        # the old one while everything else (the bucket-init hook Job,
+        # pgBackRest, mc) picks up the new one from the Secret, producing a
+        # "signature does not match" auth failure. This makes the pod
+        # template hash change too, so `--wait` blocks on the real restart
+        # before any post-upgrade hook fires.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
     spec:
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.secretName }}
       containers:
         - name: minio
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -26,11 +41,19 @@ spec:
           # the edge-simulator image required one (study guide, Section
           # 2.6): this image's ENTRYPOINT is designed to take a
           # subcommand, unlike entrypoint.py's fixed startup path.
+          # --certs-dir turns on TLS the moment public.crt/private.key exist
+          # there (MinIO's own documented mechanism -- no separate "enable
+          # TLS" flag). Required because pgBackRest's S3 driver always
+          # speaks HTTPS with no plain-HTTP option (repo1-storage-verify-tls
+          # only skips certificate validation, not encryption) -- see
+          # k8s/timescaledb-backup/README.md.
           args:
             - server
             - /data
             - --console-address
             - ":9001"
+            - --certs-dir
+            - /certs
           ports:
             - containerPort: 9000
               name: s3-api
@@ -50,16 +73,21 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: tls
+              mountPath: /certs
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /minio/health/ready
               port: 9000
+              scheme: HTTPS
             initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /minio/health/live
               port: 9000
+              scheme: HTTPS
             initialDelaySeconds: 20
             periodSeconds: 20
           resources:

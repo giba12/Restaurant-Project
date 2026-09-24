@@ -20,6 +20,10 @@ services:
       kafka: { condition: service_healthy }
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # Checked on every route except /api/health (see main.py's
+      # require_api_key). The Godot client sends this via BRIDGE_API_KEY --
+      # export the same value before running it, or every call gets 401.
+      API_KEY: ${BRIDGE_API_KEY:-changeme-local-dev-only}
       # Game pacing (see game/README.md); set any of these in your shell or a .env
       # file to change it, e.g. SPAWN_SECONDS=1 for a fast test run.
       SPAWN_SECONDS: ${SPAWN_SECONDS:-8}

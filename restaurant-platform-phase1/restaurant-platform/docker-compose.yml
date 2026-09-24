@@ -285,6 +285,10 @@ services:
       PGDATABASE: restaurant_platform
       PGUSER: restaurant_app
       PGPASSWORD: ${TIMESCALEDB_PASSWORD:-changeme-local-dev-only}
+      # Checked by every route except /api/health (see main.py's
+      # require_api_key). nginx (dashboard-web, below) is the only caller --
+      # a browser never sees this value, since /api/ is same-origin proxied.
+      API_KEY: ${DASHBOARD_API_KEY:-changeme-local-dev-only}
 
   dashboard-web:
     restart: unless-stopped
@@ -294,6 +298,11 @@ services:
       - dashboard-api
     ports:
       - "8080:80"
+    environment:
+      # Injected into nginx.conf.template at container start (envsubst,
+      # built into the nginx:1.27-alpine image); must match dashboard-api's
+      # API_KEY above or every proxied request gets 401.
+      DASHBOARD_API_KEY: ${DASHBOARD_API_KEY:-changeme-local-dev-only}
 
   # -------------------------------------------------------------------
   # Local LLM -- containerized here (unlike the k3s path, which runs

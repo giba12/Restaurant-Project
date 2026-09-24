@@ -121,9 +121,14 @@ def api(monkeypatch):
 
     monkeypatch.setattr(main, "_fetch_event_rows", events)
     monkeypatch.setattr(main, "_fetch_summary_rows", summaries)
+    # This section tests /api/comparison's own logic, not the X-API-Key check
+    # (see test_auth.py for that) -- bypass it the same way test_bridge.py
+    # bypasses the bridge's equivalent dependency.
+    main.app.dependency_overrides[main.require_api_key] = lambda: None
     c = TestClient(main.app)
     c.calls = calls
-    return c
+    yield c
+    main.app.dependency_overrides.pop(main.require_api_key, None)
 
 
 def test_endpoint_defaults_to_the_last_24_hours_and_all_players(api):

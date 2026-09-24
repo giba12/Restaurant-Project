@@ -1,0 +1,101 @@
+# NOT installed by `helm install` -- there is no hook annotation here on
+# purpose. An untested backup is not a backup, so this restores the latest
+# one into a SCRATCH pod (a fresh emptyDir, never the real data-timescaledb-0
+# PVC) and queries it, proving the backup is actually usable rather than
+# just present. Applied on demand by restore-drill.sh, which also deletes it
+# afterward -- a Job's Pod is not automatically cleaned up on completion.
+#
+# emptyDir, not a PVC: this Pod is disposable and short-lived, and a PVC
+# would outlive it for no reason. Its restored data only needs to survive
+# long enough for the verification query below to run.
+#
+# The if-guard below is the actual mechanism behind "not installed by helm
+# install" -- a template with no hook annotation is still a completely
+# normal resource that gets applied on every install/upgrade, hook or not.
+# Without this guard the very first `helm install` created this Job before
+# any backup existed for it to restore, it failed fast, and every later
+# `helm upgrade` then either silently ignored it or (depending on how Helm's
+# --wait happened to poll it that run) blocked forever on a Job that
+# `backoffLimit: 0` guarantees will never become ready again. restore-drill.sh
+# is the only thing that ever sets restoreDrill.enabled=true.
+{{- if .Values.restoreDrill.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: timescaledb-restore-drill
+  namespace: kafka
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: scratch-pgdata
+          emptyDir: {}
+        - name: pgbackrest-conf
+          configMap:
+            name: timescaledb-pgbackrest-conf
+      containers:
+        - name: restore-drill
+          image: "{{ .Values.image.repository | default "timescale/timescaledb-ha" }}:{{ .Values.image.tag | default "pg16-ts2.16-all" }}"
+          env:
+            - name: PGBACKREST_REPO1_S3_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.minioCredentials.secretName }}
+                  key: access-key
+            - name: PGBACKREST_REPO1_S3_KEY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.minioCredentials.secretName }}
+                  key: secret-key
+          volumeMounts:
+            - name: scratch-pgdata
+              mountPath: /scratch
+            - name: pgbackrest-conf
+              mountPath: /etc/pgbackrest
+              readOnly: true
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              echo "== restoring the latest backup into /scratch/pgdata (a throwaway path, not the real database) =="
+              pgbackrest --config=/etc/pgbackrest/pgbackrest.conf --stanza={{ .Values.stanza }} \
+                --pg1-path=/scratch/pgdata restore
+
+              # No su/gosu/chown needed -- confirmed via `docker inspect` that this
+              # image's own USER is already postgres (docker-entrypoint.sh normally
+              # execs to it via gosu before ever running the postgres binary), so
+              # the restored files are already owned by the user this container
+              # runs as.
+              postgres -D /scratch/pgdata -p 5433 &
+              PG_PID=$!
+
+              # A pgBackRest restore leaves postgresql.auto.conf configured for
+              # archive recovery, so Postgres replays WAL from the repo before it
+              # will accept connections -- how long that takes depends on how much
+              # WAL there is, so poll for readiness instead of guessing a fixed
+              # sleep (a flat `sleep 8` failed here: recovery was still replaying
+              # WAL fetched from MinIO past that point).
+              echo "== waiting for recovery to finish and postgres to accept connections =="
+              for i in $(seq 1 60); do
+                pg_isready -p 5433 -q && break
+                sleep 2
+              done
+              pg_isready -p 5433 -q || { echo "postgres did not become ready within 120s" >&2; exit 1; }
+
+              echo "== the actual proof: row counts and the newest timestamp in the restored copy =="
+              # -U is required: psql with no -U defaults to connecting as whichever
+              # OS user is running it (postgres, per the container's own USER), and
+              # this restored copy has no "postgres" role either -- same reason
+              # pgbackrest itself needed pg1-user set (see values.yaml's pg.user).
+              psql -p 5433 -U {{ .Values.pg.user }} -d {{ .Values.pg.dbName | default "restaurant_platform" }} -c "
+                select 'plate_waste_events' t, count(*), max(\"timestamp\") from plate_waste_events
+                union all select 'pos_transaction_events', count(*), max(\"timestamp\") from pos_transaction_events
+                union all select 'staff_shift_events', count(*), max(\"timestamp\") from staff_shift_events
+                union all select 'service_timing_events', count(*), max(\"timestamp\") from service_timing_events;"
+
+              kill "$PG_PID"
+              echo "== restore drill complete: the numbers above came from the backup repo, not the live database =="
+{{- end }}

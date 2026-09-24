@@ -26,6 +26,14 @@ spec:
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
+            # existingSecret only, no chart default -- see main.py's own
+            # comment on require_api_key for why. Godot reads the same
+            # value via BRIDGE_API_KEY (game/README.md's auth section).
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.apiKeySecretName }}
+                  key: api-key
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
 ---

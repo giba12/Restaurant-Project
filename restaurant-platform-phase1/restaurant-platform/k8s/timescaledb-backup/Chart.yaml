@@ -1,0 +1,15 @@
+apiVersion: v2
+name: timescaledb-backup
+description: >
+  pgBackRest configuration and scheduled backup jobs for the timescaledb
+  release, backing up to the existing MinIO deployment. Separate from the
+  k8s/timescaledb chart itself (which mounts this chart's ConfigMap by
+  fixed name, the same cross-chart pattern k8s/phase5-schemas already
+  uses) so the backup machinery -- RBAC, CronJobs, restore tooling -- has
+  its own home instead of growing inside the database chart. Must be
+  installed (or upgraded) before k8s/timescaledb picks up the new
+  volumeMount, for the same reason phase5-schemas must precede its
+  consumers: Kubernetes cannot mount a ConfigMap that does not exist yet.
+type: application
+version: 0.1.0
+appVersion: "1.0"

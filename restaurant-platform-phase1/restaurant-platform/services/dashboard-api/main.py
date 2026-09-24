@@ -12,23 +12,44 @@ No write endpoints. This service only ever SELECTs.
 """
 import contextlib
 import os
+import secrets as _secrets
 import sys
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import phase5_common as common
 import comparison
 
-app = FastAPI(title="restaurant-platform dashboard-api")
+# Set from a Secret (see k8s/dashboard/templates/deployment.yaml), never a
+# chart default -- there is no working placeholder for this the way there
+# is for a database password, since the whole point is that nothing except
+# nginx's own proxy (see services/dashboard-web/nginx.conf.template) should
+# know it. compare_digest, not `==`, so response timing cannot leak how
+# many leading characters of a guess were correct.
+API_KEY = os.environ.get("API_KEY", "")
+
+
+def require_api_key(request: Request, x_api_key: str = Header(default="")) -> None:
+    if request.url.path == "/api/health":
+        return  # unauthenticated on purpose: reveals nothing, lets a plain uptime check work
+    if not API_KEY:
+        # Fail loud, not open: an unset API_KEY means the deployment forgot to
+        # configure one, which must not be indistinguishable from "auth disabled".
+        raise HTTPException(status_code=500, detail="server misconfigured: API_KEY is not set")
+    if not _secrets.compare_digest(x_api_key, API_KEY):
+        raise HTTPException(status_code=401, detail="missing or invalid X-API-Key")
+
+
+app = FastAPI(title="restaurant-platform dashboard-api", dependencies=[Depends(require_api_key)])
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # local dev / portfolio demo only -- not a public deployment
-    allow_methods=["GET"],
-    allow_headers=["*"],
+    allow_origins=["*"],  # local dev (a Vite dev server on a different port) only; browsers
+    allow_methods=["GET"],  # calling dashboard-web's own origin never trigger CORS at all,
+    allow_headers=["*"],  # since nginx proxies /api/ same-origin -- see nginx.conf.template
 )
 
 

@@ -1,0 +1,43 @@
+# pgbackrest.conf, mounted into the timescaledb pod itself at
+# /etc/pgbackrest/pgbackrest.conf (see k8s/timescaledb/templates/statefulset.yaml)
+# so that Postgres's own archive_command (running as a subprocess inside
+# that same container) and the backup CronJobs below (reached via
+# kubectl exec into that pod) both use one definition.
+#
+# The two S3 credential values (repo1-s3-key / repo1-s3-key-secret) are
+# deliberately NOT in this file: pgBackRest reads them from the
+# PGBACKREST_REPO1_S3_KEY / PGBACKREST_REPO1_S3_KEY_SECRET environment
+# variables instead (a documented pgBackRest mechanism, not a workaround),
+# which the timescaledb pod gets from the existingSecret named in
+# values.yaml -- the same config/credential split every other service in
+# this project already follows (e.g. PGPASSWORD via secretKeyRef, never
+# in a ConfigMap).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # Fixed name, not release-name-templated -- k8s/timescaledb's own
+  # StatefulSet references this exact literal name, the same convention
+  # k8s/phase5-schemas already established for the same reason (a
+  # consuming chart cannot know this chart's Helm release name).
+  name: timescaledb-pgbackrest-conf
+data:
+  pgbackrest.conf: |
+    [global]
+    repo1-type={{ .Values.repo.type }}
+    repo1-s3-endpoint={{ .Values.repo.s3Endpoint }}
+    repo1-storage-port={{ .Values.repo.s3Port }}
+    repo1-storage-verify-tls={{ if .Values.repo.s3VerifyTls }}y{{ else }}n{{ end }}
+    repo1-s3-uri-style={{ .Values.repo.s3UriStyle }}
+    repo1-s3-bucket={{ .Values.repo.s3Bucket }}
+    repo1-s3-region={{ .Values.repo.s3Region }}
+    repo1-path={{ .Values.repo.path }}
+    repo1-retention-full={{ .Values.repo.retentionFull }}
+    repo1-retention-full-type={{ .Values.repo.retentionFullType }}
+    compress-type={{ .Values.repo.compressType }}
+    start-fast=y
+    log-level-console=info
+
+    [{{ .Values.stanza }}]
+    pg1-path={{ .Values.pg.path }}
+    pg1-port={{ .Values.pg.port }}
+    pg1-user={{ .Values.pg.user }}

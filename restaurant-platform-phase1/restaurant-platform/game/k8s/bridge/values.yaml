@@ -19,6 +19,9 @@ service:
   type: ClusterIP
   port: 8001
 
+# existingSecret only -- see game/k8s/deploy-bridge.sh, which generates it.
+apiKeySecretName: game-bridge-credentials
+
 resources:
   requests:
     cpu: 50m

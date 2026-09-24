@@ -37,9 +37,35 @@ spec:
                   key: password
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
+            # pgBackRest (already bundled in this image) reads these two S3
+            # credential values from the environment rather than from
+            # pgbackrest.conf -- a documented pgBackRest mechanism, kept
+            # consistent with how every other credential in this project is
+            # injected (never in a ConfigMap). Postgres's own archive_command
+            # (set once via bootstrap.sh, see k8s/timescaledb-backup/) runs as
+            # a subprocess of this same container, so it inherits these too.
+            # Secret name is fixed, matching k8s/timescaledb-backup/values.yaml's
+            # minioCredentials.secretName -- that chart must be installed
+            # first, the same ordering k8s/phase5-schemas already requires.
+            - name: PGBACKREST_REPO1_S3_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pgbackrest-minio-credentials
+                  key: access-key
+            - name: PGBACKREST_REPO1_S3_KEY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pgbackrest-minio-credentials
+                  key: secret-key
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            # Fixed ConfigMap name from k8s/timescaledb-backup -- see the
+            # PGBACKREST_REPO1_S3_KEY comment above for why that chart must
+            # exist first.
+            - name: pgbackrest-conf
+              mountPath: /etc/pgbackrest
+              readOnly: true
           # Readiness/liveness both use pg_isready rather than a bare TCP
           # check -- a pod-level "Running" state does not confirm
           # Postgres itself is accepting connections (same class of
@@ -69,6 +95,10 @@ spec:
             timeoutSeconds: 5
           resources:
 {{ toYaml .Values.resources | indent 12 }}
+      volumes:
+        - name: pgbackrest-conf
+          configMap:
+            name: timescaledb-pgbackrest-conf
   volumeClaimTemplates:
     - metadata:
         name: data

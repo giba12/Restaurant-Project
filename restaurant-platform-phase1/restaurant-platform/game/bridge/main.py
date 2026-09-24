@@ -55,14 +55,15 @@ the simulators' TicketLifecycle/ShiftState. A ticket left open across a
 bridge restart gets a 404 on its next stage; the client re-reads GET
 /api/tickets and simply stops seeing it.
 
-Limits: no authentication -- local demo only, like dashboard-api's open CORS.
-The director holds the state lock while it publishes, as the API does, so a
-slow Kafka delays both.
+Limits: no authentication beyond the shared API key below; local demo only,
+like dashboard-api's open CORS. The director holds the state lock while it
+publishes, as the API does, so a slow Kafka delays both.
 """
 import json
 import logging
 import os
 import random
+import secrets as _secrets
 import threading
 import time
 import uuid
@@ -70,11 +71,29 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import jsonschema
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 import world  # copied from edge-simulators/common/world.py at image build
+
+# Set from a Secret (see game/k8s/bridge/templates/deployment.yaml), never a
+# chart default. The Godot client is a trusted first-party app (unlike a
+# browser page, its source is not served to whoever is playing), so it is
+# reasonable for it to hold this key directly via BRIDGE_API_KEY -- the same
+# trust model as a desktop game holding its own server credentials, not the
+# zero-trust model a public web app needs.
+API_KEY = os.environ.get("API_KEY", "")
+
+
+def require_api_key(request: Request, x_api_key: str = Header(default="")) -> None:
+    if request.url.path == "/api/health":
+        return
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="server misconfigured: API_KEY is not set")
+    if not _secrets.compare_digest(x_api_key, API_KEY):
+        raise HTTPException(status_code=401, detail="missing or invalid X-API-Key")
+
 
 KAFKA_BOOTSTRAP_SERVERS = os.environ.get(
     "KAFKA_BOOTSTRAP_SERVERS",
@@ -166,7 +185,7 @@ async def lifespan(_app: FastAPI):
     stop.set()
 
 
-app = FastAPI(title="restaurant-platform game-bridge", lifespan=lifespan)
+app = FastAPI(title="restaurant-platform game-bridge", lifespan=lifespan, dependencies=[Depends(require_api_key)])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # local demo only; needed if the game is exported to the web

@@ -37,6 +37,16 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.api.pgPasswordSecretName }}
                   key: {{ .Values.api.pgPasswordSecretKey }}
+            # existingSecret only, no chart default (see require_api_key's own
+            # comment in main.py for why there is no working placeholder for
+            # this the way there is for a database password). Same Secret and
+            # key dashboard-web's DASHBOARD_API_KEY reads below -- nginx is
+            # the only caller, so the two must always match.
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.apiKeySecretName }}
+                  key: api-key
           resources:
             {{- toYaml .Values.api.resources | nindent 12 }}
 ---
@@ -75,8 +85,34 @@ spec:
           imagePullPolicy: {{ .Values.web.image.pullPolicy }}
           ports:
             - containerPort: 80
+          env:
+            - name: DASHBOARD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.apiKeySecretName }}
+                  key: api-key
+          volumeMounts:
+            # Overrides the image's own baked-in nginx.conf.template (which
+            # has no auth_basic -- see services/dashboard-web/nginx.conf.template's
+            # header comment) with this chart's own copy, adding HTTP Basic
+            # Auth for humans. Both get envsubst'd the same way at container
+            # start; k8s just supplies a different template.
+            - name: nginx-conf
+              mountPath: /etc/nginx/templates/default.conf.template
+              subPath: default.conf.template
+            - name: htpasswd
+              mountPath: /etc/nginx/.htpasswd
+              subPath: .htpasswd
+              readOnly: true
           resources:
             {{- toYaml .Values.web.resources | nindent 12 }}
+      volumes:
+        - name: nginx-conf
+          configMap:
+            name: dashboard-web-nginx-conf
+        - name: htpasswd
+          secret:
+            secretName: {{ .Values.htpasswdSecretName }}
 ---
 apiVersion: v1
 kind: Service

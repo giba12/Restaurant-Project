@@ -4,3 +4,8 @@ __pycache__/
 .venv/
 .venv-1/
 venv/
+
+# Real credentials for helm upgrade --set-file/-f, generated locally by
+# k8s/*/bootstrap*.sh and never committed. See k8s/timescaledb-backup/README.md
+# for why nothing here is a chart-generated Secret with a plaintext default.
+restaurant-platform/k8s/secrets/

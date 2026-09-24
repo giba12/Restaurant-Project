@@ -1,0 +1,79 @@
+# pgBackRest's own vocabulary: a "stanza" is the name of one configured
+# Postgres cluster (arbitrary, but it appears in every pgbackrest command,
+# so keep it descriptive). One stanza here -- one Postgres cluster to
+# back up.
+stanza: restaurant-platform
+
+pg:
+  # Must match k8s/timescaledb/templates/statefulset.yaml's PGDATA exactly --
+  # pgBackRest reads WAL and base files directly off this path.
+  path: /var/lib/postgresql/data/pgdata
+  port: 5432
+  dbName: restaurant_platform
+  # pgBackRest defaults to connecting as role "postgres" -- this cluster has
+  # no such role. The official Postgres image only creates the role named by
+  # POSTGRES_USER at initdb time (k8s/timescaledb/values.yaml's
+  # credentials.username), so restaurant_app is both the app role AND the
+  # cluster's one superuser. (The "postgres" *database* still exists --
+  # initdb always creates it -- which is why stanza-create got as far as a
+  # role-not-found error instead of a database-not-found one.)
+  user: restaurant_app
+
+# Only used by the restore drill (a scratch pod, never the real database) --
+# must match k8s/timescaledb/values.yaml's image exactly, since pgBackRest's
+# restore format has to match the version that took the backup.
+image:
+  repository: timescale/timescaledb-ha
+  tag: pg16-ts2.16-all
+
+repo:
+  # The existing MinIO deployment (k8s/minio), not a new dependency. Its
+  # console/root credentials are never used here -- see bootstrap.sh, which
+  # creates a bucket-scoped MinIO user instead (least privilege, the same
+  # principle behind the narrator's own restricted database role).
+  type: s3
+  s3Endpoint: minio.kafka.svc.cluster.local
+  s3Port: 9000
+  s3VerifyTls: false  # MinIO's in-cluster Service is plain HTTP; see the TLS item in the status doc
+  s3UriStyle: path      # MinIO needs path-style addressing, not virtual-hosted-style
+  s3Bucket: timescaledb-backups
+  s3Region: us-east-1   # meaningless to MinIO, but pgBackRest requires some value
+  path: /pgbackrest       # prefix inside the bucket, so the bucket could hold more than one thing later
+  # A full backup captures everything; a differential captures everything
+  # changed since the last full (not since the last diff -- that's an
+  # "incremental", which this project does not use, favoring the simpler
+  # two-tier full/diff scheme over a three-tier full/diff/incr one, since
+  # a week's worth of diffs from one full is not enough data for the
+  # extra restore-chain complexity incrementals exist to solve).
+  retentionFull: 4       # keep 4 full backups (~1 month at the weekly schedule below)
+  retentionFullType: count
+  compressType: zst
+
+# Both times are UTC, chosen to land during the simulators' natural low
+# point (there isn't a real one -- they run continuously -- so this is
+# arbitrary; change freely).
+schedule:
+  full: "0 3 * * 0"    # Sunday 03:00 UTC
+  diff: "0 3 * * 1-6"  # Mon-Sat 03:00 UTC
+
+# alpine/k8s bundles kubectl (and helm, unused here) on Alpine, actively
+# maintained, multi-arch, pinned to a specific tag -- picked over
+# bitnami/kubectl per this project's own documented lesson (Bitnami's
+# 2025-08-28 catalog restructuring broke an unrelated image reference
+# earlier in this project; see the study guide's general principle
+# about pinned external references going stale via distribution-channel
+# changes, not just version bumps).
+kubectlImage:
+  repository: docker.io/alpine/k8s
+  tag: "1.30.2"
+
+# existingSecret only -- this chart never generates MinIO credentials
+# itself. bootstrap.sh creates both the MinIO user and this Secret
+# together, so the two can never drift out of sync silently.
+minioCredentials:
+  secretName: pgbackrest-minio-credentials
+
+# Always false for a normal install/upgrade -- see templates/restore-drill-job.yaml's
+# own comment. restore-drill.sh is the only thing that overrides this to true.
+restoreDrill:
+  enabled: false

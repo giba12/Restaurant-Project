@@ -1,0 +1,77 @@
+# Two schedules, not one CronJob with day-of-week logic: full and diff are
+# different pgbackrest commands, and two plain CronJob objects are each
+# individually inspectable/pausable/observable in `kubectl get cronjob`,
+# rather than one job whose behavior depends on a script checking the day.
+#
+# Each container is `kubectl exec` into the timescaledb pod, not a
+# pgBackRest client of its own: it shares that pod's SAME
+# /etc/pgbackrest/pgbackrest.conf and, more importantly, its SAME
+# PGDATA volume mount, which pgBackRest needs local filesystem access to.
+# A separate pod backing up over the network would need pgBackRest's TLS
+# remote-repo protocol -- unnecessary complexity when the target pod
+# already has everything it needs and only wants telling when to run.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: timescaledb-backup-full
+  namespace: kafka
+spec:
+  schedule: {{ .Values.schedule.full | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: timescaledb-backup
+          restartPolicy: Never
+          containers:
+            - name: backup-full
+              image: "{{ .Values.kubectlImage.repository }}:{{ .Values.kubectlImage.tag }}"
+              command:
+                - kubectl
+                - exec
+                - timescaledb-0
+                - -n
+                - kafka
+                - --
+                - pgbackrest
+                - --config=/etc/pgbackrest/pgbackrest.conf
+                - --stanza={{ .Values.stanza }}
+                - --type=full
+                - backup
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: timescaledb-backup-diff
+  namespace: kafka
+spec:
+  schedule: {{ .Values.schedule.diff | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: timescaledb-backup
+          restartPolicy: Never
+          containers:
+            - name: backup-diff
+              image: "{{ .Values.kubectlImage.repository }}:{{ .Values.kubectlImage.tag }}"
+              command:
+                - kubectl
+                - exec
+                - timescaledb-0
+                - -n
+                - kafka
+                - --
+                - pgbackrest
+                - --config=/etc/pgbackrest/pgbackrest.conf
+                - --stanza={{ .Values.stanza }}
+                - --type=diff
+                - backup

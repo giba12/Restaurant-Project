@@ -98,6 +98,7 @@ func _run() -> void:
 	var env := OS.get_environment("BRIDGE_URL")
 	if env != "":
 		bridge.base_url = env
+	bridge.api_key = OS.get_environment("BRIDGE_API_KEY")  # this section only ever calls the bridge, not the dashboard
 
 	print("== shift report formatting (canned data, no network) ==")
 	_test_report_format()

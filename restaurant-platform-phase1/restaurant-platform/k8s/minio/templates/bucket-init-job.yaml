@@ -1,7 +1,9 @@
 # Creates the placeholder bucket on every install/upgrade. `mc mb
 # --ignore-existing` makes this idempotent, matching the same
 # re-runnable-without-side-effects standard as the TimescaleDB schema
-# Job.
+# Job. `--insecure` skips certificate validation for MinIO's self-signed
+# TLS cert (k8s/minio/values.yaml's tls.secretName) -- there's no CA here
+# to validate against, and nothing outside the cluster ever talks to MinIO.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -22,11 +24,11 @@ spec:
             - sh
             - -c
             - |
-              until mc alias set local http://{{ .Release.Name }}:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
+              until mc --insecure alias set local https://{{ .Release.Name }}:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
                 echo "waiting for minio..."
                 sleep 3
               done
-              mc mb --ignore-existing local/{{ .Values.bucket.name }}
+              mc --insecure mb --ignore-existing local/{{ .Values.bucket.name }}
           env:
             - name: MINIO_ROOT_USER
               valueFrom:

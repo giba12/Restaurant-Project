@@ -117,6 +117,9 @@ func _ready() -> void:
 	var dash_env := OS.get_environment("DASHBOARD_URL")
 	if dash_env != "":
 		dashboard_url = dash_env
+	bridge.dashboard_url = dashboard_url
+	bridge.api_key = OS.get_environment("BRIDGE_API_KEY")
+	bridge.dashboard_api_key = OS.get_environment("DASHBOARD_API_KEY")
 
 	# Closing the window mid-shift should clock the player out, otherwise the
 	# digital twin shows them on shift forever.

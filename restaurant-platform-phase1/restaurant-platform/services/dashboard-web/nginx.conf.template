@@ -1,0 +1,25 @@
+# Processed by the base image's own entrypoint (envsubst on every
+# /etc/nginx/templates/*.template file at container start -- no extra
+# tooling, this is a documented nginx:1.27-alpine feature) so
+# DASHBOARD_API_KEY never has to be baked into the image or committed
+# anywhere: it is read from the environment fresh on every start.
+#
+# k8s replaces this whole file with its own template (adding HTTP Basic
+# Auth for humans) by mounting over this same path -- see
+# k8s/dashboard/templates/nginx-configmap.yaml. Compose uses this one
+# as-is: a recruiter running the one-command demo should not need a
+# password to look at it, unlike the k3s path, which is reachable for
+# longer and by more than one person.
+server {
+    listen 80;
+
+    location /api/ {
+        proxy_pass http://dashboard-api:8000/api/;
+        proxy_set_header X-API-Key "${DASHBOARD_API_KEY}";
+    }
+
+    location / {
+        root /usr/share/nginx/html;
+        try_files $uri /index.html;
+    }
+}

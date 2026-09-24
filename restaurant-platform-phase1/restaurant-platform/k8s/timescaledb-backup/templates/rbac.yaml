@@ -1,0 +1,39 @@
+# Least privilege, the same principle as the narrator's own restricted
+# database role (storage/schema/003_phase6.sql): the backup CronJobs can
+# exec into exactly one pod and nothing else -- not list pods, not exec
+# into any other pod, not touch any other resource. A namespaced Role
+# (not ClusterRole) scoped by resourceNames, not a wildcard.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: timescaledb-backup
+  namespace: kafka
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: timescaledb-backup-exec
+  namespace: kafka
+rules:
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    resourceNames: ["timescaledb-0"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    resourceNames: ["timescaledb-0"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: timescaledb-backup-exec
+  namespace: kafka
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: timescaledb-backup-exec
+subjects:
+  - kind: ServiceAccount
+    name: timescaledb-backup
+    namespace: kafka

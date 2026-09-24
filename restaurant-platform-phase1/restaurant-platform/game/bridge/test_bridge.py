@@ -41,6 +41,13 @@ def client(monkeypatch):
     main._ticket_to_guest.clear()
     published = []
     clock = FakeClock()
+    # Every route here is testing game logic, not the auth layer (that has its
+    # own tests below) -- app.dependency_overrides, not monkeypatching
+    # require_api_key itself, because FastAPI resolved Depends(require_api_key)
+    # to the original function object when `app = FastAPI(...)` ran at import
+    # time; overriding the module attribute afterwards would not change what
+    # a request actually calls.
+    main.app.dependency_overrides[main.require_api_key] = lambda: None
     monkeypatch.setattr(main, "_publish", lambda topic, event: published.append((topic, event)))
     monkeypatch.setattr(main, "_clock", clock)
     # The dining room is off by default (no spawn for a very long time), so tests about
@@ -54,7 +61,8 @@ def client(monkeypatch):
     c.published = published
     c.clock = clock
     c.monkeypatch = monkeypatch
-    return c
+    yield c
+    main.app.dependency_overrides.pop(main.require_api_key, None)  # else it leaks into the auth tests below
 
 
 def spawner_on(client):
@@ -635,3 +643,34 @@ def test_a_slow_but_still_progressing_order_is_not_evicted_early(client, monkeyp
     for _ in range(10):
         tick(client, 5.0)
     assert client.get("/api/guest/status", params={"player_id": "gwen"}).status_code == 200
+
+
+# ------------------------------------------------ authentication
+
+def test_auth_is_enforced_on_a_real_request(monkeypatch):
+    # A fresh TestClient with NO dependency_overrides -- the fixture above
+    # exists precisely to bypass this for every other test, so this section
+    # deliberately does not use it.
+    monkeypatch.setattr(main, "API_KEY", "the-real-key")
+    monkeypatch.setattr(main, "_publish", lambda topic, event: None)
+    c = TestClient(main.app)
+    try:
+        assert c.get("/api/world").status_code == 401
+        assert c.get("/api/world", headers={"X-API-Key": "wrong"}).status_code == 401
+        assert c.get("/api/world", headers={"X-API-Key": "the-real-key"}).status_code == 200
+        assert c.get("/api/health").status_code == 200  # no key needed
+    finally:
+        main.app.dependency_overrides.pop(main.require_api_key, None)
+
+
+def test_an_unset_api_key_fails_closed_not_open(monkeypatch):
+    # A deployment that forgot to configure API_KEY must not become
+    # equivalent to "authentication disabled".
+    monkeypatch.setattr(main, "API_KEY", "")
+    c = TestClient(main.app)
+    try:
+        r = c.get("/api/world", headers={"X-API-Key": "anything"})
+        assert r.status_code == 500 and "API_KEY" in r.text
+        assert c.get("/api/health").status_code == 200
+    finally:
+        main.app.dependency_overrides.pop(main.require_api_key, None)

@@ -17,11 +17,22 @@ spec:
           image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
           ports:
             - containerPort: 1883
+            - containerPort: 8883
           volumeMounts:
             - name: config
               mountPath: /mosquitto/config/mosquitto.conf
               subPath: mosquitto.conf
+            - name: tls
+              mountPath: /mosquitto/certs
+              readOnly: true
       volumes:
         - name: config
           configMap:
             name: mosquitto-config
+        - name: tls
+          secret:
+            # existingSecret only -- k8s/mosquitto-tls/enable-mqtt-tls.sh
+            # generates this the same way k8s/harden's MinIO cert is
+            # generated: a plain self-signed openssl cert, since nothing
+            # outside the cluster ever talks to Mosquitto either.
+            secretName: mosquitto-tls

@@ -24,6 +24,8 @@ spec:
           env:
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: {{ .Values.env.KAFKA_BOOTSTRAP_SERVERS | quote }}
+            - name: KAFKA_SECURITY_PROTOCOL
+              value: {{ .Values.env.KAFKA_SECURITY_PROTOCOL | quote }}
             - name: PGHOST
               value: {{ .Values.env.PGHOST | quote }}
             - name: PGPORT
@@ -45,6 +47,9 @@ spec:
             - name: schemas
               mountPath: /app/schemas
               readOnly: true
+            - name: kafka-tls
+              mountPath: /etc/kafka-tls
+              readOnly: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
@@ -57,3 +62,6 @@ spec:
             # guide (Section 4.3); it is deliberately owned in exactly one
             # place and referenced by name from every consuming chart.
             name: phase5-schemas
+        - name: kafka-tls
+          secret:
+            secretName: {{ .Values.kafkaTlsSecretName }}

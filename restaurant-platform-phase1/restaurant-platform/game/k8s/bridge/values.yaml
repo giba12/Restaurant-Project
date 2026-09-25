@@ -6,7 +6,10 @@ image:
 # Same defaults as main.py / the Compose overlay; override any of these to
 # change pacing without a rebuild.
 env:
-  KAFKA_BOOTSTRAP_SERVERS: "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+  KAFKA_BOOTSTRAP_SERVERS: "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9093"
+  # Migrated to SSL/9093 on 2026-09-25 (k8s/kafka-tls/cutover-tls.sh) -- the
+  # plaintext "plain" listener this used to point at no longer exists.
+  KAFKA_SECURITY_PROTOCOL: "SSL"
   MAX_TICKET_AGE_SECONDS: "3600"
   SPAWN_SECONDS: "8"
   MAX_OPEN_TICKETS: "5"
@@ -21,6 +24,12 @@ service:
 
 # existingSecret only -- see game/k8s/deploy-bridge.sh, which generates it.
 apiKeySecretName: game-bridge-credentials
+
+# Strimzi's auto-generated cluster CA -- exists regardless of whether any
+# listener uses TLS yet (Strimzi also uses it for inter-broker traffic), so
+# mounting it here is always safe. "<Kafka CR name>-cluster-ca-cert" is
+# Strimzi's own fixed naming convention, not something this chart invents.
+kafkaTlsSecretName: "restaurant-platform-kafka-cluster-ca-cert"
 
 resources:
   requests:

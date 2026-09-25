@@ -64,6 +64,7 @@ import logging
 import os
 import random
 import secrets as _secrets
+import ssl
 import threading
 import time
 import uuid
@@ -97,7 +98,28 @@ def require_api_key(request: Request, x_api_key: str = Header(default="")) -> No
 
 KAFKA_BOOTSTRAP_SERVERS = os.environ.get(
     "KAFKA_BOOTSTRAP_SERVERS",
-    "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092",
+    # Dead in practice: game/k8s/bridge's chart always sets this explicitly
+    # (see services/phase5_common.py's identical note on why this is
+    # :9093, not the removed plaintext :9092, since 2026-09-25).
+    "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9093",
+)
+# Same opt-in TLS pattern as services/phase5_common.py's KAFKA_TLS_KWARGS
+# (kept local -- this package has never depended on services/). Defaults to
+# today's plaintext behavior, {}.
+#
+# ssl_context, not ssl_cafile: kafka-python 2.0.2's own internal SSLContext
+# construction fails the handshake against this broker outright, for
+# reasons that don't trace to the cert, hostname, or network path --
+# confirmed live by hand-rolling the same handshake with plain
+# ssl.create_default_context(), which negotiates TLSv1.3 successfully.
+# ssl_context sidesteps kafka-python's own construction entirely (see
+# services/phase5_common.py's longer note on this).
+KAFKA_SECURITY_PROTOCOL = os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")
+KAFKA_SSL_CAFILE = os.environ.get("KAFKA_SSL_CAFILE", "/etc/kafka-tls/ca.crt")
+KAFKA_TLS_KWARGS = (
+    {"security_protocol": KAFKA_SECURITY_PROTOCOL, "ssl_context": ssl.create_default_context(cafile=KAFKA_SSL_CAFILE)}
+    if KAFKA_SECURITY_PROTOCOL != "PLAINTEXT"
+    else {}
 )
 SCHEMA_DIR = os.environ.get("SCHEMA_DIR", "/app/schemas")
 # A ticket a player abandons mid-lifecycle would otherwise sit in memory forever.
@@ -228,6 +250,7 @@ def _get_producer():
             bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
             api_version=(2, 8, 0),  # pinned -- automatic negotiation fails against Kafka 4.3.1
             value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+            **KAFKA_TLS_KWARGS,
         )
     return _producer
 

@@ -142,6 +142,7 @@ def main():
         *TOPIC_HANDLER.keys(),
         bootstrap_servers=common.KAFKA_BOOTSTRAP_SERVERS,
         api_version=common.KAFKA_API_VERSION,
+        **common.KAFKA_TLS_KWARGS,
         group_id="digital-twin",
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
         enable_auto_commit=False,

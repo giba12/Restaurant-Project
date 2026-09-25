@@ -8,3 +8,17 @@ data:
     allow_anonymous true
     persistence false
     log_dest stdout
+
+    # Added alongside 1883 rather than replacing it -- same non-breaking,
+    # migrate-one-consumer-at-a-time pattern as Kafka's "tls" listener (see
+    # k8s/kafka-tls/). allow_anonymous above is a global default that
+    # applies here too since it's set before any listener block. cafile and
+    # certfile both point at the same self-signed cert (k8s/mosquitto-tls/
+    # generates it): mosquitto's listener config requires cafile even for
+    # server-only TLS with no client certificate requested, and since this
+    # cert is self-signed, it is trivially its own issuer -- one file plays
+    # both roles, the same simplification MinIO's TLS setup uses.
+    listener 8883
+    cafile /mosquitto/certs/tls.crt
+    certfile /mosquitto/certs/tls.crt
+    keyfile /mosquitto/certs/tls.key

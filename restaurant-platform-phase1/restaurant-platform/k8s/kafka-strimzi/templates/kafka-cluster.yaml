@@ -5,10 +5,24 @@ metadata:
 spec:
   kafka:
     listeners:
-      - name: plain
-        port: 9092
+      # "plain" (port 9092, no TLS) existed here from Phase 1 until
+      # 2026-09-25 -- removed once every consumer (9 Python services plus
+      # Kafka Connect's own broker connection, see services/phase5_common.py's
+      # KAFKA_TLS_KWARGS and k8s/kafka-tls/) was confirmed live and stable on
+      # "tls" below, per k8s/kafka-tls/cutover-tls.sh's own migrate-then-
+      # verify-then-remove design. Checked before removing: Strimzi's own
+      # Kafka Exporter (this chart's kafkaExporter: block) connects via a
+      # separate internal port (9091, Strimzi-managed, never user-configured
+      # here) and was never on this listener at all -- confirmed live via
+      # that pod's own KAFKA_EXPORTER_KAFKA_SERVER env var.
+      #
+      # No `authentication:` block -- this encrypts the wire, it does not
+      # add client authentication (a separate, larger concern; Kafka network
+      # policy already limits which pods can reach the broker at all).
+      - name: tls
+        port: 9093
         type: internal
-        tls: false
+        tls: true
     # Phase 7: JMX-to-Prometheus exporter, standard Strimzi mechanism --
     # no custom code, just this config. See templates/metrics-configmap.yaml.
     metricsConfig:

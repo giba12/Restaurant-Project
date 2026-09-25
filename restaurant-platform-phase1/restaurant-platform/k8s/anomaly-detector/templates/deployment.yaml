@@ -33,9 +33,15 @@ spec:
             - name: schemas
               mountPath: /app/schemas
               readOnly: true
+            - name: kafka-tls
+              mountPath: /etc/kafka-tls
+              readOnly: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
         - name: schemas
           configMap:
             name: phase5-schemas
+        - name: kafka-tls
+          secret:
+            secretName: {{ .Values.kafkaTlsSecretName }}

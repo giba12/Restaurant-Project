@@ -23,6 +23,8 @@ spec:
               value: {{ .Values.kafka.bootstrapServers | quote }}
             - name: KAFKA_CONSUMER_GROUP
               value: {{ .Values.kafka.consumerGroup | quote }}
+            - name: KAFKA_SECURITY_PROTOCOL
+              value: {{ .Values.kafka.securityProtocol | quote }}
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -36,5 +38,13 @@ spec:
             - name: TIMESCALE_DSN
               value: >-
                 postgresql://$(DB_USER):$(DB_PASSWORD)@{{ .Values.timescaledb.host }}:{{ .Values.timescaledb.port }}/{{ .Values.timescaledb.database }}
+          volumeMounts:
+            - name: kafka-tls
+              mountPath: /etc/kafka-tls
+              readOnly: true
           resources:
 {{ toYaml .Values.resources | indent 12 }}
+      volumes:
+        - name: kafka-tls
+          secret:
+            secretName: {{ .Values.kafka.tlsSecretName }}

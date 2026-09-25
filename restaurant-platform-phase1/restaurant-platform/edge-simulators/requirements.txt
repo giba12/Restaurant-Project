@@ -5,4 +5,7 @@ numpy>=1.26
 # import, only loaded when SCENARIO_CONTROL_ENABLED=true) -- listed here
 # anyway since all four simulators share one image. api_version pinned in
 # code, not here; see linux-k8s-docker-helm-study-guide.md Section 6.4.
-kafka-python==2.0.2
+# 2.0.2 could not complete a TLS handshake against this broker at all (see
+# services/phase5_common.py); 3.0.11 is verified live to fix it, plus the
+# api_version auto-negotiation bug pinned around elsewhere in this project.
+kafka-python==3.0.11

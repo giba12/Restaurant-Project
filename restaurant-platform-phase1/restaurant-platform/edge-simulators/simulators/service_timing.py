@@ -177,21 +177,50 @@ def _make_scenario_getter():
     dependency of this module when scenario control is disabled.
     """
     import json
+    import ssl
     import threading
     from kafka import KafkaConsumer
 
     state = {"active": None}
 
+    # Same opt-in TLS pattern as services/phase5_common.py's KAFKA_TLS_KWARGS
+    # (kept local rather than imported -- this package is deliberately
+    # separate from services/, see phase5_common.py's own docstring):
+    # defaults to today's plaintext behavior, {}; a k8s chart switches this
+    # simulator over by setting KAFKA_SECURITY_PROTOCOL=SSL and mounting
+    # Strimzi's CA cert at KAFKA_SSL_CAFILE's path.
+    #
+    # ssl_context, not ssl_cafile: kafka-python 2.0.2's own internal
+    # SSLContext construction fails the handshake against this broker
+    # outright, for reasons that don't trace to the cert, hostname, or
+    # network path -- confirmed live by hand-rolling the same handshake with
+    # plain ssl.create_default_context(), which negotiates TLSv1.3
+    # successfully. ssl_context sidesteps kafka-python's own construction
+    # entirely (see services/phase5_common.py's longer note on this).
+    _security_protocol = os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")
+    _tls_kwargs = (
+        {"security_protocol": _security_protocol,
+         "ssl_context": ssl.create_default_context(
+             cafile=os.environ.get("KAFKA_SSL_CAFILE", "/etc/kafka-tls/ca.crt"))}
+        if _security_protocol != "PLAINTEXT"
+        else {}
+    )
+
     def _run():
         consumer = KafkaConsumer(
             "scenario-control-events",
+            # Dead in practice: k8s/edge-simulators's chart always sets this
+            # explicitly (see services/phase5_common.py's identical note on
+            # why this is :9093, not the removed plaintext :9092, since
+            # 2026-09-25).
             bootstrap_servers=os.environ.get(
                 "KAFKA_BOOTSTRAP_SERVERS",
-                "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092",
+                "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9093",
             ),
             api_version=(2, 8, 0),  # required -- automatic negotiation fails against Kafka 4.3.1
             value_deserializer=lambda v: json.loads(v.decode("utf-8")),
             group_id="service-timing-scenario-control",
+            **_tls_kwargs,
         )
         for msg in consumer:
             control = msg.value

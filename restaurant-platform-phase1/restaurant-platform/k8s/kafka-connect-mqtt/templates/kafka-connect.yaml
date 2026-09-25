@@ -7,7 +7,23 @@ metadata:
 spec:
   version: 4.3.1
   replicas: 1
-  bootstrapServers: restaurant-platform-kafka-kafka-bootstrap:9092
+  # PLAINTEXT/9092 for now -- kafkaTls.enabled and this must flip to ":9093"
+  # in the exact same `helm upgrade`, never separately (see values.yaml).
+  bootstrapServers: {{ .Values.bootstrapServers | quote }}
+  {{- if .Values.kafkaTls.enabled }}
+  # Strimzi's own declarative mechanism for a Kafka client's broker TLS
+  # trust -- no manual Java truststore/keytool step needed, unlike the
+  # JVM-based MQTT source connectors trusting Mosquitto's TLS cert would
+  # require (a separate, not-yet-done piece of Item 1). Points at Strimzi's
+  # own auto-generated cluster CA, the same fixed Secret name every other
+  # Kafka consumer in this project now mounts. Presence of this block alone
+  # switches Connect's broker connection to TLS -- see values.yaml's note
+  # on why it must never be enabled while bootstrapServers still says 9092.
+  tls:
+    trustedCertificates:
+      - secretName: restaurant-platform-kafka-cluster-ca-cert
+        certificate: ca.crt
+  {{- end }}
   image: localhost/local/kafka-connect-mqtt:1.1
   groupId: connect-cluster
   configStorageTopic: connect-cluster-configs

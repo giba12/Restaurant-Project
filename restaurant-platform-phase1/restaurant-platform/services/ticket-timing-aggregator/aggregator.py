@@ -222,6 +222,7 @@ def main():
         RAW_TOPIC,
         bootstrap_servers=common.KAFKA_BOOTSTRAP_SERVERS,
         api_version=common.KAFKA_API_VERSION,
+        **common.KAFKA_TLS_KWARGS,
         group_id="ticket-timing-aggregator",
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
         enable_auto_commit=False,
@@ -229,6 +230,7 @@ def main():
     producer = KafkaProducer(
         bootstrap_servers=common.KAFKA_BOOTSTRAP_SERVERS,
         api_version=common.KAFKA_API_VERSION,
+        **common.KAFKA_TLS_KWARGS,
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
         key_serializer=lambda k: k.encode("utf-8") if k else None,
     )

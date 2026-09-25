@@ -139,6 +139,7 @@ def main():
         NARRATION_TOPIC,
         bootstrap_servers=common.KAFKA_BOOTSTRAP_SERVERS,
         api_version=common.KAFKA_API_VERSION,
+        **common.KAFKA_TLS_KWARGS,
         group_id="finding-narrator",
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
         enable_auto_commit=False,

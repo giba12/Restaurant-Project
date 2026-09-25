@@ -21,7 +21,7 @@ edge simulators (see edge-simulators/common/runtime.py):
     succeeds, so a transient DB outage cannot silently drop events.
 
 Environment variables:
-  KAFKA_BOOTSTRAP_SERVERS   default "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+  KAFKA_BOOTSTRAP_SERVERS   default "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9093"
   KAFKA_CONSUMER_GROUP      default "storage-consumer"
   TIMESCALE_DSN             required, e.g. "postgresql://user:pass@host:5432/restaurant_platform"
   SCHEMA_DIR                default "/app/schemas"
@@ -32,6 +32,7 @@ Environment variables:
 import json
 import logging
 import os
+import ssl
 import sys
 import time
 from typing import Any
@@ -50,9 +51,31 @@ log = logging.getLogger("storage-consumer")
 
 KAFKA_BOOTSTRAP_SERVERS = os.environ.get(
     "KAFKA_BOOTSTRAP_SERVERS",
-    "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092",
+    # Dead in practice: k8s/storage-consumer's chart always sets this
+    # explicitly (see services/phase5_common.py's identical note on why
+    # this is :9093, not the removed plaintext :9092, since 2026-09-25).
+    "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9093",
 )
 KAFKA_CONSUMER_GROUP = os.environ.get("KAFKA_CONSUMER_GROUP", "storage-consumer")
+
+# Same opt-in TLS pattern as services/phase5_common.py's KAFKA_TLS_KWARGS
+# (kept local rather than imported -- this package has never depended on
+# services/). Defaults to today's plaintext behavior, {}.
+#
+# ssl_context, not ssl_cafile: kafka-python 2.0.2's own internal SSLContext
+# construction fails the handshake against this broker outright, for
+# reasons that don't trace to the cert, hostname, or network path --
+# confirmed live by hand-rolling the same handshake with plain
+# ssl.create_default_context(), which negotiates TLSv1.3 successfully.
+# ssl_context sidesteps kafka-python's own construction entirely (see
+# services/phase5_common.py's longer note on this).
+KAFKA_SECURITY_PROTOCOL = os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")
+KAFKA_SSL_CAFILE = os.environ.get("KAFKA_SSL_CAFILE", "/etc/kafka-tls/ca.crt")
+KAFKA_TLS_KWARGS = (
+    {"security_protocol": KAFKA_SECURITY_PROTOCOL, "ssl_context": ssl.create_default_context(cafile=KAFKA_SSL_CAFILE)}
+    if KAFKA_SECURITY_PROTOCOL != "PLAINTEXT"
+    else {}
+)
 TIMESCALE_DSN = os.environ["TIMESCALE_DSN"]
 SCHEMA_DIR = os.environ.get("SCHEMA_DIR", "/app/schemas")
 DB_MAX_RETRIES = int(os.environ.get("DB_MAX_RETRIES", "5"))
@@ -289,6 +312,7 @@ def main() -> None:
         value_deserializer=lambda raw: raw,  # keep raw bytes; decode explicitly below
         enable_auto_commit=False,
         auto_offset_reset="earliest",
+        **KAFKA_TLS_KWARGS,
     )
     conn = psycopg2.connect(TIMESCALE_DSN)
     log.info("connected to Kafka (%s) and TimescaleDB, subscribed to %s",

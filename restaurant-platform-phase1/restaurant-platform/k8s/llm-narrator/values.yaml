@@ -6,7 +6,10 @@ image:
 replicaCount: 1
 
 env:
-  KAFKA_BOOTSTRAP_SERVERS: "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+  KAFKA_BOOTSTRAP_SERVERS: "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9093"
+  # Migrated to SSL/9093 on 2026-09-25 (k8s/kafka-tls/cutover-tls.sh) -- the
+  # plaintext "plain" listener this used to point at no longer exists.
+  KAFKA_SECURITY_PROTOCOL: "SSL"
   PGHOST: "timescaledb.kafka.svc.cluster.local"
   PGPORT: "5432"
   PGDATABASE: "restaurant_platform"
@@ -22,6 +25,12 @@ ollamaPort: "11434"
 
 pgPasswordSecretName: "narrator-credentials"
 pgPasswordSecretKey: "password"
+
+# Strimzi's auto-generated cluster CA -- exists regardless of whether any
+# listener uses TLS yet (Strimzi also uses it for inter-broker traffic), so
+# mounting it here is always safe. "<Kafka CR name>-cluster-ca-cert" is
+# Strimzi's own fixed naming convention, not something this chart invents.
+kafkaTlsSecretName: "restaurant-platform-kafka-cluster-ca-cert"
 
 resources:
   requests:

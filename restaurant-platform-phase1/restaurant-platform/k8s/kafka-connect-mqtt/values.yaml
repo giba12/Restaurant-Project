@@ -1,0 +1,13 @@
+# Migrated to SSL/9093 on 2026-09-25 (k8s/kafka-tls/cutover-tls.sh connect) --
+# the plaintext "plain" listener this used to point at no longer exists.
+# These two must always change together, never separately: Strimzi treats
+# the mere presence
+# of spec.tls on the KafkaConnect CR as "use TLS for this connection"
+# regardless of which port bootstrapServers names -- so enabling kafkaTls
+# while still pointing at the plaintext 9092 listener would make Connect
+# attempt a TLS handshake against a plaintext port and fail to connect at
+# all, the exact class of bug k8s/minio hit ("wrong version number") when
+# a client and the port it targets disagree about TLS.
+bootstrapServers: restaurant-platform-kafka-kafka-bootstrap:9093
+kafkaTls:
+  enabled: true

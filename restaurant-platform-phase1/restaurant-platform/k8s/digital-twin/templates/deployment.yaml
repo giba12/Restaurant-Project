@@ -22,6 +22,8 @@ spec:
           env:
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: {{ .Values.env.KAFKA_BOOTSTRAP_SERVERS | quote }}
+            - name: KAFKA_SECURITY_PROTOCOL
+              value: {{ .Values.env.KAFKA_SECURITY_PROTOCOL | quote }}
             - name: PGHOST
               value: {{ .Values.env.PGHOST | quote }}
             - name: PGPORT
@@ -35,5 +37,13 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.pgPasswordSecretName }}
                   key: {{ .Values.pgPasswordSecretKey }}
+          volumeMounts:
+            - name: kafka-tls
+              mountPath: /etc/kafka-tls
+              readOnly: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: kafka-tls
+          secret:
+            secretName: {{ .Values.kafkaTlsSecretName }}

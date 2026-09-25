@@ -66,6 +66,7 @@ def _producer() -> KafkaProducer:
     return KafkaProducer(
         bootstrap_servers=common.KAFKA_BOOTSTRAP_SERVERS,
         api_version=common.KAFKA_API_VERSION,
+        **common.KAFKA_TLS_KWARGS,
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
     )
 

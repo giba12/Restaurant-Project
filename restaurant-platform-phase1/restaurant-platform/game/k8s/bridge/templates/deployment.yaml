@@ -34,8 +34,16 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.apiKeySecretName }}
                   key: api-key
+          volumeMounts:
+            - name: kafka-tls
+              mountPath: /etc/kafka-tls
+              readOnly: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: kafka-tls
+          secret:
+            secretName: {{ .Values.kafkaTlsSecretName }}
 ---
 apiVersion: v1
 kind: Service

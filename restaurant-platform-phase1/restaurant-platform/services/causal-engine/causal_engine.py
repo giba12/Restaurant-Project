@@ -293,6 +293,7 @@ def run_reviewer():
         FINDING_TOPIC,
         bootstrap_servers=common.KAFKA_BOOTSTRAP_SERVERS,
         api_version=common.KAFKA_API_VERSION,
+        **common.KAFKA_TLS_KWARGS,
         group_id="finding-reviewer",
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
         enable_auto_commit=False,
@@ -300,6 +301,7 @@ def run_reviewer():
     producer = KafkaProducer(
         bootstrap_servers=common.KAFKA_BOOTSTRAP_SERVERS,
         api_version=common.KAFKA_API_VERSION,
+        **common.KAFKA_TLS_KWARGS,
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
     )
     conn = common.pg_connect()
@@ -339,6 +341,7 @@ def run_from_anomaly_stream():
         ANOMALY_TOPIC,
         bootstrap_servers=common.KAFKA_BOOTSTRAP_SERVERS,
         api_version=common.KAFKA_API_VERSION,
+        **common.KAFKA_TLS_KWARGS,
         group_id="causal-engine",
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
         enable_auto_commit=False,
@@ -346,6 +349,7 @@ def run_from_anomaly_stream():
     producer = KafkaProducer(
         bootstrap_servers=common.KAFKA_BOOTSTRAP_SERVERS,
         api_version=common.KAFKA_API_VERSION,
+        **common.KAFKA_TLS_KWARGS,
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
     )
     conn = common.pg_connect()
@@ -378,6 +382,7 @@ def run_for_scenario(scenario_injection_id: str, metric_name: str, window_start:
     producer = KafkaProducer(
         bootstrap_servers=common.KAFKA_BOOTSTRAP_SERVERS,
         api_version=common.KAFKA_API_VERSION,
+        **common.KAFKA_TLS_KWARGS,
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
     )
     synthetic_anomaly = {

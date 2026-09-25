@@ -39,7 +39,27 @@ spec:
               value: {{ .eventRatePerMin | quote }}
             - name: SCENARIO_CONTROL_ENABLED
               value: {{ $.Values.scenarioControlEnabled | quote }}
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: {{ $.Values.kafka.bootstrapServers | quote }}
+            - name: KAFKA_SECURITY_PROTOCOL
+              value: {{ $.Values.kafka.securityProtocol | quote }}
+            - name: MQTT_TLS_ENABLED
+              value: {{ $.Values.mqtt.tlsEnabled | quote }}
+          volumeMounts:
+            - name: kafka-tls
+              mountPath: /etc/kafka-tls
+              readOnly: true
+            - name: mosquitto-tls
+              mountPath: /etc/mosquitto-tls
+              readOnly: true
           resources:
             {{- toYaml $.Values.resources | nindent 12 }}
+      volumes:
+        - name: kafka-tls
+          secret:
+            secretName: {{ $.Values.kafka.tlsSecretName }}
+        - name: mosquitto-tls
+          secret:
+            secretName: {{ $.Values.mqtt.tlsSecretName }}
 ---
 {{- end }}

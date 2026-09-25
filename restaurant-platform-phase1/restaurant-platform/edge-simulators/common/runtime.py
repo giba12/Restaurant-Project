@@ -16,11 +16,12 @@ simulators:
      stream independent of the Kafka side.
 """
 
-import json 
-import logging 
+import json
+import logging
 import os
 import random
 import sys
+import threading
 import time
 
 import jsonschema
@@ -42,6 +43,14 @@ class Simulator:
         self.mqtt_host = os.environ.get("MQTT_HOST", "mosquitto.kafka.svc.cluster.local")
         self.mqtt_port = int(os.environ.get("MQTT_PORT", "1883"))
         self.mqtt_topic = os.environ.get("MQTT_TOPIC", mqtt_topic)
+        # Opt-in TLS: defaults to today's exact plaintext behavior (no
+        # tls_set() call at all) so Compose needs no changes -- same pattern
+        # as services/phase5_common.py's KAFKA_TLS_KWARGS. A k8s chart
+        # switches this simulator over by setting MQTT_TLS_ENABLED=true,
+        # pointing MQTT_PORT at 8883, and mounting Mosquitto's self-signed
+        # cert (k8s/mosquitto-tls/) at MQTT_TLS_CA_FILE's path.
+        self.mqtt_tls_enabled = os.environ.get("MQTT_TLS_ENABLED", "false").lower() == "true"
+        self.mqtt_tls_ca_file = os.environ.get("MQTT_TLS_CA_FILE", "/etc/mosquitto-tls/tls.crt")
         self.source_id = os.environ.get("SOURCE_ID", f"sim-{sensor_type}-01")
 
         # events per minute (Poisson rate parameter lambda); interval between
@@ -58,6 +67,30 @@ class Simulator:
             client_id=self.source_id,
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         )
+        if self.mqtt_tls_enabled:
+            self.client.tls_set(ca_certs=self.mqtt_tls_ca_file)
+        # client.connect() only opens the socket and sends the CONNECT packet
+        # -- it does not wait for the broker's CONNACK, which is only read
+        # once loop_start()'s background thread is running. Without this,
+        # connect() below could return "connected" and let run_forever()
+        # start publishing before the MQTT-level handshake had actually
+        # finished. Plaintext's round trip was fast enough this never
+        # showed up in practice; TLS's extra handshake latency was enough to
+        # expose it live (publish failing with "client is not currently
+        # connected" in a tight, never-crashing, never-recovering loop,
+        # since nothing was waiting for or checking CONNACK at all).
+        self._connected_event = threading.Event()
+        self.client.on_connect = self._on_connect
+        self.client.on_disconnect = self._on_disconnect
+
+    def _on_connect(self, client, userdata, flags, reason_code, properties=None):
+        if reason_code.is_failure:
+            self.log.error("mqtt CONNACK failure: %s", reason_code)
+        else:
+            self._connected_event.set()
+
+    def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
+        self._connected_event.clear()
 
     def connect(self):
         self.log.info(
@@ -71,11 +104,15 @@ class Simulator:
         backoff = 2
         while True:
             try:
+                self._connected_event.clear()
                 self.client.connect(self.mqtt_host, self.mqtt_port, keepalive=60)
                 self.client.loop_start()
+                if not self._connected_event.wait(timeout=10):
+                    raise TimeoutError("no CONNACK received within 10s")
                 self.log.info("connected")
                 return
             except Exception as exc:
+                self.client.loop_stop()
                 self.log.warning("mqtt connect failed (%s), retrying in %ss", exc, backoff)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 30)

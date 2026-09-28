@@ -14,6 +14,18 @@ var timeout_seconds: float = 5.0
 var api_key: String = ""
 var dashboard_api_key: String = ""
 var dashboard_url: String = ""
+# Opt-in TLS trust: both empty by default (plain http://, today's exact
+# behavior) -- same pattern as every other TLS piece in this project.
+# Points at the SAME self-signed cert k8s/web-tls/cutover-web-tls.sh
+# generates for each service; see game/README.md for how to fetch it to a
+# local path. Proven live (2026-09-28) against a local test HTTPS server
+# that Godot 4.5's HTTPRequest.set_tls_options(TLSOptions.client(cert))
+# is real, working cert-pinning, not a blanket bypass -- without it,
+# HTTPRequest rejects a self-signed cert exactly like a browser would.
+var bridge_tls_cert_path: String = ""
+var dashboard_tls_cert_path: String = ""
+var _bridge_tls_cert: X509Certificate
+var _dashboard_tls_cert: X509Certificate
 
 
 func get_world() -> Dictionary:
@@ -66,10 +78,15 @@ func request_json(method: int, url: String, body: Variant = null) -> Dictionary:
 	var http := HTTPRequest.new()
 	http.timeout = timeout_seconds
 	add_child(http)
+	var is_dashboard := dashboard_url != "" and url.begins_with(dashboard_url)
 	var headers := PackedStringArray(["Content-Type: application/json"])
-	var key := dashboard_api_key if (dashboard_url != "" and url.begins_with(dashboard_url)) else api_key
+	var key := dashboard_api_key if is_dashboard else api_key
 	if key != "":
 		headers.append("X-API-Key: " + key)
+	if url.begins_with("https://"):
+		var tls_options := _tls_options_for(is_dashboard)
+		if tls_options:
+			http.set_tls_options(tls_options)
 	var payload := "" if body == null else JSON.stringify(body)
 	var err := http.request(url, headers, method, payload)
 	if err != OK:
@@ -85,6 +102,27 @@ func request_json(method: int, url: String, body: Variant = null) -> Dictionary:
 	var parsed: Variant = JSON.parse_string(raw.get_string_from_utf8())
 	var ok := status >= 200 and status < 300
 	return {"ok": ok, "status": status, "data": parsed, "error": "" if ok else _describe_error(parsed, status)}
+
+
+func _tls_options_for(is_dashboard: bool) -> TLSOptions:
+	var path := dashboard_tls_cert_path if is_dashboard else bridge_tls_cert_path
+	if path == "":
+		return null
+	# Loaded once per path, not per request -- X509Certificate.load() reads
+	# from disk every call, and every request_json() call already makes a
+	# fresh HTTPRequest node for the same reason (see its own comment).
+	var cached: X509Certificate = _dashboard_tls_cert if is_dashboard else _bridge_tls_cert
+	if not cached:
+		cached = X509Certificate.new()
+		var err := cached.load(path)
+		if err != OK:
+			push_error("failed to load TLS cert at %s: %s" % [path, error_string(err)])
+			return null
+		if is_dashboard:
+			_dashboard_tls_cert = cached
+		else:
+			_bridge_tls_cert = cached
+	return TLSOptions.client(cached)
 
 
 func _describe_error(parsed: Variant, status: int) -> String:

@@ -19,6 +19,27 @@ spec:
         - name: game-bridge
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.tls.enabled }}
+          # Overrides the image's own ENTRYPOINT entirely (Kubernetes'
+          # command: replaces it, not appends) -- uvicorn can only serve one
+          # of plain HTTP or TLS per process, unlike nginx's dashboard-web,
+          # which can listen on both 80 and 443 from the same server block.
+          # No migrate-then-verify dance for the same reason as
+          # dashboard-web's tls.enabled (see k8s/dashboard/values.yaml):
+          # this is one developer's own Godot client, not nine independent
+          # production consumers.
+          command:
+            - uvicorn
+            - main:app
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "8001"
+            - --ssl-keyfile
+            - /etc/bridge-tls/tls.key
+            - --ssl-certfile
+            - /etc/bridge-tls/tls.crt
+          {{- end }}
           ports:
             - containerPort: 8001
           env:
@@ -38,12 +59,22 @@ spec:
             - name: kafka-tls
               mountPath: /etc/kafka-tls
               readOnly: true
+            {{- if .Values.tls.enabled }}
+            - name: bridge-tls
+              mountPath: /etc/bridge-tls
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
         - name: kafka-tls
           secret:
             secretName: {{ .Values.kafkaTlsSecretName }}
+        {{- if .Values.tls.enabled }}
+        - name: bridge-tls
+          secret:
+            secretName: {{ .Values.tls.secretName }}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

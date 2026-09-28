@@ -85,6 +85,9 @@ spec:
           imagePullPolicy: {{ .Values.web.image.pullPolicy }}
           ports:
             - containerPort: 80
+            {{- if .Values.web.tls.enabled }}
+            - containerPort: 443
+            {{- end }}
           env:
             - name: DASHBOARD_API_KEY
               valueFrom:
@@ -104,6 +107,11 @@ spec:
               mountPath: /etc/nginx/.htpasswd
               subPath: .htpasswd
               readOnly: true
+            {{- if .Values.web.tls.enabled }}
+            - name: tls
+              mountPath: /etc/nginx/tls
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.web.resources | nindent 12 }}
       volumes:
@@ -113,6 +121,11 @@ spec:
         - name: htpasswd
           secret:
             secretName: {{ .Values.htpasswdSecretName }}
+        {{- if .Values.web.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.web.tls.secretName }}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -124,5 +137,11 @@ spec:
   selector:
     app: dashboard-web
   ports:
-    - port: {{ .Values.web.service.port }}
+    - name: http
+      port: {{ .Values.web.service.port }}
       targetPort: 80
+    {{- if .Values.web.tls.enabled }}
+    - name: https
+      port: 443
+      targetPort: 443
+    {{- end }}

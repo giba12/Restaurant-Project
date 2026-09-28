@@ -27,6 +27,17 @@ web:
   service:
     type: ClusterIP
     port: 80
+  # Added alongside port 80 rather than replacing it -- nginx serves both
+  # from one server block with no real extra cost, so there's no need for
+  # the migrate-then-verify dance k8s/kafka-tls/ needed (that was about not
+  # disrupting nine independent, constantly-running production consumers
+  # mid-migration; this is one developer's own browser tab). Cert generated
+  # by k8s/web-tls/cutover-web-tls.sh, same self-signed pattern as
+  # everywhere else -- nothing outside the cluster ever needs to trust it
+  # as a real CA.
+  tls:
+    enabled: false
+    secretName: "dashboard-web-tls"
   resources:
     requests:
       cpu: 25m

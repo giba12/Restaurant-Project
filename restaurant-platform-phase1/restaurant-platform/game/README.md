@@ -30,10 +30,10 @@ To confirm the rule still holds, this should print nothing:
 
 ```bash
 grep -rIl "game-bridge\|game/bridge\|game/client\|game/k8s" --exclude-dir=game --exclude-dir=node_modules --exclude-dir=.git . \
-  | grep -v "CODEBASE-GUIDE.md\|restaurant-platform-implementation-status.md\|restaurant-platform-project-notes.md\|k8s/harden/harden-live-cluster.sh\|k8s/timescaledb-backup/README.md\|\.env\.example"
+  | grep -v "CODEBASE-GUIDE.md\|restaurant-platform-implementation-status.md\|restaurant-platform-project-notes.md\|k8s/harden/harden-live-cluster.sh\|k8s/timescaledb-backup/README.md\|k8s/kafka-tls/\|k8s/web-tls/\|\.env\.example"
 ```
 
-(The excluded files are documentation that describes the game, or operations tooling that names `game-bridge-credentials`/`BRIDGE_API_KEY` while rotating secrets across both versions -- neither is version 1's own runtime code depending on version 2.)
+(The excluded files are documentation that describes the game, or operations tooling that names `game-bridge-credentials`/`BRIDGE_API_KEY`/`game-bridge-tls` while rotating secrets or cutting TLS over across both versions -- neither is version 1's own runtime code depending on version 2. `k8s/kafka-tls/` and `k8s/web-tls/` were added to this list 2026-09-28, correcting a gap from when those scripts were first written: they already named `game-bridge` as one of the services they migrate, and were never added here.)
 
 ## Run it
 
@@ -196,5 +196,15 @@ It deploys as a `ClusterIP` Service, never exposed outside the cluster, with the
 kubectl port-forward svc/game-bridge -n kafka 8001:8001
 BRIDGE_URL=http://127.0.0.1:8001 godot4 --path game/client
 ```
+
+**TLS (optional, added 2026-09-28):** `bash k8s/web-tls/cutover-web-tls.sh game-bridge` switches the bridge to HTTPS -- a single uvicorn process serves either plain HTTP or TLS, not both, so this is a straight cutover, not an additive listener; `... rollback game-bridge` reverts it. Once switched, fetch its self-signed cert once and point the client at both the new scheme and the cert:
+
+```bash
+kubectl get secret game-bridge-tls -n kafka -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/game-bridge.crt
+kubectl port-forward svc/game-bridge -n kafka 8001:8001
+BRIDGE_URL=https://127.0.0.1:8001 BRIDGE_TLS_CERT_PATH=/tmp/game-bridge.crt godot4 --path game/client
+```
+
+The client trusts this cert specifically (`TLSOptions.client(cert)` in `bridge_client.gd`), the same real cert-pinning every other TLS piece in this project uses, not a blanket bypass -- confirmed live that Godot 4.5's `HTTPRequest` rejects a self-signed cert by default, same as a browser, and accepts it once pinned this way. Without `BRIDGE_TLS_CERT_PATH` set, an `https://` `BRIDGE_URL` fails the same way. The same mechanism and `DASHBOARD_TLS_CERT_PATH` cover the dashboard's own read endpoints this client also calls (`DASHBOARD_URL`); see `k8s/web-tls/cutover-web-tls.sh dashboard`.
 
 The bridge bakes its schemas into the image at build time, so unlike the Phase 5-7 services it needs no ConfigMap. It is unaffected by `k8s/realign/realign-live-cluster.sh`, which only touches the shared platform; a schema or migration change that affects the bridge (as `005` did) still needs that script run first.

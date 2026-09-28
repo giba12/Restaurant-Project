@@ -120,6 +120,8 @@ func _ready() -> void:
 	bridge.dashboard_url = dashboard_url
 	bridge.api_key = OS.get_environment("BRIDGE_API_KEY")
 	bridge.dashboard_api_key = OS.get_environment("DASHBOARD_API_KEY")
+	bridge.bridge_tls_cert_path = OS.get_environment("BRIDGE_TLS_CERT_PATH")
+	bridge.dashboard_tls_cert_path = OS.get_environment("DASHBOARD_TLS_CERT_PATH")
 
 	# Closing the window mid-shift should clock the player out, otherwise the
 	# digital twin shows them on shift forever.

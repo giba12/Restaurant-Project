@@ -93,3 +93,7 @@ This is a simulation standing in for real sensors, POS integrations, and vendor 
 ## Roadmap
 
 A "version 2" interactive mode — a real person plays through restaurant scenarios (working a station, ordering as a guest), driving the same event schemas and the same anomaly-detection/causal-inference/narration pipeline the simulated version uses, framed as a small game with a stretch goal of itch.io or Steam distribution. The groundwork is built — an HTTP-to-Kafka `game-bridge` service, a `player` source type in the event schemas, and a working Godot prototype (`game/`) where you work a shift as a line cook, expo or server while a crew covers whatever role nobody is playing, or sit down as a guest, order from the menu and pay once it arrives, all verified end-to-end with no downstream changes (game data is quarantined from the simulators' own anomaly baseline and compared against it instead). It's a prototype, not a polished game; see the "Version 2 and Steam distribution" section of [restaurant-platform-project-notes.md](restaurant-platform-phase1/restaurant-platform/restaurant-platform-project-notes.md) for the engine choice (Godot) and a documented Steam licensing/cost conflict with alternatives.
+
+## License
+
+[MIT](LICENSE) for this project's own code. Third-party pieces this project runs as separate containers/services rather than distributes (MinIO's server, notably AGPLv3) keep their own licenses -- see each service's own chart or Dockerfile for what image it pulls.

@@ -47,6 +47,10 @@ jobs:
             dir: services/finding-narrator
             install: pip install pytest
             run: python -m pytest test_narration_guard.py -v
+          - name: alert-relay
+            dir: services/alert-relay
+            install: pip install pytest
+            run: python -m pytest test_alert_relay.py -v
     steps:
       - uses: actions/checkout@v4
 

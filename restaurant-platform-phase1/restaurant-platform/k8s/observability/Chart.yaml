@@ -5,9 +5,15 @@ description: >
   health, Prometheus scraping it plus Strimzi's Kafka/Connect JMX
   exporters (see k8s/kafka-strimzi and k8s/kafka-connect-mqtt's
   metricsConfig), and Grafana with the Prometheus datasource and a
-  starter dashboard pre-provisioned. All three hand-rolled from official
-  images -- same reasoning as k8s/timescaledb and k8s/minio: no
-  third-party chart dependency to go stale.
+  starter dashboard pre-provisioned. Alerting: Prometheus evaluates
+  alerts.yml against those same metrics and forwards firing/resolved
+  alerts to Alertmanager, which posts them to alert-relay (a small
+  hand-rolled Python shim, see services/alert-relay) that reshapes them
+  into ntfy.sh's push-notification format -- no third-party
+  Alertmanager-to-ntfy relay binary, for the same reason as everything
+  else here. All hand-rolled from official images/stdlib -- same
+  reasoning as k8s/timescaledb and k8s/minio: no third-party chart
+  dependency to go stale.
 type: application
 version: 0.1.0
 appVersion: "1.0"

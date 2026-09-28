@@ -32,7 +32,7 @@ spec:
             secretName: {{ .Values.tls.secretName }}
       containers:
         - name: minio
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # Chainguard's image's default ENTRYPOINT is just the minio
           # binary itself with no arguments (confirmed against the

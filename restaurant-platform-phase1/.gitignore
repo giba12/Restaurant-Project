@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .venv-1/
 venv/
+.pytest_cache/
 
 # Real credentials for helm upgrade --set-file/-f, generated locally by
 # k8s/*/bootstrap*.sh and never committed. See k8s/timescaledb-backup/README.md

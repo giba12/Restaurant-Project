@@ -1,16 +1,32 @@
 image:
   repository: cgr.dev/chainguard/minio
-  tag: latest
-  # imagePullPolicy is deliberately Always, not the project's usual
-  # IfNotPresent-by-default-tag convention -- ":latest" is the only
-  # freely pullable (no-account) tag Chainguard offers for this image,
-  # and Always ensures a `helm upgrade` actually re-checks for a newer
-  # build rather than silently reusing a stale cached ":latest" image
-  # indefinitely (the inverse problem to the imagePullPolicy note in
-  # the study guide, Section 3.5 -- there, a stale cache was the risk
-  # with a real version tag; here, ":latest" itself is the moving
-  # target, so the caching behavior needs to point the other way).
-  pullPolicy: Always
+  # Pinned by digest, not a version tag -- confirmed live (2026-09-28) by
+  # paginating Chainguard's own registry API for this repository (2000+
+  # tags): "latest" and "latest-dev" are the *only* human-readable tags
+  # that exist; every other tag is a per-build sha256-<digest>.att/.sig
+  # attestation/signature alias, not a real semantic version. Real version
+  # tags for Chainguard images need a free (no-cost, but registered)
+  # Chainguard account, confirmed by this project's own earlier research
+  # when this image was first chosen (see the implementation-status doc's
+  # problem log, item 32) -- the same reason ":latest" was picked in the
+  # first place was to need zero registration at all, matching this
+  # project's consistent preference elsewhere. Digest-pinning keeps that
+  # same zero-account property while still getting the real goal here
+  # (reproducible deployments), so it's the option that best fits this
+  # project's own stated values, not just "the only option."
+  # This is the multi-arch OCI index digest "latest" resolved to on that
+  # date (confirmed via `docker pull` before committing it here), not one
+  # platform's manifest digest, so it still works on both amd64 and arm64.
+  # Update it by hand (re-run the same registry query) to pick up a newer
+  # build -- deliberately not automatic, since the whole point of pinning
+  # is that an upgrade is a decision, not something that happens silently
+  # on the next pod restart.
+  digest: "sha256:6a1d0b45c8669726bba580ced0bfa4cb9fdeed1ed636dfabd81d1577beb6937b"
+  # IfNotPresent, not Always: back to the project's usual convention, now
+  # that the image reference is a digest rather than a moving ":latest"
+  # pointer -- a digest can never point at different content, so there is
+  # nothing for "Always" to protect against re-caching.
+  pullPolicy: IfNotPresent
 
 replicaCount: 1
 

@@ -2,9 +2,13 @@
 # Rotates every dev-only credential this project has ever printed in plain
 # text (TimescaleDB, the narrator's restricted role, MinIO's root user),
 # bootstraps pgBackRest backups of TimescaleDB into the existing MinIO
-# deployment, and turns on the dashboard/game-bridge API-key + HTTP Basic
+# deployment, turns on the dashboard/game-bridge API-key + HTTP Basic
 # Auth added in services/dashboard-api/main.py, game/bridge/main.py and
-# k8s/dashboard's nginx config. Run from the repo root:
+# k8s/dashboard's nginx config, and rotates alert-relay's ntfy.sh topic
+# name (k8s/observability) -- not a credential exactly, but the same
+# "don't leave the guessable placeholder in place" idea: ntfy's free tier
+# has no access control on a topic, so anyone who knows the name can read
+# every alert sent to it. Run from the repo root:
 #
 #   bash k8s/harden/harden-live-cluster.sh --dry-run   # see every step first
 #   bash k8s/harden/harden-live-cluster.sh             # do it
@@ -53,17 +57,22 @@ rand() { openssl rand -base64 24 | tr -d '=+/\n'; }  # shell/URL-safe, ~32 chars
 echo "== 1. generate credentials (nothing here is printed or committed) =="
 if [ "$DRY" = 1 ]; then
   echo "+ generate: TimescaleDB restaurant_app + narrator_app passwords, MinIO root password,"
-  echo "  a pgbackrest-scoped MinIO user+secret, dashboard-api/game-bridge API keys, and an"
-  echo "  nginx Basic Auth user+password (the one credential you actually need afterward)"
+  echo "  a pgbackrest-scoped MinIO user+secret, dashboard-api/game-bridge API keys, an"
+  echo "  nginx Basic Auth user+password, and a random ntfy.sh alert topic name"
 else
   TS_PW=$(rand); NARRATOR_PW=$(rand); MINIO_ROOT_PW=$(rand)
   PGBACKREST_KEY=$(rand); PGBACKREST_SECRET=$(rand)
   DASHBOARD_API_KEY=$(rand); BRIDGE_API_KEY=$(rand)
   DASHBOARD_USER=admin; DASHBOARD_PASSWORD=$(rand)
+  NTFY_TOPIC="restaurant-platform-alerts-$(rand)"
 
   cat > "$SECRETS_DIR/timescaledb.values.yaml" <<EOF
 credentials:
   password: "$TS_PW"
+EOF
+  cat > "$SECRETS_DIR/alert-relay.values.yaml" <<EOF
+alertRelay:
+  ntfyTopic: "$NTFY_TOPIC"
 EOF
   cat > "$SECRETS_DIR/narrator.values.yaml" <<EOF
 narratorCredentials:
@@ -273,5 +282,25 @@ if [ "$DRY" = 0 ]; then
   echo "game-bridge's API key is in the game-bridge-credentials Secret. To run the Godot client"
   echo "against the k3s deployment (after game/k8s/deploy-bridge.sh):"
   echo "  export BRIDGE_API_KEY=\$(kubectl get secret game-bridge-credentials -n $NS -o jsonpath='{.data.api-key}' | base64 -d)"
+fi
+
+# ---------------------------------------------------------------------
+# 13. Rotate alert-relay's ntfy.sh topic (k8s/observability)
+# ---------------------------------------------------------------------
+# Assumes k8s/observability/deploy-alerting.sh has already been run once
+# (Alertmanager/alert-relay/Prometheus rules installed) -- this only
+# rotates the topic name on top of that. --reset-then-reuse-values for the
+# same reason as every other upgrade in this script: values.yaml gaining a
+# key after a release exists means only --reset-then-reuse starts from the
+# chart's current defaults for it.
+echo "== 13. rotate alert-relay's ntfy topic =="
+run helm upgrade observability k8s/observability -n "$NS" \
+  -f "$SECRETS_DIR/alert-relay.values.yaml" --reset-then-reuse-values --wait --timeout 120s
+run kubectl rollout status deploy/alert-relay -n "$NS" --timeout=120s
+
+if [ "$DRY" = 0 ]; then
+  echo
+  echo "Alert topic rotated. Subscribe to it to receive alerts (this script does not print it again):"
+  echo "  https://ntfy.sh/$NTFY_TOPIC  (or the ntfy app/CLI, topic: $NTFY_TOPIC)"
 fi
 echo "done"

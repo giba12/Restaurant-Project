@@ -38,6 +38,14 @@ data:
     global:
       scrape_interval: 15s
 
+    rule_files:
+      - /etc/prometheus/rules/*.yml
+
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: ["alertmanager:9093"]
+
     scrape_configs:
       - job_name: prometheus
         static_configs:
@@ -106,6 +114,85 @@ data:
             target_label: __metrics_path__
             replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: kafka
+data:
+  alerts.yml: |
+    groups:
+      - name: targets
+        rules:
+          # Any scrape target unreachable -- catches an exporter or the
+          # thing it scrapes being down, not just this project's own pods
+          # (kube-state-metrics, kafka-exporter, the JMX/cadvisor targets
+          # are all `up` too). 5m, not immediate: scrape_interval is 15s,
+          # so this already requires ~20 consecutive failed scrapes.
+          - alert: TargetDown
+            expr: up == 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "{{ `{{ $labels.job }}` }} target {{ `{{ $labels.instance }}` }} has been down for 5m"
+
+      - name: kubernetes
+        rules:
+          # increase(), not rate(): a raw restart count, easier to reason
+          # about as "more than 3 restarts in 15m" than a fractional rate.
+          - alert: PodCrashLooping
+            expr: increase(kube_pod_container_status_restarts_total{namespace="kafka"}[15m]) > 3
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "{{ `{{ $labels.pod }}` }}/{{ `{{ $labels.container }}` }} restarted {{ `{{ $value }}` }} times in 15m"
+
+          - alert: DeploymentReplicasMismatch
+            expr: kube_deployment_status_replicas_available{namespace="kafka"} < kube_deployment_spec_replicas{namespace="kafka"}
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "deployment/{{ `{{ $labels.deployment }}` }} has fewer available replicas than desired for 10m"
+
+      - name: kafka
+        rules:
+          # Threshold picked as a starting point, not from a documented SLA
+          # (this project doesn't have one) -- every consumer group sits at
+          # 0 lag under normal simulator load (confirmed live, 2026-09-28),
+          # so 500 sustained for 10m already means a consumer has been
+          # meaningfully behind, not just a momentary blip. Tune once real
+          # throughput history exists.
+          - alert: KafkaConsumerLagHigh
+            expr: sum by (consumergroup, topic) (kafka_consumergroup_lag) > 500
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "consumer group {{ `{{ $labels.consumergroup }}` }} lag on {{ `{{ $labels.topic }}` }} is {{ `{{ $value }}` }}"
+
+      - name: resources
+        rules:
+          # container_spec_memory_limit_bytes > 0 excludes containers with
+          # no memory limit set -- otherwise a limit of 0 makes the ratio
+          # divide-by-zero to +Inf, which is always > 0.9 (a false alarm on
+          # every unlimited container, not a real signal). container!=""
+          # excludes cAdvisor's pod-cgroup-aggregate and pause-container
+          # rows, which have no `container` label -- confirmed live against
+          # this cluster's own cadvisor output, 2026-09-28.
+          - alert: ContainerMemoryNearLimit
+            expr: |
+              (container_memory_working_set_bytes{namespace="kafka", container!=""}
+                / container_spec_memory_limit_bytes{namespace="kafka", container!=""} > 0.9)
+              and (container_spec_memory_limit_bytes{namespace="kafka", container!=""} > 0)
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "{{ `{{ $labels.pod }}` }}/{{ `{{ $labels.container }}` }} is above 90% of its memory limit"
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -136,6 +223,8 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/prometheus
+            - name: rules
+              mountPath: /etc/prometheus/rules
             - name: data
               mountPath: /prometheus
           resources:
@@ -144,6 +233,9 @@ spec:
         - name: config
           configMap:
             name: prometheus-config
+        - name: rules
+          configMap:
+            name: prometheus-rules
         - name: data
           emptyDir: {}
 ---

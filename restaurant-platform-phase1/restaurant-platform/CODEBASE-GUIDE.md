@@ -856,9 +856,9 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 - **Purpose:** The SQL the schema Job applies.
 
 #### `k8s/minio/Chart.yaml`, `values.yaml`
-- **What they do:** A long description records why MinIO is on a Chainguard image (MinIO stopped publishing free images) and a licensing note (the server is AGPLv3; unmodified internal use is fine, but re-read it before any commercial offering). Values set the image `cgr.dev/chainguard/minio:latest` with `pullPolicy: Always`, 10 Gi storage, credentials and a bucket name.
-- **Why it works this way:** `:latest` is the only account-free tag, so `Always` makes an upgrade re-check it. The trade-off (an unpinned version) is stated in the file.
-- **Purpose:** Object storage. Nothing writes to it yet; it stands ready for a possible computer-vision stretch goal.
+- **What they do:** A long description records why MinIO is on a Chainguard image (MinIO stopped publishing free images) and a licensing note (the server is AGPLv3; unmodified internal use is fine, but re-read it before any commercial offering). Values set the image `cgr.dev/chainguard/minio@sha256:...` (**digest-pinned since 2026-09-28**, `pullPolicy: IfNotPresent`), 10 Gi storage, credentials, TLS, and a bucket name.
+- **Why it works this way:** Confirmed live (paginating Chainguard's own registry API, 2000+ tags checked) that `latest`/`latest-dev` are the *only* human-readable tags this free, unauthenticated repository has -- every other tag is a per-build `sha256-<digest>.att`/`.sig` attestation/signature alias, not a real version. Real version tags need a free (no-cost, but registered) Chainguard account -- the same reason `:latest` was picked when this image was first chosen (implementation-status doc, problem log item 32) was to need zero registration at all. Digest-pinning keeps that same zero-account property while still getting the real goal (reproducible deployments), so it fits this project's own stated preference better than "just sign up for an account" would. `IfNotPresent` replaced the earlier `Always`: that existed only to keep re-checking a moving `:latest` pointer, and a digest can never point at different content, so there's nothing left for `Always` to protect against.
+- **Purpose:** Object storage. Also holds TimescaleDB's pgBackRest backups since 2026-09-24 (`k8s/timescaledb-backup/`) -- no longer idle, though the plate-waste-image computer-vision stretch goal it also stands ready for is still unbuilt.
 
 #### `k8s/minio/templates/statefulset.yaml`, `service.yaml`, `secret.yaml`, `bucket-init-job.yaml`
 - **What they do:** A StatefulSet running `minio server /data --certs-dir /certs` with S3 (9000) and console (9001) ports (HTTPS since 2026-09-24) and health probes; a headless Service; a credentials Secret; and a post-install Job that creates the placeholder bucket with `mc --insecure mb --ignore-existing`.
@@ -944,12 +944,24 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 - **Purpose:** Exposes the state of Kubernetes objects (restarts, phases) as metrics.
 
 #### `k8s/observability/templates/prometheus.yaml`
-- **What it does:** A ServiceAccount and RBAC, a ConfigMap holding the scrape configuration, a Deployment and a Service. Scrape jobs: Prometheus itself, kube-state-metrics, the Kafka exporter (`kafka-consumer-lag`), the Strimzi JMX exporters (`kafka-jmx`) and cAdvisor through the kubelet.
+- **What it does:** A ServiceAccount and RBAC, a ConfigMap holding the scrape configuration, a second ConfigMap (`prometheus-rules`) holding alert rules, a Deployment and a Service. Scrape jobs: Prometheus itself, kube-state-metrics, the Kafka exporter (`kafka-consumer-lag`), the Strimzi JMX exporters (`kafka-jmx`) and cAdvisor through the kubelet. `prometheus.yml` also has a `rule_files`/`alerting.alertmanagers` block pointing at the `alertmanager` Service.
 - **Why it works this way:**
   - The `kafka-jmx` job discovers pods by label and is restricted to `strimzi.io/component-type` of `kafka` or `kafka-connect`. Without that, it also scraped the Kafka exporter pod (same cluster label, same port 9404) and produced duplicate lag series.
   - The Kafka exporter is scraped by a fixed Service name because Strimzi creates no Service for it and one was added by hand.
   - Storage is an `emptyDir`, so metric history is lost whenever the pod restarts.
-- **Purpose:** Collects and stores platform metrics.
+  - **Alerting, added 2026-09-28:** `prometheus-rules`/`alerts.yml` (four groups, five rules -- `TargetDown`, `PodCrashLooping`, `DeploymentReplicasMismatch`, `KafkaConsumerLagHigh`, `ContainerMemoryNearLimit`) evaluates against metrics already scraped above; every PromQL expression and the `container!=""`/`> 0` guard clauses on the memory-ratio rule were confirmed live against this cluster's own Prometheus (2026-09-28, not assumed from docs), and the whole file passes `promtool check rules`. The `KafkaConsumerLagHigh` threshold (500, 10m) is a starting point, not derived from an SLA -- this project doesn't have one; every consumer group sits at 0 lag under normal load.
+- **Purpose:** Collects and stores platform metrics, and evaluates alert rules against them.
+
+#### `k8s/observability/templates/alertmanager.yaml` (added 2026-09-28)
+- **What it does:** A ConfigMap (`alertmanager.yml`: one route, one receiver, `webhook_configs` pointed at `alert-relay`), a Deployment (official `prom/alertmanager` image) and a Service on 9093.
+- **Why it works this way:** `webhook_configs` is Alertmanager's only receiver type with no third-party account/API-key requirement, matching this project's zero-registration preference elsewhere (Chainguard digest-pinning, self-signed certs). It always POSTs a fixed JSON schema with no template option, which is why `alert-relay` exists as a separate hop.
+- **Purpose:** Groups/dedupes firing alerts from Prometheus and routes them to a notification channel.
+
+#### `k8s/observability/templates/alert-relay.yaml` (added 2026-09-28)
+- **What it does:** A Deployment running `services/alert-relay`'s image (locally built, not pulled) and a Service on 8090. Takes `NTFY_TOPIC`/`NTFY_SERVER` from `values.yaml`.
+- **Why it works this way:** ntfy.sh (a free, no-account push notification service) has no native Alertmanager integration -- confirmed against `docs.ntfy.sh/integrations` (2026-09-28): only third-party relay binaries exist, and pulling in someone else's binary is exactly the dependency this project avoids elsewhere (see this chart's own `Chart.yaml`). `services/alert-relay/main.py` is a ~90-line stdlib-only (no requirements.txt) HTTP server that reshapes Alertmanager's webhook JSON into ntfy's JSON publish format and forwards it. Tested with mocked network calls (`test_alert_relay.py`, in CI); confirmed live end-to-end (2026-09-28) by posting a synthetic alert straight to Alertmanager's own API and watching alert-relay's logs show `POST /alert ... 200` (meaning its own outbound send to ntfy.sh succeeded, not just that it received the webhook).
+- **Purpose:** The only piece standing between "Prometheus noticed a problem" and an actual push notification.
+- **Deploy:** `k8s/observability/build-alert-relay-image.sh` (builds+imports the image, needs sudo) then `k8s/observability/deploy-alerting.sh` (helm upgrade + verification) -- ships with a guessable placeholder ntfy topic (`values.yaml`'s `alertRelay.ntfyTopic`), functional but not private; `k8s/harden/harden-live-cluster.sh`'s new section 13 rotates in a real random one, the same pattern as MinIO's root password.
 
 #### `k8s/observability/templates/grafana.yaml`
 - **What it does:** A Secret with admin credentials, ConfigMaps that provision a Prometheus datasource and a dashboard provider, a ConfigMap containing one dashboard ("Restaurant Platform Overview"), a Deployment and a Service on 3000. The dashboard has six panels: pod restarts, Kafka broker bytes in and out, bytes out by topic, consumer-group lag by group and topic, running pods and container memory.
@@ -977,6 +989,7 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 |---|---|---|
 | Game bridge | `cd game/bridge && python -m pytest test_bridge.py` | `pip install -r requirements.txt pytest httpx` (no Kafka) |
 | Narration guard | `cd services/finding-narrator && python -m pytest test_narration_guard.py` | `pytest` only |
+| Alert relay | `cd services/alert-relay && python -m pytest test_alert_relay.py` | `pytest` only (no network) |
 | Godot client | `godot4 --headless --path game/client -s res://tests/smoke_test.gd` | the Compose stack running with the game overlay |
 
 There are no automated tests for the simulators, the storage consumer or the Phase 5 services; they are verified by running the pipeline and checking row counts and consumer-group lag, as the handoff documents describe.

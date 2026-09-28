@@ -11,7 +11,7 @@
   "spec": {
     "class": "org.apache.camel.kafkaconnector.mqttsource.CamelMqttsourceSourceConnector",
     "config": {
-      "camel.kamelet.mqtt-source.brokerUrl": "tcp://mosquitto.kafka.svc.cluster.local:1883",
+      "camel.kamelet.mqtt-source.brokerUrl": "ssl://mosquitto.kafka.svc.cluster.local:8883",
       "camel.kamelet.mqtt-source.clientId": "kafka-connect-staff-shift",
       "camel.kamelet.mqtt-source.topic": "sensors/staff-shift",
       "key.converter": "org.apache.kafka.connect.converters.ByteArrayConverter",

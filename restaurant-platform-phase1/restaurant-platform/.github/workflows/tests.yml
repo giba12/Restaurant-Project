@@ -1,0 +1,67 @@
+name: tests
+
+# Runs the project's existing unit test suites on every push and pull
+# request. Every suite here was written to need zero live infrastructure --
+# each test file's own docstring documents this and gives its exact
+# pip-install/run command (this workflow uses those commands verbatim, not
+# guessed ones): Kafka, Postgres and MQTT clients are all stubbed via
+# sys.modules.setdefault(...) or FastAPI's dependency_overrides, so nothing
+# here needs a database, broker, or docker-compose stack.
+#
+# NOT covered here: game/client/tests/smoke_test.gd, the one true
+# integration test in the project. It drives a live game-bridge (which
+# itself needs Kafka, TimescaleDB and the digital-twin running) through the
+# Godot engine and takes a couple of minutes -- a fundamentally different,
+# heavier kind of test than anything below, and needs its own CI job
+# (installing Godot, standing up the Compose stack) as a separate follow-up
+# rather than bolted onto this fast, dependency-free workflow.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: game-bridge
+            dir: game/bridge
+            install: pip install -r requirements.txt pytest httpx
+            run: python -m pytest test_bridge.py -v
+          - name: dashboard-api
+            dir: services/dashboard-api
+            install: pip install fastapi httpx pytest
+            run: python -m pytest test_auth.py test_comparison.py -v
+          - name: anomaly-detector
+            dir: services/anomaly-detector
+            install: pip install numpy pytest jsonschema
+            run: python -m pytest test_quarantine.py -v
+          - name: ticket-timing-aggregator
+            dir: services/ticket-timing-aggregator
+            install: pip install jsonschema pytest
+            run: python -m pytest test_origin.py -v
+          - name: finding-narrator
+            dir: services/finding-narrator
+            install: pip install pytest
+            run: python -m pytest test_narration_guard.py -v
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.11, not "latest 3.x": every service's own Dockerfile is built
+      # FROM python:3.11-slim -- pinning CI to the same version production
+      # actually runs avoids a class of bug where tests pass on a newer
+      # interpreter but the real image behaves differently.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.dir }}
+        run: ${{ matrix.install }}
+
+      - name: Run tests
+        working-directory: ${{ matrix.dir }}
+        run: ${{ matrix.run }}

@@ -937,7 +937,7 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 
 #### `k8s/observability/Chart.yaml`, `values.yaml`
 - **What they do:** Image tags and resource limits for kube-state-metrics, Prometheus (3-day retention) and Grafana (with placeholder admin credentials).
-- **Why they work this way:** The description explains that all three are hand-rolled from official images, for the same reason as the TimescaleDB and MinIO charts.
+- **Why they work this way:** The description explains that all three are hand-rolled from official images, for the same reason as the TimescaleDB and MinIO charts. **Grafana's admin password, rotated 2026-09-28:** was the one dev-only credential in this project that never got swept into `k8s/harden/harden-live-cluster.sh`'s rotation when everything else did -- fixed by giving that script a real random password (same `rand()`/`-f k8s/secrets/grafana.values.yaml` pattern as MinIO's root password) and a `kubectl rollout restart deploy/grafana`. That restart is the *entire* rotation, unlike TimescaleDB's role-then-restart dance: `templates/grafana.yaml` mounts no persistent volume for `/var/lib/grafana`, so Grafana's own sqlite user table is wiped on every restart and `GF_SECURITY_ADMIN_PASSWORD` is re-read as a brand-new install each time -- confirmed live by hitting `/api/org` with the new password (`200`) and the old placeholder (`401`) right after the restart.
 
 #### `k8s/observability/templates/kube-state-metrics.yaml`
 - **What it does:** A ServiceAccount, a read-only ClusterRole and binding (pods, nodes, deployments, jobs and similar), a Deployment and a Service on 8080.

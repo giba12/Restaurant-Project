@@ -4,11 +4,13 @@
 # bootstraps pgBackRest backups of TimescaleDB into the existing MinIO
 # deployment, turns on the dashboard/game-bridge API-key + HTTP Basic
 # Auth added in services/dashboard-api/main.py, game/bridge/main.py and
-# k8s/dashboard's nginx config, and rotates alert-relay's ntfy.sh topic
-# name (k8s/observability) -- not a credential exactly, but the same
-# "don't leave the guessable placeholder in place" idea: ntfy's free tier
-# has no access control on a topic, so anyone who knows the name can read
-# every alert sent to it. Run from the repo root:
+# k8s/dashboard's nginx config, and rotates two more k8s/observability
+# values: alert-relay's ntfy.sh topic name (not a credential exactly, but
+# the same "don't leave the guessable placeholder in place" idea -- ntfy's
+# free tier has no access control on a topic, so anyone who knows the name
+# can read every alert sent to it) and Grafana's admin password (a real
+# credential that was simply missed when everything else here was first
+# rotated). Run from the repo root:
 #
 #   bash k8s/harden/harden-live-cluster.sh --dry-run   # see every step first
 #   bash k8s/harden/harden-live-cluster.sh             # do it
@@ -58,13 +60,15 @@ echo "== 1. generate credentials (nothing here is printed or committed) =="
 if [ "$DRY" = 1 ]; then
   echo "+ generate: TimescaleDB restaurant_app + narrator_app passwords, MinIO root password,"
   echo "  a pgbackrest-scoped MinIO user+secret, dashboard-api/game-bridge API keys, an"
-  echo "  nginx Basic Auth user+password, and a random ntfy.sh alert topic name"
+  echo "  nginx Basic Auth user+password, a random ntfy.sh alert topic name, and a Grafana"
+  echo "  admin password"
 else
   TS_PW=$(rand); NARRATOR_PW=$(rand); MINIO_ROOT_PW=$(rand)
   PGBACKREST_KEY=$(rand); PGBACKREST_SECRET=$(rand)
   DASHBOARD_API_KEY=$(rand); BRIDGE_API_KEY=$(rand)
   DASHBOARD_USER=admin; DASHBOARD_PASSWORD=$(rand)
   NTFY_TOPIC="restaurant-platform-alerts-$(rand)"
+  GRAFANA_ADMIN_PW=$(rand)
 
   cat > "$SECRETS_DIR/timescaledb.values.yaml" <<EOF
 credentials:
@@ -73,6 +77,10 @@ EOF
   cat > "$SECRETS_DIR/alert-relay.values.yaml" <<EOF
 alertRelay:
   ntfyTopic: "$NTFY_TOPIC"
+EOF
+  cat > "$SECRETS_DIR/grafana.values.yaml" <<EOF
+grafana:
+  adminPassword: "$GRAFANA_ADMIN_PW"
 EOF
   cat > "$SECRETS_DIR/narrator.values.yaml" <<EOF
 narratorCredentials:
@@ -285,18 +293,34 @@ if [ "$DRY" = 0 ]; then
 fi
 
 # ---------------------------------------------------------------------
-# 13. Rotate alert-relay's ntfy.sh topic (k8s/observability)
+# 13. Rotate alert-relay's ntfy.sh topic and Grafana's admin password
+#     (both k8s/observability)
 # ---------------------------------------------------------------------
 # Assumes k8s/observability/deploy-alerting.sh has already been run once
 # (Alertmanager/alert-relay/Prometheus rules installed) -- this only
 # rotates the topic name on top of that. --reset-then-reuse-values for the
 # same reason as every other upgrade in this script: values.yaml gaining a
 # key after a release exists means only --reset-then-reuse starts from the
-# chart's current defaults for it.
-echo "== 13. rotate alert-relay's ntfy topic =="
+# chart's current defaults for it. Grafana's restart alone is the whole
+# rotation, unlike TimescaleDB's ALTER-ROLE-then-restart dance above: its
+# Deployment mounts no persistent volume for /var/lib/grafana (see
+# k8s/observability/values.yaml's comment on adminPassword), so its
+# internal sqlite user table is wiped every restart and
+# GF_SECURITY_ADMIN_PASSWORD is re-read as a fresh install each time.
+echo "== 13. rotate alert-relay's ntfy topic and Grafana's admin password =="
 run helm upgrade observability k8s/observability -n "$NS" \
-  -f "$SECRETS_DIR/alert-relay.values.yaml" --reset-then-reuse-values --wait --timeout 120s
+  -f "$SECRETS_DIR/alert-relay.values.yaml" -f "$SECRETS_DIR/grafana.values.yaml" \
+  --reset-then-reuse-values --wait --timeout 120s
 run kubectl rollout status deploy/alert-relay -n "$NS" --timeout=120s
+run kubectl rollout restart deploy/grafana -n "$NS"
+run kubectl rollout status deploy/grafana -n "$NS" --timeout=120s
+
+if [ "$DRY" = 0 ]; then
+  echo
+  echo "Grafana login (save this -- it is not stored anywhere else, and this script does not print it again):"
+  echo "  user:     admin"
+  echo "  password: $GRAFANA_ADMIN_PW"
+fi
 
 if [ "$DRY" = 0 ]; then
   echo

@@ -11,13 +11,14 @@ api:
     PGUSER: "restaurant_app"
   pgPasswordSecretName: "timescaledb-credentials"
   pgPasswordSecretKey: "password"
+  # Memory right-sized 2026-09-29 against real usage (~32Mi, confirmed live).
   resources:
     requests:
       cpu: 50m
-      memory: 128Mi
+      memory: 64Mi
     limits:
       cpu: 200m
-      memory: 256Mi
+      memory: 128Mi
 
 web:
   image:

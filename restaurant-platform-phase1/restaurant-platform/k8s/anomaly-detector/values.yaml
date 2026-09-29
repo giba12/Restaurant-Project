@@ -31,10 +31,15 @@ pgPasswordSecretKey: "password"
 # Strimzi's own fixed naming convention, not something this chart invents.
 kafkaTlsSecretName: "restaurant-platform-kafka-cluster-ca-cert"
 
+# Memory right-sized 2026-09-29 against real usage (~104Mi, confirmed live
+# via Prometheus). Limit kept generous relative to that (vs. the tighter
+# ~2x ratio used for lighter services) since isolation-forest fit/inference
+# can burst under an injected scenario, which a single scrape won't catch.
+# cpu left untouched -- this pass only right-sizes measured memory.
 resources:
   requests:
     cpu: 100m
-    memory: 256Mi
+    memory: 192Mi
   limits:
     cpu: 1000m
-    memory: 1Gi
+    memory: 384Mi

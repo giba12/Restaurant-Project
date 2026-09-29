@@ -18,10 +18,11 @@ env:
 pgPasswordSecretName: "timescaledb-credentials"
 pgPasswordSecretKey: "password"
 
+# Memory right-sized 2026-09-29 against real usage (~59Mi, confirmed live).
 resources:
   requests:
     cpu: 50m
-    memory: 128Mi
+    memory: 80Mi
   limits:
     cpu: 200m
-    memory: 256Mi
+    memory: 160Mi

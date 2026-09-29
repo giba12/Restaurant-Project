@@ -2,19 +2,33 @@ kubeStateMetrics:
   image:
     repository: registry.k8s.io/kube-state-metrics/kube-state-metrics
     tag: v2.13.0
+  # Had no resources at all until 2026-09-28 -- real usage is small on this
+  # cluster's modest object count (confirmed live, ~13Mi), but unbounded is
+  # still a gap on a shared node.
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
 
 prometheus:
   image:
     repository: docker.io/prom/prometheus
     tag: v2.55.1
   retention: 3d
+  # Memory trimmed, not aggressively right-sized, 2026-09-29: real usage is
+  # ~126Mi (confirmed live), but this scrapes more targets and rules than it
+  # did when 512Mi was first chosen (kafka-jmx, cadvisor, alerting added
+  # since), so kept more headroom than the tighter ratio used elsewhere.
   resources:
     requests:
       cpu: 100m
-      memory: 256Mi
+      memory: 192Mi
     limits:
       cpu: 500m
-      memory: 512Mi
+      memory: 384Mi
 
 grafana:
   image:

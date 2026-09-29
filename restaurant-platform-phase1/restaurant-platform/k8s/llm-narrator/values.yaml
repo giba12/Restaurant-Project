@@ -32,10 +32,13 @@ pgPasswordSecretKey: "password"
 # Strimzi's own fixed naming convention, not something this chart invents.
 kafkaTlsSecretName: "restaurant-platform-kafka-cluster-ca-cert"
 
+# Memory right-sized 2026-09-29 against real usage (~31Mi, confirmed live --
+# this is just the narrator's own wrapper process; Ollama itself runs as a
+# separate service with its own footprint, not measured here).
 resources:
   requests:
     cpu: 50m
-    memory: 128Mi
+    memory: 64Mi
   limits:
     cpu: 200m
-    memory: 256Mi
+    memory: 128Mi

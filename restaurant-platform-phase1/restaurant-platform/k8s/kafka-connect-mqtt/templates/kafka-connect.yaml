@@ -25,6 +25,17 @@ spec:
       - secretName: restaurant-platform-kafka-cluster-ca-cert
         certificate: ca.crt
   {{- end }}
+  # Explicit -Xmx, not left to the JVM's default cgroup-based auto-sizing
+  # (25% of the container's memory limit) -- same reasoning as
+  # k8s/kafka-strimzi/templates/kafka-nodepool.yaml's own broker jvmOptions,
+  # which this mirrors. Confirmed live before this was added: with no
+  # resources/jvmOptions at all, this worker's real usage settled at ~580Mi
+  # (four Camel/Paho MQTT source connectors plus the truststore), so 1g heap
+  # inside a 1536Mi container limit leaves real headroom for metaspace and
+  # native memory rather than guessing.
+  jvmOptions:
+    -Xms: {{ .Values.jvmOptions.xms | quote }}
+    -Xmx: {{ .Values.jvmOptions.xmx | quote }}
   {{- if .Values.mqttTls.enabled }}
   # The four MQTT source connectors (k8s/kafka-connect-mqtt/connectors/)
   # use org.apache.camel's Kamelet-wrapped mqtt-source connector, which
@@ -46,12 +57,13 @@ spec:
   # /opt/kafka/...: Strimzi rejects any connectContainer.volumeMounts path
   # that doesn't start with /mnt ("Forbidden path found in additional
   # volumes"), confirmed live the first time this chart was applied.
-  jvmOptions:
     javaSystemProperties:
       - name: javax.net.ssl.trustStore
         value: /mnt/mqtt-truststore/cacerts
       - name: javax.net.ssl.trustStorePassword
         value: {{ .Values.mqttTls.trustStorePassword | quote }}
+  {{- end }}
+  {{- if .Values.mqttTls.enabled }}
   template:
     pod:
       volumes:
@@ -80,3 +92,5 @@ spec:
     config.storage.replication.factor: 1
     offset.storage.replication.factor: 1
     status.storage.replication.factor: 1
+  resources:
+    {{- toYaml .Values.resources | nindent 4 }}

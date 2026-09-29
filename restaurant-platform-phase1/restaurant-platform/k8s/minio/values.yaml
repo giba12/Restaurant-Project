@@ -34,13 +34,17 @@ persistence:
   size: 10Gi
   storageClassName: ""
 
+# Memory trimmed, not aggressively right-sized, 2026-09-29: real usage is
+# ~119Mi (confirmed live), but pgBackRest backups and bucket writes are real
+# bursts a single scrape won't catch, so this keeps more headroom than the
+# lighter Python services got in the same pass.
 resources:
   requests:
     cpu: 250m
-    memory: 256Mi
+    memory: 192Mi
   limits:
     cpu: 500m
-    memory: 512Mi
+    memory: 384Mi
 
 credentials:
   # Real value supplied at deploy time via -f k8s/secrets/minio.values.yaml

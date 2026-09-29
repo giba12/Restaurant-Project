@@ -32,10 +32,11 @@ timescaledb:
   port: 5432
   database: "restaurant_platform"
 
+# Memory right-sized 2026-09-29 against real usage (~29Mi, confirmed live).
 resources:
   requests:
     cpu: 100m
-    memory: 128Mi
+    memory: 64Mi
   limits:
     cpu: 500m
-    memory: 256Mi
+    memory: 128Mi

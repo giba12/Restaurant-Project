@@ -26,13 +26,18 @@ persistence:
   size: 20Gi
   storageClassName: ""  # empty = cluster default (k3s local-path-provisioner)
 
+# Memory trimmed, not aggressively right-sized, 2026-09-29: real usage is
+# ~276Mi (confirmed live, itself already higher than an earlier ~137Mi
+# reading, showing this fluctuates with query/backup load), so this keeps
+# real headroom above the current high-water mark rather than the tighter
+# ratio used for flatter workloads elsewhere in this pass.
 resources:
   requests:
     cpu: 250m
-    memory: 512Mi
+    memory: 384Mi
   limits:
     cpu: "1"
-    memory: 1Gi
+    memory: 768Mi
 
 credentials:
   # create stays true (see the note below on why flipping it to false on an

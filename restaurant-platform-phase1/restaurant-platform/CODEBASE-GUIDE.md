@@ -783,6 +783,7 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
   - Consumer lag is not a broker JMX metric at all (committed offsets live in the internal `__consumer_offsets` topic), so Strimzi's dedicated exporter is used.
   - The exporter must use Strimzi's own bundled image; overriding it with the upstream `kafka-exporter` image crashed with `kafka_exporter_run.sh` not found.
   - Strimzi creates a Deployment but no Service for the exporter, so one is written here.
+  - **`entityOperator.topicOperator`/`userOperator` gained real resource limits, 2026-09-28** (previously bare `{}`, meaning unbounded): real usage was already ~200-220Mi each (confirmed live via Prometheus), so sizing started from that, not a guess. `userOperator` hit a real, reproducible crash loop live at the first values tried (384Mi memory limit) -- but doubling memory to 768Mi did *not* fix it, which turned out to be the useful clue: the actual cause was its `cpu: 200m` limit. Its liveness/readiness probes are `delay=10s/period=10s/failure=3` (~40s total), and at 200m CPU this JVM's own health endpoint didn't come up in time, so kubelet killed it every single attempt, right after it printed its startup config -- `topic-operator`, same image and same 200m limit, happened to start fast enough, so this wasn't a blanket "200m is too small" finding, just this specific sidecar's heavier startup (cert/SCRAM/quartz-scheduler setup). Fixed with `cpu: "1"`. See the identical class of bug in `k8s/kafka-connect-mqtt`'s own entry, found minutes earlier in the same session.
 - **Connects to:** `kafka-nodepool.yaml`, `metrics-configmap.yaml`; scraped by `k8s/observability`.
 - **Purpose:** The Kafka cluster definition.
 
@@ -797,6 +798,7 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 #### `k8s/kafka-connect-mqtt/templates/kafka-connect.yaml`
 - **What it does:** A Strimzi `KafkaConnect` resource: Kafka 4.3.1, one replica, bootstrapping from the cluster's Service, using the custom image `localhost/local/kafka-connect-mqtt:1.1`, with its own internal storage topics and a JMX exporter.
 - **Why it works this way:** The annotation `strimzi.io/use-connector-resources: "true"` lets `KafkaConnector` resources manage connectors declaratively. Replication factors of 1 match the single broker.
+- **Resources and `jvmOptions.-Xmx`/`-Xms`, added 2026-09-28** (previously no `resources`/`jvmOptions` at all -- real memory usage had settled at ~580Mi organically, fully unbounded). Sized like the broker's own `kafka-nodepool.yaml` (explicit `-Xmx`, not left to the JVM's default 25%-of-container-limit auto-sizing): `-Xmx1g` inside a 1536Mi limit. **A real crash loop was caught live adding this**, but not from the memory settings -- the `cpu: "1"` limit chosen alongside it was the actual problem: Connect's plugin/classloader scanning at startup is CPU-bound, and Java's own container-aware CPU detection logged `os.vcpus = 1` once that limit existed (down from this node's full 12 cores, available when unbounded), serializing work that used to run in parallel. One plugin's classloader alone then took 34 seconds to register, blowing past the liveness probe's timeout and getting killed mid-startup, repeatedly. Fixed by raising the limit to `cpu: "4"` -- a steady-state memory concern turned into a startup-time CPU regression by pairing it with too tight a CPU cap, the same lesson re-learned minutes later on `k8s/kafka-strimzi`'s `userOperator`.
 - **Connects to:** the Kafka cluster; `metrics-configmap.yaml`; the connector resources.
 - **Purpose:** The Connect worker that bridges MQTT to Kafka.
 
@@ -817,7 +819,7 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 
 #### `k8s/mosquitto/Chart.yaml`, `values.yaml`, `templates/configmap.yaml`, `templates/deployment.yaml`, `templates/service.yaml`
 - **What they do:** A working Mosquitto deployment: a ConfigMap with the same four-line config as Compose, a one-replica Deployment on `eclipse-mosquitto:2` mounting it, and a Service on 1883.
-- **Why it works this way:** It is small and stateless (`persistence false`). `values.yaml` now holds the real image and replica count and the Deployment template reads them (the render was checked to be identical to the deployed manifest); it used to hold unused `TBD` placeholders.
+- **Why it works this way:** It is small and stateless (`persistence false`). `values.yaml` now holds the real image and replica count and the Deployment template reads them (the render was checked to be identical to the deployed manifest); it used to hold unused `TBD` placeholders. **Gained a resource block, 2026-09-28** (previously none at all -- real usage is a few MiB, a lightweight C daemon, but unbounded is still a gap on a shared node): unlike the JVM sidecars touched the same session (`kafka-connect-mqtt`, `kafka-strimzi`'s `userOperator`), a plain C daemon has no classloading/JIT startup burst, so the same small `cpu: 100m`/`memory: 64Mi` limit that would have crash-looped a JVM applied here with zero issues -- confirmed live, no restart, edge simulators reconnected cleanly within seconds of the one expected blip from the pod rolling.
 - **Purpose:** The MQTT broker the simulators publish to.
 
 ### 9.2 Storage
@@ -941,6 +943,7 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 
 #### `k8s/observability/templates/kube-state-metrics.yaml`
 - **What it does:** A ServiceAccount, a read-only ClusterRole and binding (pods, nodes, deployments, jobs and similar), a Deployment and a Service on 8080.
+- **Why it works this way:** **Gained a resource block, 2026-09-28** (previously none -- real usage is small on this cluster's modest object count, ~13Mi confirmed live, but unbounded is still a gap). A compiled Go binary, like Mosquitto, not a JVM -- no startup-burst risk from a tight `cpu: 100m`/`memory: 128Mi` limit the way the session's two JVM sidecars (Kafka Connect, Strimzi's `userOperator`) had; confirmed live, came up clean on the first try with zero restarts.
 - **Purpose:** Exposes the state of Kubernetes objects (restarts, phases) as metrics.
 
 #### `k8s/observability/templates/prometheus.yaml`

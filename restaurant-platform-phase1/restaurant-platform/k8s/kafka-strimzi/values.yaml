@@ -1,11 +1,42 @@
 clusterName: restaurant-platform-kafka
 replicaCount: 1
 
+# Memory right-sized 2026-09-29 against real usage (~11Mi, confirmed live).
 kafkaExporter:
   resources:
     requests:
       cpu: 50m
-      memory: 64Mi
+      memory: 32Mi
     limits:
       cpu: 200m
-      memory: 128Mi
+      memory: 64Mi
+
+# Sized above real observed usage (~200-220Mi each, confirmed live), not
+# guessed -- see the comment on entityOperator in templates/kafka-cluster.yaml.
+entityOperator:
+  topicOperator:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+      limits:
+        cpu: 200m
+        memory: 384Mi
+  userOperator:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+      # Doubling memory (384->768Mi) did NOT fix the crash loop this caused
+      # live -- the real cause, found after that red herring, was the cpu
+      # limit: liveness/readiness probes here are delay=10s/period=10s/
+      # failure=3 (~40s total), and at cpu: 200m this JVM's own health
+      # endpoint didn't come up before that window closed, so kubelet killed
+      # it every time (same class of bug as kafka-connect-mqtt's -- see that
+      # chart's values.yaml). topic-operator, same image and same 200m
+      # limit, happened to start fast enough; user-operator's extra
+      # cert/SCRAM/quartz-scheduler setup apparently doesn't, so it gets a
+      # more generous limit rather than assuming 200m is fine everywhere.
+      limits:
+        cpu: "1"
+        memory: 768Mi

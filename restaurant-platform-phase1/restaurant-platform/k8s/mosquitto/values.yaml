@@ -3,3 +3,13 @@ replicaCount: 1
 image:
   repository: eclipse-mosquitto
   tag: "2"
+
+# Had no resources at all until 2026-09-28 -- real usage is tiny (a few MB,
+# a lightweight C daemon), but "no limit" is still a gap on a shared node.
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi

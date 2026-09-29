@@ -41,13 +41,15 @@ kafka:
 # that lets scenario-injection-controller perturb this simulator.
 scenarioControlEnabled: true
 
+# Memory right-sized 2026-09-29 against real usage (~17-29Mi per simulator,
+# confirmed live across all four).
 resources:
   requests:
     cpu: 25m
-    memory: 64Mi
+    memory: 40Mi
   limits:
     cpu: 100m
-    memory: 128Mi
+    memory: 96Mi
 
 # One entry per simulated sensor type == one Deployment (one pod type)
 # each, per the Phase 1 architecture requirement ("one container per

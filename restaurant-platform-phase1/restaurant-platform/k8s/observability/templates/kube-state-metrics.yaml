@@ -56,6 +56,8 @@ spec:
           ports:
             - containerPort: 8080
               name: metrics
+          resources:
+            {{- toYaml .Values.kubeStateMetrics.resources | nindent 12 }}
 ---
 apiVersion: v1
 kind: Service

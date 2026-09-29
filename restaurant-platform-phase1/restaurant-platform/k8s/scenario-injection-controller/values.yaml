@@ -15,10 +15,14 @@ env:
 # Strimzi's own fixed naming convention, not something this chart invents.
 kafkaTlsSecretName: "restaurant-platform-kafka-cluster-ca-cert"
 
+# Idles at well under 1Mi (it's `sleep infinity`, driven via kubectl exec)
+# -- trimmed the request accordingly but kept the limit closer to its old
+# size, since the actual work happens interactively (real scenario-injection
+# commands) and isn't reflected in an idle-time scrape.
 resources:
   requests:
-    cpu: 50m
-    memory: 64Mi
+    cpu: 25m
+    memory: 32Mi
   limits:
     cpu: 200m
-    memory: 128Mi
+    memory: 96Mi

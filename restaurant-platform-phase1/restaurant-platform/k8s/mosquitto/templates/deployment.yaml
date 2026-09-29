@@ -25,6 +25,8 @@ spec:
             - name: tls
               mountPath: /mosquitto/certs
               readOnly: true
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
       volumes:
         - name: config
           configMap:

@@ -37,9 +37,17 @@ spec:
       transaction.state.log.min.isr: 1
       default.replication.factor: 1
       min.insync.replicas: 1
+  # Both sidecars ran with no resources at all until 2026-09-28 (Strimzi
+  # defaults them to unbounded, not to some built-in ceiling) -- real usage
+  # was already ~200-220Mi each, confirmed live via Prometheus/cAdvisor, so
+  # these limits are sized above that with real headroom, not guessed low.
   entityOperator:
-    topicOperator: {}
-    userOperator: {}
+    topicOperator:
+      resources:
+        {{- toYaml .Values.entityOperator.topicOperator.resources | nindent 8 }}
+    userOperator:
+      resources:
+        {{- toYaml .Values.entityOperator.userOperator.resources | nindent 8 }}
   # Consumer group lag isn't a broker JMX metric at all -- committed
   # offsets live in the internal __consumer_offsets topic, not an MBean
   # -- so the jmx_exporter rules above can't derive it. Strimzi ships a

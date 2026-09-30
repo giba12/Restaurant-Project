@@ -295,7 +295,7 @@ func _run() -> void:
 	main.cart_spinboxes["menu-soup-of-day"].value = 1
 	check(not main.place_order_button.disabled and main.cart_total_label.text.contains("1 item"), "picking an item enables ordering")
 	await main._on_place_order_pressed()
-	check(not main.cart_section.visible and main.status_section.visible, "placing the order switches to waiting")
+	check(not main.cart_section.visible and main.status_section.visible, "placing the order switches to waiting (%s)" % main.status_label.text)
 
 	var guest_delivered := false
 	for i in 60:

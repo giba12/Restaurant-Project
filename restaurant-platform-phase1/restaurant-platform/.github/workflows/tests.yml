@@ -8,13 +8,11 @@ name: tests
 # sys.modules.setdefault(...) or FastAPI's dependency_overrides, so nothing
 # here needs a database, broker, or docker-compose stack.
 #
-# NOT covered here: game/client/tests/smoke_test.gd, the one true
-# integration test in the project. It drives a live game-bridge (which
-# itself needs Kafka, TimescaleDB and the digital-twin running) through the
-# Godot engine and takes a couple of minutes -- a fundamentally different,
-# heavier kind of test than anything below, and needs its own CI job
-# (installing Godot, standing up the Compose stack) as a separate follow-up
-# rather than bolted onto this fast, dependency-free workflow.
+# game-smoke-test (below) is a fundamentally different, heavier kind of
+# job: game/client/tests/smoke_test.gd is the one true integration test in
+# the project, driving a live game-bridge through the Godot engine.
+# Deliberately its own job, not folded into the matrix above, so a slow or
+# flaky Compose stack never blocks the fast, dependency-free unit tests.
 on:
   push:
     branches: [main]
@@ -69,3 +67,78 @@ jobs:
       - name: Run tests
         working-directory: ${{ matrix.dir }}
         run: ${{ matrix.run }}
+
+  game-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Fast pacing (see game/README.md): the smoke test's own wait loops
+      # are keyed to crew timing, so the default 6-14s pacing would make
+      # this job needlessly slow without changing what it proves.
+      SPAWN_SECONDS: "1"
+      CREW_MIN_SECONDS: "1"
+      CREW_MAX_SECONDS: "2"
+      # Must match docker-compose.yml/game/docker-compose.game.yml's own
+      # BRIDGE_API_KEY fallback exactly -- bridge_client.gd reads this
+      # straight from the environment with no fallback of its own, so an
+      # unset var here (rather than one that happens to match) would 401
+      # on every authenticated call.
+      BRIDGE_API_KEY: "changeme-local-dev-only"
+      BRIDGE_URL: "http://127.0.0.1:8001"
+      DASHBOARD_URL: "http://127.0.0.1:8080"
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only the services the smoke test actually exercises -- not
+      # mosquitto/Kafka Connect (the game publishes straight to Kafka, no
+      # MQTT involved), not the simulators, not anomaly-detector/causal-
+      # engine/finding-reviewer/llm-narrator/ollama (the test never reads
+      # narrated findings, and pulling a model would make this job far
+      # slower for no coverage gained). ticket-timing-aggregator is
+      # included because dashboard-api's /api/comparison (services/
+      # dashboard-api/comparison.py) reads its ticket_timing_summaries
+      # table alongside storage-consumer's raw event tables.
+      - name: Start the platform + game bridge (minimal service set)
+        run: |
+          docker compose -f docker-compose.yml -f game/docker-compose.game.yml \
+            up -d --build kafka timescaledb storage-consumer ticket-timing-aggregator \
+            dashboard-api dashboard-web game-bridge
+
+      # kafka/timescaledb gate on Compose's own `condition: service_healthy`
+      # before their dependents start, but game-bridge/dashboard-api/
+      # dashboard-web declare no healthcheck of their own -- poll their
+      # /api/health routes (a plain "ok", not a downstream check, but
+      # sufficient: each app's Kafka/DB setup happens synchronously before
+      # its HTTP server starts accepting connections at all).
+      - name: Wait for game-bridge and the dashboard to answer
+        run: |
+          for url in "$BRIDGE_URL/api/health" "$DASHBOARD_URL/api/health"; do
+            echo "waiting for $url"
+            timeout 120 bash -c "until curl -sf '$url' >/dev/null; do sleep 2; done"
+          done
+
+      # Official prebuilt binary (MIT-licensed, same as every other engine
+      # dependency this project pulls) -- version matches game/client/
+      # project.godot's config/features exactly, not "whatever's latest".
+      # --headless needs no X server/GPU at all (Godot's dummy rendering
+      # driver), which is why this runs on a stock ubuntu-latest runner
+      # with no Xvfb; libfontconfig1 is the one native lib Godot 4's
+      # headless mode is commonly missing on a minimal image.
+      - name: Install Godot 4.5 (headless)
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y --no-install-recommends unzip libfontconfig1
+          curl -sL -o godot.zip https://github.com/godotengine/godot/releases/download/4.5-stable/Godot_v4.5-stable_linux.x86_64.zip
+          unzip -q godot.zip
+          sudo mv Godot_v4.5-stable_linux.x86_64 /usr/local/bin/godot4
+          chmod +x /usr/local/bin/godot4
+
+      - name: Run the smoke test
+        run: godot4 --headless --path game/client -s res://tests/smoke_test.gd
+
+      - name: Dump compose logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.yml -f game/docker-compose.game.yml logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f game/docker-compose.game.yml down -v

@@ -13,6 +13,20 @@ name: tests
 # the project, driving a live game-bridge through the Godot engine.
 # Deliberately its own job, not folded into the matrix above, so a slow or
 # flaky Compose stack never blocks the fast, dependency-free unit tests.
+#
+# This file must live at <repo-root>/.github/workflows/ -- GitHub Actions
+# only ever discovers workflows there, never at a nested path. It was
+# originally committed at restaurant-platform-phase1/restaurant-platform/
+# .github/workflows/tests.yml (that subdirectory's own natural location
+# relative to everything else in the project) and, as a result, never once
+# registered as a workflow or ran, on any push, from the day it was added --
+# confirmed live via `gh workflow list`/`gh run list` both coming back
+# completely empty despite many intervening pushes. Every "not yet
+# confirmed by an actual run" caveat attached to this file before
+# 2026-09-30 was accurate for a reason nobody had checked: it could not
+# have run at all. All working-directory values below are prefixed with
+# restaurant-platform-phase1/restaurant-platform accordingly, since
+# actions/checkout@v4 now lands the repo root here, not that subdirectory.
 on:
   push:
     branches: [main]
@@ -26,27 +40,27 @@ jobs:
       matrix:
         include:
           - name: game-bridge
-            dir: game/bridge
+            dir: restaurant-platform-phase1/restaurant-platform/game/bridge
             install: pip install -r requirements.txt pytest httpx
             run: python -m pytest test_bridge.py -v
           - name: dashboard-api
-            dir: services/dashboard-api
+            dir: restaurant-platform-phase1/restaurant-platform/services/dashboard-api
             install: pip install fastapi httpx pytest
             run: python -m pytest test_auth.py test_comparison.py -v
           - name: anomaly-detector
-            dir: services/anomaly-detector
+            dir: restaurant-platform-phase1/restaurant-platform/services/anomaly-detector
             install: pip install numpy pytest jsonschema
             run: python -m pytest test_quarantine.py -v
           - name: ticket-timing-aggregator
-            dir: services/ticket-timing-aggregator
+            dir: restaurant-platform-phase1/restaurant-platform/services/ticket-timing-aggregator
             install: pip install jsonschema pytest
             run: python -m pytest test_origin.py -v
           - name: finding-narrator
-            dir: services/finding-narrator
+            dir: restaurant-platform-phase1/restaurant-platform/services/finding-narrator
             install: pip install pytest
             run: python -m pytest test_narration_guard.py -v
           - name: alert-relay
-            dir: services/alert-relay
+            dir: restaurant-platform-phase1/restaurant-platform/services/alert-relay
             install: pip install pytest
             run: python -m pytest test_alert_relay.py -v
     steps:
@@ -71,6 +85,9 @@ jobs:
   game-smoke-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: restaurant-platform-phase1/restaurant-platform
     env:
       # Fast pacing (see game/README.md): the smoke test's own wait loops
       # are keyed to crew timing, so the default 6-14s pacing would make

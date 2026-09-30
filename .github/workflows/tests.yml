@@ -89,12 +89,31 @@ jobs:
       run:
         working-directory: restaurant-platform-phase1/restaurant-platform
     env:
-      # Fast pacing (see game/README.md): the smoke test's own wait loops
-      # are keyed to crew timing, so the default 6-14s pacing would make
-      # this job needlessly slow without changing what it proves.
-      SPAWN_SECONDS: "1"
+      # Only crew pacing is sped up, not spawn pacing -- found live, not
+      # guessed, after this job's first real run failed with "the kitchen
+      # has no room right now" on a late guest-order check. Root cause: the
+      # dining room auto-spawns a new ticket every SPAWN_SECONDS whenever
+      # anyone is staffed (game/bridge/main.py's _spawn_ticket), which is
+      # true for most of this test's ~2-minute run; MAX_OPEN_TICKETS (5 by
+      # default) is a *global* cap once nobody's staffed, not per-station.
+      # SPAWN_SECONDS=1 (8x the 8s default) meant 8x more background
+      # tickets competing for that same ceiling, so by the time the test's
+      # own late guest order arrived, there was no room left -- nothing to
+      # do with the wait loops below, which only wait on the crew finishing
+      # the test's *own* tickets, not on spawn rate. Left at its default
+      # (unset here) since slowing it back down costs this job nothing.
+      # CREW_MIN/MAX_SECONDS stay fast: they only affect how quickly the
+      # crew finishes an already-open ticket, which is what the wait loops
+      # actually depend on, and doesn't consume any capacity.
       CREW_MIN_SECONDS: "1"
       CREW_MAX_SECONDS: "2"
+      # Extra headroom against the test's own accumulated churn (several
+      # sections deliberately abandon a ticket mid-flow to test a rejection
+      # path, e.g. a 403 on "a server may not cook") -- independent of the
+      # spawn-rate fix above, so a busy run still has room for the test's
+      # own late guest order even if several earlier tickets are still
+      # being cleared.
+      MAX_OPEN_TICKETS: "15"
       # Must match docker-compose.yml/game/docker-compose.game.yml's own
       # BRIDGE_API_KEY fallback exactly -- bridge_client.gd reads this
       # straight from the environment with no fallback of its own, so an

@@ -219,24 +219,6 @@ The game touches version 1 in exactly four places, all intentional: the shared c
 - **Connects to:** the phase handoffs and the study guide, which it points to.
 - **Purpose:** The evidence trail behind every claim in the README. Its sections 0 to 3 record the design as of Phase 4 (left as written, with a dated update note at the top); section 4 (the status table) and the problem log carry the later work, and sections 7 and 8 were refreshed on 2026-09-20.
 
-### `phase3-resume-brief.md`
-- **What it does:** A short "paste this into a new chat" brief written mid-Phase 3, listing what was done and how to confirm the four connectors and topics.
-- **Why it works this way:** It was written to resume a session that had run out of context.
-- **Connects to:** refers to paths (`k8s/charts/...`) that were later corrected.
-- **Purpose:** Historical, and marked as such by a banner at the top. Everything it lists as unfinished was completed; it is safe to ignore.
-
-### `phase4-handoff.md`
-- **What it does:** A self-contained hand-off for the storage layer: what was built, how data flows, where files live, why the manifests are hand-rolled, operational lessons, and how to verify with row counts and consumer-group lag.
-- **Why it works this way:** It is written for someone with no prior exposure, so it restates context instead of pointing back.
-- **Connects to:** `storage/`, `k8s/timescaledb`, `k8s/minio`, `k8s/storage-consumer`.
-- **Purpose:** Onboarding for the storage layer.
-
-### `phase5-handoff.md`
-- **What it does:** The same kind of hand-off for the causal and anomaly engine, including the closed-loop verification (an injected staffing shortage producing 26 station-localised anomalies and a +73,851 ms refutation-tested effect) and the bugs behind it (problem log items 38 to 51).
-- **Why it works this way:** The verification steps are written as runnable commands so the done condition can be re-checked, not just believed.
-- **Connects to:** all Phase 5 services, `services/scenario-injection-controller`, `k8s/phase5-schemas`.
-- **Purpose:** Onboarding and verification recipe for Phase 5. The "known open items" that have since been resolved are marked as such in place.
-
 ### `linux-k8s-docker-helm-study-guide.md`
 - **What it does:** A tool-level reference (Linux, Docker/Podman, Kubernetes, Helm, Python packaging, `ENTRYPOINT` semantics, supply-chain volatility) organised by the specific failure modes hit in this project, with a command quick-reference.
 - **Why it works this way:** It is indexed by symptom, so it can be searched when a command fails in an unfamiliar way before re-deriving a diagnosis.

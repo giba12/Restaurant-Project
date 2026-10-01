@@ -1,6 +1,6 @@
 apiVersion: v2
 name: llm-narrator
-description: Phase 6 - narrates narrative_ready CausalFinding rows via a local Ollama model. Connects to Postgres as the restricted narrator_app role (SELECT-only on causal_findings; see storage/schema/003_phase6.sql) -- structurally unable to read anomaly_events or raw event tables.
+description: Phase 6 - narrates narrative_ready CausalFinding rows via a local Ollama model. Built from services/finding-narrator/ (chart name predates a later service rename and was left as-is). Connects to Postgres as the restricted narrator_app role (SELECT-only on causal_findings; see storage/schema/003_phase6.sql) -- structurally unable to read anomaly_events or raw event tables.
 type: application
 version: 0.1.0
 appVersion: "1.0"

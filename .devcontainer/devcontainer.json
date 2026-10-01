@@ -1,0 +1,40 @@
+{
+  // Must live at <repo-root>/.devcontainer/devcontainer.json for GitHub
+  // Codespaces' "Create codespace" button to discover it with zero
+  // extra clicks -- same repo-root-only discovery rule this project
+  // already hit once for GitHub Actions workflows (see
+  // .github/workflows/tests.yml's header for how that one was found
+  // the hard way: a workflow nested one level down never registered
+  // at all, on any push, for days).
+  //
+  // Set up but not yet opened as a real Codespace -- written and
+  // reviewed, not run (the project is out of Codespaces allowance for
+  // this billing cycle). Reuses the existing, already-verified
+  // docker-compose.yml exactly as the local Docker path does (same
+  // `docker compose up --build`, see QUICKSTART.md) rather than
+  // inventing a parallel Codespaces-only config, so whatever breaks on
+  // first real use (if anything) should be a Codespaces-environment
+  // difference, not a second setup to debug from scratch.
+  //
+  // Deliberately still builds from source, not from the images
+  // publish-images.yml can push to ghcr.io -- that workflow is itself
+  // unverified and nothing currently depends on it (see its own
+  // header). Wiring this to pull from ghcr.io before a single real run
+  // has confirmed those images exist and work would trade one
+  // untested path for two. Revisit once that workflow has actually
+  // been run and the published images checked.
+  "name": "restaurant-platform (portable path)",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "postStartCommand": "cd restaurant-platform-phase1/restaurant-platform && docker compose up -d --build",
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8080": {
+      "label": "Dashboard",
+      "onAutoForward": "openBrowser"
+    }
+  },
+  "waitFor": "postStartCommand"
+}

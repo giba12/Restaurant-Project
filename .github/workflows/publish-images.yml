@@ -1,0 +1,119 @@
+name: publish-images
+
+# Builds the project's custom application images and pushes them to
+# GitHub Container Registry (ghcr.io), free for a public repo. The
+# motivation: docker-compose.yml's `docker compose up --build` builds
+# these same ~11 images from source on whatever machine runs it --
+# several minutes on first run (see QUICKSTART.md). Pre-building them
+# here once and publishing lets that machine `pull` instead of `build`,
+# which is the main lever on that time cost (far more than the compute
+# machine itself) -- useful both for a plain local run and for a
+# GitHub Codespaces devcontainer (.devcontainer/devcontainer.json),
+# where build time is exactly as real as it is locally.
+#
+# Deliberately workflow_dispatch only, not "on: push" like tests.yml --
+# this is a new, unverified workflow (never actually run; GHCR push
+# permissions and the exact tag scheme are unconfirmed), and nothing
+# in this repo pulls from ghcr.io yet (both docker-compose.yml and
+# .devcontainer/devcontainer.json still build from source, the
+# already-verified working path). Wiring this to fire on every push
+# before any of that is true would rebuild and re-push 11 images on
+# every commit for no consumer. Run manually (Actions tab, or
+# `gh workflow run publish-images.yml`) once ready to test it, and
+# switch the trigger to push-on-main only after a real run confirms
+# the tags and permissions are right.
+#
+# Must live at <repo-root>/.github/workflows/, same as tests.yml --
+# GitHub Actions never discovers workflows at a nested path (see that
+# file's own header for how this project found that out the hard way).
+
+on:
+  workflow_dispatch: {}
+
+env:
+  REGISTRY: ghcr.io
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # kafka-connect: custom image bundling the Camel MQTT source
+          # connector on top of apache/kafka's Connect distribution.
+          - image: kafka-connect
+            context: restaurant-platform-phase1/restaurant-platform/docker-compose/kafka-connect
+            dockerfile: restaurant-platform-phase1/restaurant-platform/docker-compose/kafka-connect/Dockerfile
+
+          # One image, four compose services (SENSOR_TYPE env var picks
+          # the module at runtime) -- same design as the k8s chart.
+          - image: edge-simulators
+            context: restaurant-platform-phase1/restaurant-platform
+            dockerfile: restaurant-platform-phase1/restaurant-platform/edge-simulators/Dockerfile
+
+          - image: storage-consumer
+            context: restaurant-platform-phase1/restaurant-platform
+            dockerfile: restaurant-platform-phase1/restaurant-platform/storage/consumer/Dockerfile
+
+          - image: ticket-timing-aggregator
+            context: restaurant-platform-phase1/restaurant-platform/services
+            dockerfile: restaurant-platform-phase1/restaurant-platform/services/ticket-timing-aggregator/Dockerfile
+
+          - image: anomaly-detector
+            context: restaurant-platform-phase1/restaurant-platform/services
+            dockerfile: restaurant-platform-phase1/restaurant-platform/services/anomaly-detector/Dockerfile
+
+          # One image, two compose services -- finding-reviewer runs
+          # this same image with `--review` instead of a separate build
+          # (see k8s/finding-reviewer/Chart.yaml for the same decision
+          # on the k8s side).
+          - image: causal-engine
+            context: restaurant-platform-phase1/restaurant-platform/services
+            dockerfile: restaurant-platform-phase1/restaurant-platform/services/causal-engine/Dockerfile
+
+          - image: scenario-injection-controller
+            context: restaurant-platform-phase1/restaurant-platform/services
+            dockerfile: restaurant-platform-phase1/restaurant-platform/services/scenario-injection-controller/Dockerfile
+
+          - image: digital-twin
+            context: restaurant-platform-phase1/restaurant-platform/services
+            dockerfile: restaurant-platform-phase1/restaurant-platform/services/digital-twin/Dockerfile
+
+          # Chart/compose service name is llm-narrator; the service
+          # directory itself is finding-narrator (chart name predates a
+          # later rename -- see k8s/llm-narrator/Chart.yaml).
+          - image: finding-narrator
+            context: restaurant-platform-phase1/restaurant-platform/services
+            dockerfile: restaurant-platform-phase1/restaurant-platform/services/finding-narrator/Dockerfile
+
+          - image: dashboard-api
+            context: restaurant-platform-phase1/restaurant-platform/services
+            dockerfile: restaurant-platform-phase1/restaurant-platform/services/dashboard-api/Dockerfile
+
+          - image: dashboard-web
+            context: restaurant-platform-phase1/restaurant-platform/services/dashboard-web
+            dockerfile: restaurant-platform-phase1/restaurant-platform/services/dashboard-web/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ github.repository_owner }}/restaurant-platform-${{ matrix.image }}:latest
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

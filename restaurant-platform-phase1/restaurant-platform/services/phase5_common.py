@@ -92,3 +92,22 @@ def pg_connect():
     return psycopg2.connect(
         host=PG_HOST, port=PG_PORT, dbname=PG_DATABASE, user=PG_USER, password=PG_PASSWORD
     )
+
+
+def start_metrics_server(default_port: int) -> None:
+    """
+    Starts a prometheus_client HTTP server in a background thread for the
+    calling service's own pipeline-health counters -- separate from (and a
+    deliberate follow-up to) k8s/observability's existing alerting, which
+    only ever covered pod/infrastructure health (is it up, is it
+    restarting), not whether the pipeline these services run is actually
+    doing anything. METRICS_PORT, not a hardcoded one, so a chart can avoid
+    a collision if it ever needs to.
+
+    Lazy import, matching pg_connect() just above: a service that never
+    calls this (digital-twin, dashboard-api, finding-narrator) shouldn't
+    need prometheus_client installed at all.
+    """
+    from prometheus_client import start_http_server
+
+    start_http_server(int(os.environ.get("METRICS_PORT", str(default_port))))

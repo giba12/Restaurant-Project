@@ -96,6 +96,32 @@ data:
             replacement: "${1}:9404"
             target_label: __address__
 
+      # Pipeline-health metrics (added 2026-10-01) -- separate from every
+      # job above, which only ever covers pod/infra health (is it up,
+      # restarting), not whether anomaly-detector/causal-engine/
+      # finding-reviewer are actually doing anything. Same kubernetes_sd_configs
+      # + relabel pattern as kafka-jmx above: discover by pod `app` label
+      # rather than a fixed Service, since each is a plain single-pod
+      # Deployment with no Service of its own. See phase5_common.
+      # start_metrics_server and each service's own Counter definitions.
+      - job_name: pipeline-health
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ["kafka"]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            regex: (anomaly-detector|causal-engine|finding-reviewer)
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: service
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__address__]
+            regex: "([^:]+)(?::\\d+)?"
+            replacement: "${1}:8000"
+            target_label: __address__
+
       # cAdvisor via the kubelet -- pod/container-level CPU/memory, the
       # "pod health" part of this project's observability goal not
       # already covered by kube-state-metrics' object-level state.

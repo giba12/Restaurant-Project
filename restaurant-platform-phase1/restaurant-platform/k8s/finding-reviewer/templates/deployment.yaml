@@ -19,6 +19,9 @@ spec:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8000
+              name: metrics
           # Overrides causal-engine's default ENTRYPOINT args -- same image,
           # different mode. No schemas volume mount: run_reviewer() only
           # reads finding_id/refutation_passed off the already-published
@@ -34,5 +37,16 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.pgPasswordSecretName }}
                   key: {{ .Values.pgPasswordSecretKey }}
+          # Added 2026-10-01 alongside the SSL/9093 fix in values.yaml --
+          # phase5_common.KAFKA_TLS_KWARGS needs this cert on disk at
+          # KAFKA_SSL_CAFILE's default path to build its SSLContext.
+          volumeMounts:
+            - name: kafka-tls
+              mountPath: /etc/kafka-tls
+              readOnly: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: kafka-tls
+          secret:
+            secretName: {{ .Values.kafkaTlsSecretName }}

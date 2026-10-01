@@ -46,6 +46,7 @@ import sys
 from kafka import KafkaConsumer, KafkaProducer
 import jsonschema
 import numpy as np
+from prometheus_client import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import phase5_common as common
@@ -56,6 +57,19 @@ log = logging.getLogger("anomaly-detector")
 SUMMARY_TOPIC = "ticket-timing-summaries"
 ANOMALY_TOPIC = "anomaly-events"
 SOURCE_ID = "anomaly-detector-01"
+
+# Pipeline-health metrics -- separate from k8s/observability's existing
+# alerting, which only covers pod/infra health (is it up), not whether
+# this service is actually finding anything. See phase5_common.start_metrics_server.
+SUMMARIES_PROCESSED = Counter(
+    "anomaly_detector_summaries_processed_total", "Completed, non-quarantined ticket summaries evaluated against the baseline"
+)
+SUMMARIES_QUARANTINED = Counter(
+    "anomaly_detector_summaries_quarantined_total", "Summaries excluded from the baseline by origin", ["origin"]
+)
+ANOMALIES_DETECTED = Counter(
+    "anomaly_detector_anomalies_detected_total", "AnomalyEvents emitted", ["detection_method"]
+)
 
 TRACKED_METRICS = ["time_to_cook_start_ms", "cook_duration_ms", "pickup_delay_ms", "service_delay_ms"]
 
@@ -231,6 +245,7 @@ def insert_anomaly(conn, event: dict):
 
 
 def main():
+    common.start_metrics_server(8000)
     anomaly_schema = common.load_schema("AnomalyEvent.schema.json")
 
     consumer = KafkaConsumer(
@@ -263,6 +278,7 @@ def main():
 
             if is_quarantined(summary):
                 quarantined += 1
+                SUMMARIES_QUARANTINED.labels(origin=summary.get("origin") or "unlabelled").inc()
                 if quarantined % STATUS_LOG_EVERY == 1:
                     log.info(
                         "quarantined %d %s ticket(s) so far; baseline windows untouched: %s",
@@ -271,6 +287,7 @@ def main():
                 consumer.commit()
                 continue
 
+            SUMMARIES_PROCESSED.inc()
             station_id = summary.get("station_id") or "unknown"
             window = windows[station_id]
 
@@ -297,6 +314,7 @@ def main():
                 jsonschema.validate(instance=event, schema=anomaly_schema)
                 insert_anomaly(conn, event)
                 producer.send(ANOMALY_TOPIC, value=event)
+                ANOMALIES_DETECTED.labels(detection_method=event["detection_method"]).inc()
             producer.flush()
             consumer.commit()
         except jsonschema.ValidationError:

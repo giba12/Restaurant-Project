@@ -99,6 +99,23 @@ data:
           "targets": [
             {"expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"kafka\"})"}
           ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Anomalies detected (rate, 5m, by method)",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+          "targets": [
+            {"expr": "sum by (detection_method) (rate(anomaly_detector_anomalies_detected_total[5m]))"}
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Causal findings emitted vs refutation result (rate, 5m)",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+          "targets": [
+            {"expr": "rate(causal_engine_findings_emitted_total[5m])", "legendFormat": "findings emitted"},
+            {"expr": "sum by (passed) (rate(causal_engine_refutation_result_total[5m]))", "legendFormat": "refutation passed={{ `{{passed}}` }}"}
+          ]
         }
       ]
     }

@@ -19,6 +19,9 @@ spec:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8000
+              name: metrics
           # No args -- default entrypoint runs run_from_anomaly_stream()
           # (the long-running consumer path). The scenario-validation
           # one-shot path (--scenario-injection-id ...) is invoked ad hoc

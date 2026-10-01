@@ -40,12 +40,35 @@ import sys
 import pandas as pd
 from kafka import KafkaConsumer, KafkaProducer
 import jsonschema
+from prometheus_client import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import phase5_common as common
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("causal-engine")
+
+# Pipeline-health metrics -- separate from k8s/observability's existing
+# alerting, which only covers pod/infra health, not whether this service is
+# actually producing findings or how many pass refutation. Shared by both
+# entry points this file has (run_from_anomaly_stream and run_reviewer,
+# the latter run as the separate finding-reviewer deployment) since each
+# runs as its own process/pod. See phase5_common.start_metrics_server.
+ANOMALIES_PROCESSED = Counter(
+    "causal_engine_anomalies_processed_total", "AnomalyEvents consumed from the anomaly stream"
+)
+FINDINGS_EMITTED = Counter(
+    "causal_engine_findings_emitted_total", "CausalFindings successfully computed and published"
+)
+ANOMALIES_SKIPPED = Counter(
+    "causal_engine_anomalies_skipped_total", "Anomalies that did not produce a finding", ["reason"]
+)
+REFUTATION_RESULT = Counter(
+    "causal_engine_refutation_result_total", "Refutation test outcome on each emitted finding", ["passed"]
+)
+FINDINGS_MARKED_READY = Counter(
+    "causal_engine_findings_marked_ready_total", "Findings flipped to narrative_ready=true by the reviewer"
+)
 
 ANOMALY_TOPIC = "anomaly-events"
 FINDING_TOPIC = "causal-findings-events"
@@ -242,6 +265,7 @@ def process_anomaly(conn, producer, finding_schema, anomaly: dict, scenario_inje
     spec = TREATMENT_MAP.get(anomaly["metric_name"])
     if spec is None:
         log.info("No TREATMENT_MAP entry for metric_name=%s; skipping", anomaly["metric_name"])
+        ANOMALIES_SKIPPED.labels(reason="no_treatment_map_entry").inc()
         return None
 
     df = _load_data(conn, spec, anomaly["window_start"], anomaly["window_end"])
@@ -250,6 +274,8 @@ def process_anomaly(conn, producer, finding_schema, anomaly: dict, scenario_inje
         spec, result, anomaly["restaurant_id"], anomaly.get("anomaly_id"), scenario_injection_id
     )
     jsonschema.validate(instance=finding, schema=finding_schema)
+    FINDINGS_EMITTED.inc()
+    REFUTATION_RESULT.labels(passed=str(finding["refutation_passed"])).inc()
     insert_finding(conn, finding)
     producer.send(FINDING_TOPIC, value=finding)
     producer.flush()
@@ -289,6 +315,7 @@ def run_reviewer():
     scenario-injection-controller's own docstring: an internal
     control-plane signal, not one of the committed event contracts.
     """
+    common.start_metrics_server(8000)
     consumer = KafkaConsumer(
         FINDING_TOPIC,
         bootstrap_servers=common.KAFKA_BOOTSTRAP_SERVERS,
@@ -321,6 +348,7 @@ def run_reviewer():
                     NARRATION_TOPIC,
                     value={"finding_id": finding["finding_id"], "restaurant_id": finding.get("restaurant_id")},
                 )
+                FINDINGS_MARKED_READY.inc()
                 producer.flush()
                 log.info("finding_id=%s marked narrative_ready=true (refutation_passed=true)", finding["finding_id"])
             else:
@@ -336,6 +364,7 @@ def run_reviewer():
 
 
 def run_from_anomaly_stream():
+    common.start_metrics_server(8000)
     finding_schema = common.load_schema("CausalFinding.schema.json")
     consumer = KafkaConsumer(
         ANOMALY_TOPIC,
@@ -357,6 +386,7 @@ def run_from_anomaly_stream():
     log.info("causal-engine started, consuming %s", ANOMALY_TOPIC)
     for msg in consumer:
         anomaly = msg.value
+        ANOMALIES_PROCESSED.inc()
         try:
             process_anomaly(conn, producer, finding_schema, anomaly)
             consumer.commit()
@@ -365,6 +395,7 @@ def run_from_anomaly_stream():
             # outcome (e.g. anomaly window too narrow) -- log and move on
             # rather than crash-looping the pod over it.
             log.warning("Skipping anomaly_id=%s: %s", anomaly.get("anomaly_id"), e)
+            ANOMALIES_SKIPPED.labels(reason="insufficient_data").inc()
             consumer.commit()
         except jsonschema.ValidationError:
             log.exception("CausalFinding failed schema validation")

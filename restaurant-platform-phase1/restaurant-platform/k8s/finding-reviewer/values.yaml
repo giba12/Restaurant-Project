@@ -8,8 +8,20 @@ image:
 
 replicaCount: 1
 
+# Found broken 2026-10-01, by a routine redeploy for an unrelated reason
+# (prometheus_client instrumentation): this chart never got the SSL/9093
+# migration every other Phase 5/6/7 chart got on 2026-09-25, and had been
+# silently stuck on the now-nonexistent plaintext listener since -- masked
+# the whole time by the previous pod's already-open connection from before
+# that migration, which just kept working until something finally forced a
+# restart. Real impact, confirmed live: 13 real CausalFindings sat at
+# narrative_ready=false, computed_at as late as 2026-10-01 02:15, with the
+# last successful review having happened 2026-09-28 21:08 -- over two days
+# of findings never reaching the narrator. Fixed by matching every other
+# chart's own values.yaml exactly (see k8s/anomaly-detector/values.yaml).
 env:
-  KAFKA_BOOTSTRAP_SERVERS: "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+  KAFKA_BOOTSTRAP_SERVERS: "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9093"
+  KAFKA_SECURITY_PROTOCOL: "SSL"
   PGHOST: "timescaledb.kafka.svc.cluster.local"
   PGPORT: "5432"
   PGDATABASE: "restaurant_platform"
@@ -17,6 +29,10 @@ env:
 
 pgPasswordSecretName: "timescaledb-credentials"
 pgPasswordSecretKey: "password"
+
+# Strimzi's auto-generated cluster CA -- see the identical note in
+# k8s/anomaly-detector/values.yaml.
+kafkaTlsSecretName: "restaurant-platform-kafka-cluster-ca-cert"
 
 # Memory right-sized 2026-09-29 against real usage (~59Mi, confirmed live).
 resources:

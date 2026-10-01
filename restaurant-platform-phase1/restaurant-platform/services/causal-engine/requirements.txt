@@ -15,3 +15,4 @@ scipy==1.13.1
 # networkx.algorithms.d_separated, removed in newer networkx in favor of
 # is_d_separator/d_separation. Leaving networkx unpinned resolves too new.
 networkx==3.2.1
+prometheus-client==0.26.0

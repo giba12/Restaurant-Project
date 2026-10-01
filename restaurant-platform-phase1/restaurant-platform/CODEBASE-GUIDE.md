@@ -300,6 +300,12 @@ All four event schemas share a `source_kind` field with values `simulated`, `ven
 - **Connects to:** produced by `causal_engine.py`, read by `narrator.py` and `narration_guard.py` (which use its field names), stored in `causal_findings`.
 - **Purpose:** The safety contract at the centre of the AI-integration story.
 
+### `schemas/test_producer_schema_compatibility.py` (added 2026-09-30)
+- **What it does:** Calls each producer's own real event-construction function -- `plate_waste.generate_event()`, `pos_transaction.generate_event()`, `service_timing.TicketLifecycle().next_event()`, `staff_shift.ShiftState().next_event()`, `detector.build_control_limit_event()`/`build_isolation_forest_event()`, `causal_engine._build_finding()` -- and validates the real dict it returns against the matching schema file with `jsonschema.validate`. `TicketTimingSummary` isn't repeated here since `services/ticket-timing-aggregator/test_origin.py` already covers it the same way.
+- **Why it works this way:** Every schema file already documents its own field-level contract, and every producer already validates its own output against it *at runtime* (`edge-simulators/common/runtime.py`, `services/phase5_common.py`) -- but that only runs when the real pipeline is live. This test exercises the same real construction code offline, in CI, on every push, catching the class of producer/schema drift this project has otherwise only found by hand (see the implementation-status doc's problem log). Deliberately calls the actual functions rather than hand-writing example payloads, which would just be a second place for the contract to drift out of sync with the real code. `causal_engine._build_finding` needed no `dowhy`/`statsmodels`/`scipy`/`networkx` at all to test -- confirmed by reading the file first: the real DoWhy call (`_run_dowhy`) does `from dowhy import CausalModel` as a *lazy* import inside its own function, not at module level, so importing `causal_engine.py` only needs `pandas` and `jsonschema`. A real, if minor, gap was found writing this: `edge-simulators/common/runtime.py` imports `paho.mqtt.client` at module level for its `Simulator` class (never constructed here), so the stub list needed `paho`/`paho.mqtt`/`paho.mqtt.client` alongside the usual `kafka`/`psycopg2` -- and needed real `types.ModuleType` instances, not `types.SimpleNamespace`, since Python's own submodule-binding machinery for `import paho.mqtt.client as mqtt` broke against the latter with a confusing `cannot import name 'mqtt'` error. Confirmed the check is real, not vacuous, by deliberately breaking a generated event (removing a required field) and watching `jsonschema.ValidationError` actually raise before writing this into CI.
+- **Connects to:** every schema file in this directory; the producer modules under `edge-simulators/simulators/`, `services/anomaly-detector/detector.py`, `services/causal-engine/causal_engine.py`; wired into `.github/workflows/tests.yml`'s matrix as the `schema-compatibility` job.
+- **Purpose:** Automated protection for the contract-first architecture this project's own README calls out as a design pillar -- previously enforced only by runtime validation (only checked when live) and human review (only checked when someone remembers).
+
 ---
 
 ## 4. `edge-simulators/`: the fake sensors
@@ -1006,9 +1012,10 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 | Game bridge | `cd game/bridge && python -m pytest test_bridge.py` | `pip install -r requirements.txt pytest httpx` (no Kafka) |
 | Narration guard | `cd services/finding-narrator && python -m pytest test_narration_guard.py` | `pytest` only |
 | Alert relay | `cd services/alert-relay && python -m pytest test_alert_relay.py` | `pytest` only (no network) |
+| Schema compatibility | `cd schemas && python -m pytest test_producer_schema_compatibility.py` | `pip install jsonschema pandas pytest` (no Kafka/DB) |
 | Godot client | `godot4 --headless --path game/client -s res://tests/smoke_test.gd` | the Compose stack running with the game overlay |
 
-There are no automated tests for the simulators, the storage consumer or the Phase 5 services; they are verified by running the pipeline and checking row counts and consumer-group lag, as the handoff documents describe.
+There is no full behavioral test suite for the simulators, the storage consumer, or causal-engine's actual DoWhy estimation -- those are verified by running the pipeline and checking row counts and consumer-group lag, as the handoff documents describe. The schema-compatibility suite above covers one specific, narrower thing well: whether each producer's real event-construction function still emits something that validates against its own committed schema, catching the class of drift this project has otherwise only found by hand.
 
 ---
 

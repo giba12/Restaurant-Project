@@ -63,6 +63,10 @@ jobs:
             dir: restaurant-platform-phase1/restaurant-platform/services/alert-relay
             install: pip install pytest
             run: python -m pytest test_alert_relay.py -v
+          - name: schema-compatibility
+            dir: restaurant-platform-phase1/restaurant-platform/schemas
+            install: pip install jsonschema pandas pytest
+            run: python -m pytest test_producer_schema_compatibility.py -v
     steps:
       - uses: actions/checkout@v4
 

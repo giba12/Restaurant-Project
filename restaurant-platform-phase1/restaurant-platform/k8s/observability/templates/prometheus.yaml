@@ -157,6 +157,27 @@ data:
             annotations:
               summary: "deployment/{{ `{{ $labels.deployment }}` }} has fewer available replicas than desired for 10m"
 
+          # Added 2026-10-01 -- a real gap found by a live chaos test: this
+          # project's two StatefulSets (TimescaleDB, MinIO) were completely
+          # invisible to alerting. DeploymentReplicasMismatch above only
+          # ever matches kube_deployment_* series, which kube-state-metrics
+          # never emits for a StatefulSet; the Kafka broker needs no
+          # equivalent rule here since it's already covered directly by
+          # TargetDown (kafka-jmx scrapes it by pod IP, not through this
+          # object-level mechanism). kube-state-metrics was already scraped
+          # and already had the apps/statefulsets RBAC to see these --
+          # confirmed both kube_statefulset_status_replicas_ready and
+          # kube_statefulset_replicas already existed live, for both
+          # StatefulSets, before writing this; this was purely a missing
+          # rule, not a missing scrape target or missing permission.
+          - alert: StatefulSetReplicasMismatch
+            expr: kube_statefulset_status_replicas_ready{namespace="kafka"} < kube_statefulset_replicas{namespace="kafka"}
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "statefulset/{{ `{{ $labels.statefulset }}` }} has fewer ready replicas than desired for 10m"
+
       - name: kafka
         rules:
           # Threshold picked as a starting point, not from a documented SLA

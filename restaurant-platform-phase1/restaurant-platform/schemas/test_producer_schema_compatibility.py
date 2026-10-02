@@ -15,7 +15,7 @@ No Kafka, MQTT, or database: kafka/psycopg2 are stubbed the same way every
 other test file in this project stubs them, since every event-construction
 function tested here is a pure function of its inputs.
 
-    pip install jsonschema pandas pytest
+    pip install jsonschema pandas pytest numpy prometheus-client==0.26.0
     cd schemas && python -m pytest test_producer_schema_compatibility.py -v
 """
 import json

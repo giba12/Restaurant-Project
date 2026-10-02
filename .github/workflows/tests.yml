@@ -49,7 +49,7 @@ jobs:
             run: python -m pytest test_auth.py test_comparison.py -v
           - name: anomaly-detector
             dir: restaurant-platform-phase1/restaurant-platform/services/anomaly-detector
-            install: pip install numpy pytest jsonschema
+            install: pip install numpy pytest jsonschema prometheus-client==0.26.0
             run: python -m pytest test_quarantine.py -v
           - name: ticket-timing-aggregator
             dir: restaurant-platform-phase1/restaurant-platform/services/ticket-timing-aggregator
@@ -65,7 +65,7 @@ jobs:
             run: python -m pytest test_alert_relay.py -v
           - name: schema-compatibility
             dir: restaurant-platform-phase1/restaurant-platform/schemas
-            install: pip install jsonschema pandas pytest
+            install: pip install jsonschema pandas pytest numpy prometheus-client==0.26.0
             run: python -m pytest test_producer_schema_compatibility.py -v
     steps:
       - uses: actions/checkout@v4

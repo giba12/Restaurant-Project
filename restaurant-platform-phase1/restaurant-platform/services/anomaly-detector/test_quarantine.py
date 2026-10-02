@@ -3,7 +3,7 @@ Tests for the anomaly detector's quarantine of interactive tickets. No Kafka:
 the kafka import is stubbed. The point being tested is the one that matters:
 quarantined tickets must not change any window the baseline is built from.
 
-    pip install numpy pytest jsonschema
+    pip install numpy pytest jsonschema prometheus-client==0.26.0
     cd services/anomaly-detector && python -m pytest test_quarantine.py
 """
 import os

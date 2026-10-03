@@ -16,12 +16,12 @@ Links every requirement in `01-requirements-specification.md` to the tests or ev
 
 | Result | Requirements |
 |---|---|
-| Verified (automated) | 60 |
+| Verified (automated) | 61 |
 | Verified by inspection | 6 |
 | Verified (live or manual only) | 8 |
 | Partially verified | 7 |
 | Not verified | 2 |
-| **Not met** | 2 |
+| **Not met** | 1 |
 | **Total** | **85** |
 
 Read the summary with care: "verified (automated)" means a test in this repository would fail if the requirement stopped being true, on the environment described in `09-test-environment-and-configuration-baseline.md`. It does not mean the requirement is *well chosen*, and it says nothing about environments that were never used (a clean machine, Docker Engine, GitHub's runners).
@@ -55,11 +55,11 @@ Read the summary with care: "verified (automated)" means a test in this reposito
 | FR-ANA-03 | T | `test_false_alarm_rate_on_normal_data_stays_low`<br>`test_detection_rate_on_a_real_shift_is_high`<br>`test_the_window_is_bounded_so_memory_cannot_grow_forever`<br>`test_isolation_forest_flags_a_joint_outlier_and_passes_a_typical_ticket`<br>`test_anomalies_are_flagged_at_the_loaded_stations_and_not_at_the_removed_one` | Acceptance run 2026-10-03: 142 anomalies at loaded stations, 1 at the removed station | Verified (automated) | On the production defaults a few stalled tickets blind the detector to a 3x slowdown (DEF-056, open); no test exercises that case. |
 | FR-ANA-04 | T | `test_built_events_satisfy_the_published_contract`<br>`test_control_limit_anomaly_event_matches_schema`<br>`test_isolation_forest_anomaly_event_matches_schema` | - | Verified (automated) | - |
 | FR-CAU-01 | T | `test_the_engine_recovers_a_planted_plate_waste_effect`<br>`test_the_engine_recovers_a_planted_staffing_effect`<br>`test_the_planted_effect_is_actually_hidden_by_confounding`<br>`test_estimates_are_stable_across_independent_samples`<br>`test_when_there_is_no_effect_the_engine_estimates_roughly_zero` | Recovered -90 g within 10 g and -4,000 ms per person within 500 ms on synthetic data | Verified (automated) | Proves the estimator on synthetic worlds; it says nothing about real data, which does not exist. |
-| FR-CAU-02 | T | `test_reviewer_passes_only_findings_that_survived_refutation`<br>`test_a_new_finding_is_never_narrative_ready`<br>`test_a_strong_effect_passes_its_refutation_test_and_the_flag_is_a_real_bool`<br>`test_a_finding_computed_for_the_scenario_carries_its_id` | - | Verified (automated) | The *gate logic* is verified; how strong the refutation test itself is, is FR-CAU-06. |
+| FR-CAU-02 | T | `test_reviewer_passes_only_findings_that_survived_refutation`<br>`test_a_new_finding_is_never_narrative_ready`<br>`test_a_strong_effect_passes_its_refutation_test_and_the_flag_is_a_real_bool`<br>`test_a_finding_computed_for_the_scenario_carries_its_id` | - | Verified (automated) | The gate logic is verified; the strength of the refutation test itself is FR-CAU-06. |
 | FR-CAU-03 | T | `test_a_finding_computed_for_the_scenario_carries_its_id`<br>`test_the_scenario_injection_id_is_carried_so_a_finding_can_be_checked_against_ground_truth` | - | Verified (automated) | - |
 | FR-CAU-04 | T | `test_human_driven_sessions_are_excluded_from_every_analysis_query`<br>`test_the_waste_query_excludes_human_player_sessions`<br>`test_the_pickup_query_excludes_interactive_tickets`<br>`test_staffing_level_counts_only_staff_actually_on_shift_and_never_players` | - | Verified (automated) | - |
 | FR-CAU-05 | T | `test_too_few_rows_is_refused_rather_than_estimated` | - | Verified (automated) | - |
-| FR-CAU-06 | T | `test_the_refutation_gate_rejects_findings_that_are_pure_noise` | Measured 2026-10-02/03: 26 and then 23 of 30 (87%, then 77%) pure-noise findings passed the gate | **Not met** | **Not met.** DEF-106. Recorded as a strict expected-failure; an owner decision. |
+| FR-CAU-06 | T | `test_the_refutation_gate_rejects_findings_that_are_pure_noise`<br>`test_the_refutation_gate_still_passes_genuine_effects`<br>`test_the_refutation_verdict_is_identical_for_identical_data`<br>`test_the_gate_decision_follows_the_two_published_conditions` | Fixed 2026-10-03 (DEF-106): 0 of 60 pure-noise datasets pass; every genuine effect tried down to -5 g on 1,500 rows passes; verdicts are reproducible | Verified (automated) | The gate certifies statistical significance, not causation: an omitted confounder is invisible to it (DEF-131). |
 | FR-TWN-01 | T | `test_firing_an_order_occupies_the_table_and_loads_the_station`<br>`test_delivering_the_order_frees_the_table_and_unloads_the_station`<br>`test_a_staff_member_goes_through_a_whole_shift`<br>`test_the_digital_twin_mirrors_the_restaurant` | - | Verified (automated) | - |
 | FR-TWN-02 | T | `test_the_open_ticket_count_can_never_go_negative` | - | Verified (automated) | - |
 | FR-TWN-03 | T | `test_a_redelivered_order_fired_does_not_double_count`<br>`test_replaying_a_staff_event_is_harmless` | - | **Not met** | **Not met for ticket counts** (DEF-107); met for staff state. |
@@ -118,7 +118,7 @@ Read the summary with care: "verified (automated)" means a test in this reposito
 
 ## Tests that trace to no requirement
 
-124 of 298 test functions are not cited above. They are supporting checks: sanity guards that stop a parametrised test passing vacuously, finer-grained unit tests of behaviour that a requirement covers only in aggregate, and tests of the game's UI-adjacent logic. They are listed so that no test is silently outside the picture; each is described in `TESTING.md`.
+125 of 302 test functions are not cited above. They are supporting checks: sanity guards that stop a parametrised test passing vacuously, finer-grained unit tests of behaviour that a requirement covers only in aggregate, and tests of the game's UI-adjacent logic. They are listed so that no test is silently outside the picture; each is described in `TESTING.md`.
 
 - `game/bridge/test_bridge.py`: `test_a_backed_up_station_does_not_starve_a_cook_at_another`, `test_a_failed_crew_publish_backs_off_and_retries`, `test_a_failed_spawn_does_not_retry_every_tick`, `test_a_guest_cannot_order_at_a_table_a_staff_ticket_is_using`, `test_a_guest_cannot_order_twice_before_paying`, `test_a_slow_but_still_progressing_order_is_not_evicted_early`, `test_a_staff_order_cannot_be_fired_at_a_table_a_guest_is_using`, `test_an_invalid_payment_method_is_422`, `test_bad_player_id_and_stage_are_422`, `test_crew_finishes_tickets_after_the_player_clocks_out`, `test_duplicate_ticket_id_is_409`, `test_expo_and_server_are_not_scoped_to_a_station`, `test_guest_status_for_an_unknown_player_is_404`, `test_kitchen_full_is_503_and_does_not_open_a_ticket`, `test_leaving_frees_the_guest_but_not_a_table_the_kitchen_is_still_using`, `test_leaving_twice_or_leaving_nobody_is_404`, `test_no_tickets_are_fired_with_nobody_on_shift`, `test_order_fired_requires_known_table_and_station`, `test_order_rejects_unknown_table_or_menu_item`, `test_order_total_sums_every_item_at_its_menu_price`, `test_ordering_needs_no_clock_in_and_fires_a_ticket`, `test_paying_before_delivery_is_409`, `test_station_expo_is_not_a_cooking_station`, `test_station_reassign_needs_a_known_station`, `test_the_table_is_free_again_once_the_ticket_closes`, `test_ticket_board_says_who_each_ticket_waits_on`, `test_tickets_spawn_at_the_cooks_station_on_a_timer_up_to_the_cap`, `test_unknown_ticket_is_404`
 - `schemas/test_producer_schema_compatibility.py`: `test_causal_finding_matches_schema`
@@ -141,7 +141,7 @@ Read the summary with care: "verified (automated)" means a test in this reposito
 - `tests/static/test_helm_charts.py`: `test_charts_were_found`, `test_no_container_image_is_unpinned`
 - `tests/static/test_quality_docs.py`: `test_defect_ids_are_unique_and_sequential`, `test_every_defect_id_cited_anywhere_in_the_quality_documents_exists`, `test_every_quality_document_has_a_version_and_a_date`, `test_every_requirement_is_traced_in_the_matrix_and_nothing_else_is_cited`, `test_every_risk_id_cited_in_the_quality_documents_exists`, `test_every_test_cited_in_the_matrix_exists`, `test_requirement_ids_are_unique_and_well_formed`, `test_risk_ids_are_unique_and_sequential`, `test_the_defect_log_summary_matches_its_entries`, `test_the_index_lists_every_document_and_every_link_resolves`, `test_the_matrix_coverage_summary_matches_its_rows`
 - `tests/static/test_schemas_consistency.py`: `test_the_consumer_covers_exactly_the_raw_event_schemas`
-- `tests/statistical/test_causal_ground_truth.py`: `test_estimates_are_reproducible_for_identical_input`, `test_rows_with_missing_values_are_dropped_not_fatal`
+- `tests/statistical/test_causal_ground_truth.py`: `test_estimates_are_reproducible_for_identical_input`, `test_rows_with_missing_values_are_dropped_not_fatal`, `test_the_engines_own_info_logs_survive_importing_dowhy`
 
 ## Requirements with weak or no automated verification
 

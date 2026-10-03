@@ -50,13 +50,13 @@ Eight layers, each simulating one thing production does to a system. They are ca
 | 1 | Static | 50 functions (188 cases) | Careless edits to config and files | `tests/static/` |
 | 2 | Unit | 151 functions | Careless edits to logic | beside each service; `game/bridge/`; `schemas/` |
 | 3 | Database integration | 57 | Drift between code and database | `tests/integration/` |
-| 4 | Statistical | 10 | Subtly wrong maths | `tests/statistical/` |
+| 4 | Statistical | 14 | Subtly wrong maths | `tests/statistical/` |
 | 5 | End-to-end and acceptance | 19 | One broken hop in a long pipeline | `tests/e2e/` |
 | 6 | Resilience (chaos) | 7 | Crashes, outages, restarts | `tests/resilience/` |
 | 7 | Load and stability | 4 | Bursts and long runs | `tests/load/` |
 | 8 | Security and supply chain | 1 | Ageing dependencies | `tests/security/` |
 
-Plus the Godot client's own end-to-end test (`game/client/tests/smoke_test.gd`, roughly 80 checks) and the live audit script (`k8s/audit/audit-live-cluster.sh`), which is not automated in CI. In total: **298 distinct test names** (one name is shared by two files) plus the GDScript suite.
+Plus the Godot client's own end-to-end test (`game/client/tests/smoke_test.gd`, roughly 80 checks) and the live audit script (`k8s/audit/audit-live-cluster.sh`), which is not automated in CI. In total: **302 distinct test names** (one name is shared by two files) plus the GDScript suite.
 
 ### 3.2 Test design techniques used
 
@@ -143,7 +143,7 @@ Detailed in `09-test-environment-and-configuration-baseline.md`. In summary: a W
 | 2026-09-28 to 2026-09-30 | CI added; found never to have run; repaired (DEF-081 to DEF-083) |
 | 2026-10-01 | Schema-compatibility test; first manual chaos test; live audit script |
 | 2026-10-02 | The eight-layer regime designed and built; first runs; defects DEF-100 to DEF-107 found |
-| 2026-10-03 | Resilience rerun after fixes; one complete clean run of every stack layer; documents prepared |
+| 2026-10-03 | Resilience rerun after fixes; one complete clean run of every stack layer; documents prepared; the refutation gate repaired and re-verified (DEF-106, DEF-129) |
 
 ## 12. Deliverables
 

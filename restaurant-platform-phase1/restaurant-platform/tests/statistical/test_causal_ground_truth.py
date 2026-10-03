@@ -129,25 +129,78 @@ def test_when_there_is_no_effect_the_engine_estimates_roughly_zero():
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN WEAKNESS, measured 2026-10-02/03: the refutation gate passed 26/30 and then 23/30 (87%, then 77%; the placebo permutations are unseeded, so it varies) of findings built "
-           "from pure noise. DoWhy's placebo `new_effect` is the MEAN of 100 simulated placebo estimates "
-           "(placebo_treatment_refuter.py), so its noise is ~1/10 of a single estimate's, and the engine's "
-           "rule `|placebo| < 0.25*|estimate|` is met almost whenever the estimate is non-zero. "
-           "strict=True: once the gate is fixed this will XPASS and CI will demand the marker be removed.",
-)
 def test_the_refutation_gate_rejects_findings_that_are_pure_noise():
     """
     The property the gate exists for: when there is NO true effect, almost no
-    finding should be allowed through to narration. Each run here is a
-    different dataset with a true effect of exactly zero.
+    finding may be allowed through to narration. Each run is a different
+    dataset with a true effect of exactly zero.
+
+    History: this was a strict expected-failure (DEF-106). The old rule passed
+    78% to 87% of noise datasets in three measurements (47/60 with a seeded
+    permutation placebo; 26/30 and 23/30 with the engine's original unseeded
+    default placebo): DoWhy's placebo `new_effect` is the mean of
+    100 simulated runs, so it is ~10x quieter than a single estimate and almost
+    any noise estimate beat `0.25 * |estimate|`. The gate now requires the
+    effect's own regression p-value to be below REFUTATION_ALPHA (0.01), and
+    measured 0 of 60 on noise. The bound below (10%) is deliberately generous:
+    the expected rate is about 1%, and the datasets are seeded so the result is
+    the same on every run.
     """
     runs = 30
     passed = sum(bool(run_waste(plate_waste_world(1500, 0.0, seed=100 + s))["refutation_passed"]) for s in range(runs))
     rate = passed / runs
     print(f"\nrefutation gate passed {passed}/{runs} = {rate:.0%} of pure-noise findings")
-    assert rate < 0.20, f"{rate:.0%} of pure-noise findings pass the gate and would be narrated"
+    assert rate < 0.10, f"{rate:.0%} of pure-noise findings pass the gate and would be narrated"
+
+
+@pytest.mark.slow
+def test_the_refutation_gate_still_passes_genuine_effects():
+    # The other half: a gate that rejected everything would also "reject noise".
+    # A modest real effect (-20 g on 1,500 rows) must pass essentially always.
+    runs = 10
+    passed = sum(bool(run_waste(plate_waste_world(1500, -20.0, seed=300 + s))["refutation_passed"]) for s in range(runs))
+    print(f"\nrefutation gate passed {passed}/{runs} genuine -20 g effects")
+    assert passed / runs >= 0.9, f"only {passed}/{runs} genuine effects passed the gate"
+
+
+def test_the_engines_own_info_logs_survive_importing_dowhy():
+    # `import dowhy` resets the root logger to WARNING. In production the engine imports it
+    # lazily, on its first estimate, AFTER it has configured logging, so before this was pinned
+    # its INFO lines -- including the one carrying each finding's refutation p-values --
+    # disappeared after the first finding (DEF-132). A fresh interpreter reproduces that real
+    # order; inside pytest, DoWhy is already imported before the engine and would hide the bug.
+    import subprocess
+
+    probe = (
+        "import logging, sys\n"
+        f"sys.path[:0] = [{os.path.join(ROOT, 'services')!r}, {os.path.join(ROOT, 'services', 'causal-engine')!r}]\n"
+        "import causal_engine\n"
+        "assert causal_engine.log.isEnabledFor(logging.INFO), 'INFO disabled before dowhy'\n"
+        "import dowhy\n"
+        "print('INFO_ENABLED_AFTER_DOWHY=', causal_engine.log.isEnabledFor(logging.INFO))\n"
+    )
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, env={**os.environ, "SCHEMA_DIR": os.environ["SCHEMA_DIR"]})
+    assert result.returncode == 0, result.stderr
+    assert "INFO_ENABLED_AFTER_DOWHY= True" in result.stdout, "the engine's INFO logs are silenced once DoWhy is imported"
+
+
+def test_the_refutation_verdict_is_identical_for_identical_data():
+    # Unseeded, the placebo permutations differed on every call, so a finding's
+    # verdict (and the measurements about the gate) varied from run to run.
+    df = plate_waste_world(1500, 0.0, seed=7)
+    first, second = run_waste(df.copy()), run_waste(df.copy())
+    for key in ("refutation_passed", "effect_p_value", "placebo_p_value", "effect_estimate"):
+        assert first[key] == second[key], f"{key} differs between identical runs: {first[key]!r} vs {second[key]!r}"
+    assert isinstance(first["effect_p_value"], float) and isinstance(first["placebo_p_value"], float)
+
+
+def test_the_gate_decision_follows_the_two_published_conditions():
+    # The verdict must equal (effect p < alpha) AND (placebo p >= alpha), so the
+    # p-values logged with every finding are enough to audit any decision.
+    for effect, seed in ((0.0, 21), (-90.0, 22)):
+        result = run_waste(plate_waste_world(1500, effect, seed=seed))
+        expected = result["effect_p_value"] < causal_engine.REFUTATION_ALPHA and result["placebo_p_value"] >= causal_engine.REFUTATION_ALPHA
+        assert result["refutation_passed"] is expected
 
 
 # --------------------------------------------------------------- robustness

@@ -86,11 +86,11 @@ To assure that the system's code, configuration, data contracts and documents me
 
 | Metric | Value |
 |---|---|
-| Entries in the defect log | 128 (117 defects, 11 informational) |
-| By severity | S1 Critical 6; S2 High 29; S3 Medium 38; S4 Low 44; Info 11 |
-| By status | Fixed and guarded by a test 28; fixed 71; mitigated 7; clarified 13; open 9 |
-| Distinct tests | 298, plus the GDScript smoke test (about 80 checks) |
-| Requirements | 85: 60 verified by automated test, 6 by inspection, 8 live or manual only, 7 partial, 2 not verified, 2 not met |
+| Entries in the defect log | 132 (119 defects, 13 informational) |
+| By severity | S1 Critical 6; S2 High 29; S3 Medium 40; S4 Low 44; Info 13 |
+| By status | Fixed and guarded by a test 31; fixed 71; mitigated 7; clarified 14; open 9 |
+| Distinct tests | 302, plus the GDScript smoke test (about 80 checks) |
+| Requirements | 85: 61 verified by automated test, 6 by inspection, 8 live or manual only, 7 partial, 2 not verified, 1 not met |
 | Latest complete test cycle | 2026-10-03: every stack layer passed |
 | Line or branch code coverage | **Not measured** |
 | Mean time to detect a silent failure | Not tracked; observed range: minutes (found by test) to 12 days (the silent MQTT bridge failure, DEF-035) |
@@ -132,6 +132,7 @@ Corrective actions that changed the process, in the order they happened:
 | Silent data loss in the consumer (DEF-100, DEF-101) | A conservation invariant (messages in Kafka equal rows) checked after every injected fault |
 | A self-inflicted failure on the owner's machine (DEF-109) | The stack tests use an isolated project and port and always tear down |
 | A test that flagged itself only after being committed (DEF-114) | Rule: run the static layer again after committing new files, since `git ls-files` only sees tracked files |
+| A refutation gate that passed most noise and gave unreproducible verdicts (DEF-106, DEF-129) | Measure the thing before repairing it: candidate gates were evaluated on 60 noise datasets and four genuine effect sizes, and the threshold was chosen from that evidence, not from intuition |
 
 ## 8. Tools, techniques and methodologies
 

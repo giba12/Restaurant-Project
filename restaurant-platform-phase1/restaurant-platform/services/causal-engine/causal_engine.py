@@ -37,6 +37,7 @@ import logging
 import os
 import sys
 
+import numpy as np
 import pandas as pd
 from kafka import KafkaConsumer, KafkaProducer
 import jsonschema
@@ -47,6 +48,11 @@ import phase5_common as common
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("causal-engine")
+# Importing dowhy (lazily, on the first estimate) resets the ROOT logger to
+# WARNING. Left to inherit that, this service's own INFO lines -- "Emitted
+# CausalFinding ..." and the refutation p-values on it -- silently vanished after
+# the first finding. An explicit level makes them independent of the root's.
+log.setLevel(logging.INFO)
 
 # Pipeline-health metrics -- separate from k8s/observability's existing
 # alerting, which only covers pod/infra health, not whether this service is
@@ -69,6 +75,18 @@ REFUTATION_RESULT = Counter(
 FINDINGS_MARKED_READY = Counter(
     "causal_engine_findings_marked_ready_total", "Findings flipped to narrative_ready=true by the reviewer"
 )
+
+# The refutation gate (see _run_dowhy). A finding may be narrated only if its
+# effect is statistically distinguishable from noise at this level AND DoWhy's
+# placebo refuter is consistent with an estimator that finds nothing in noise.
+# 0.01 not 0.05: a false narration costs more than a missed finding, and on 60
+# pure-noise datasets this passed 0 (0.05 passed 4) while still passing every
+# genuine effect tried down to -5 g on 1,500 rows. All three are overridable.
+REFUTATION_ALPHA = float(os.environ.get("REFUTATION_ALPHA", "0.01"))
+REFUTATION_SIMULATIONS = int(os.environ.get("REFUTATION_SIMULATIONS", "100"))
+# A fixed seed makes the placebo permutations -- and so the verdict -- identical
+# for identical data. Unseeded, the verdict varied from run to run.
+REFUTATION_SEED = int(os.environ.get("REFUTATION_SEED", "20261003"))
 
 ANOMALY_TOPIC = "anomaly-events"
 FINDING_TOPIC = "causal-findings-events"
@@ -156,7 +174,8 @@ def _load_data(conn, spec: dict, window_start: str, window_end: str) -> pd.DataF
 
 def _run_dowhy(df: pd.DataFrame, treatment: str, outcome: str, confounders: list) -> dict:
     """
-    Returns {effect_estimate, confidence_interval, method, refutation_passed}.
+    Returns {effect_estimate, confidence_interval, method, refutation_passed,
+    effect_p_value, placebo_p_value}.
     Uses backdoor.linear_regression -- appropriate for a continuous outcome
     and a binary or continuous treatment with a small, explicitly-listed
     confounder set; DoWhy's own default estimator. A propensity-score
@@ -186,18 +205,28 @@ def _run_dowhy(df: pd.DataFrame, treatment: str, outcome: str, confounders: list
     identified_estimand = model.identify_effect(proceed_when_unidentifiable=True)
     estimate = model.estimate_effect(identified_estimand, method_name="backdoor.linear_regression")
 
+    # The gate. Two conditions, both deterministic for identical data:
+    #   1. The effect is statistically distinguishable from noise: the p-value
+    #      of the treatment coefficient from DoWhy's own regression (a t-test
+    #      adjusted for the listed confounders).
+    #   2. DoWhy's placebo refuter (treatment permuted, seeded) finds no effect:
+    #      zero must lie inside the distribution of placebo estimates. This is a
+    #      sanity check on the estimator; it is not what separates signal from noise.
+    # The previous rule -- |mean placebo effect| < 0.25 * |estimate| -- passed 78% to
+    # 87% of pure-noise datasets in three measurements (47/60, 26/30, 23/30), because DoWhy's `new_effect` is the MEAN
+    # of the placebo runs and so is ~10x quieter than a single estimate: almost
+    # any noise estimate cleared it. It also ran unseeded. (DEF-106.)
+    # bool(...) coerces from numpy.bool_, which jsonschema's 'boolean' rejects.
     refutation_passed = None
+    effect_p_value = placebo_p_value = None
     try:
+        effect_p_value = float(np.ravel(estimate.test_stat_significance()["p_value"])[0])
         refutation = model.refute_estimate(
-            identified_estimand, estimate, method_name="placebo_treatment_refuter"
+            identified_estimand, estimate, method_name="placebo_treatment_refuter",
+            placebo_type="permute", num_simulations=REFUTATION_SIMULATIONS, random_state=REFUTATION_SEED,
         )
-        # A passing refutation should show the placebo effect much closer
-        # to zero than the real estimate -- DoWhy does not itself return a
-        # boolean, so this applies a fixed threshold rather than parsing
-        # the refuter's free-text summary.
-        # bool(...) coerces from numpy.bool_ -- jsonschema's 'boolean' type
-        # check rejects numpy's bool subclass even though it's truthy.
-        refutation_passed = bool(abs(refutation.new_effect) < 0.25 * abs(estimate.value)) if estimate.value else None
+        placebo_p_value = float(refutation.refutation_result["p_value"])
+        refutation_passed = bool(effect_p_value < REFUTATION_ALPHA and placebo_p_value >= REFUTATION_ALPHA)
     except Exception:
         log.warning("Refutation step failed; refutation_passed left null", exc_info=True)
 
@@ -206,6 +235,8 @@ def _run_dowhy(df: pd.DataFrame, treatment: str, outcome: str, confounders: list
         "confidence_interval": None,  # DoWhy's CI extraction depends on estimator internals not exercised here
         "method": "backdoor.linear_regression",
         "refutation_passed": refutation_passed,
+        "effect_p_value": effect_p_value,
+        "placebo_p_value": placebo_p_value,
     }
 
 
@@ -280,9 +311,10 @@ def process_anomaly(conn, producer, finding_schema, anomaly: dict, scenario_inje
     producer.send(FINDING_TOPIC, value=finding)
     producer.flush()
     log.info(
-        "Emitted CausalFinding %s: %s -> %s, effect=%.3f %s",
+        "Emitted CausalFinding %s: %s -> %s, effect=%.3f %s (refutation_passed=%s, effect p=%s, placebo p=%s)",
         finding["finding_id"], finding["treatment_variable"], finding["outcome_variable"],
-        finding["effect_estimate"], finding["effect_estimate_unit"],
+        finding["effect_estimate"], finding["effect_estimate_unit"], finding["refutation_passed"],
+        result.get("effect_p_value"), result.get("placebo_p_value"),
     )
     return finding
 

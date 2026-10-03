@@ -6,7 +6,7 @@
 | Project | Restaurant Operations Digital Twin Platform |
 | Version | 1.0 |
 | Date | 2026-10-03 |
-| Status | Drawn from the 128 entries of `06-defect-log.md`; each lesson cites the entries that taught it |
+| Status | Drawn from the 132 entries of `06-defect-log.md`; each lesson cites the entries that taught it |
 
 ## 1. The short version
 
@@ -20,13 +20,13 @@
 
 ## 2. What the data says about how defects were found
 
-From the defect log (128 entries):
+From the defect log (132 entries):
 
 | Found by | Entries | Notes |
 |---|---|---|
 | Live operation, deployment or a manual run | 74 | The overwhelming majority of all entries |
-| Review, static or manual | 17 | Five serious defects found before Phase 5 was ever deployed; four documentation discrepancies found while preparing these documents |
-| The test regime's own runs and observations | 15 | Mostly defects *in the tests* (Part G), found by running them |
+| Review, static or manual | 19 | Five serious defects found before Phase 5 was ever deployed; four documentation discrepancies found while preparing these documents; two observations from investigating the refutation gate |
+| The test regime's own runs and observations | 17 | Mostly defects *in the tests* (Part G), found by running them |
 | The automated test regime | 7 | Including the statistical finding about the refutation gate (DEF-106) |
 | Chaos testing | 5 | Including the 10-hour silent outage (DEF-090, manual) and both silent-data-loss defects (DEF-100, DEF-101, automated) |
 | The rest | 10 | CI, the audit script, user reports, the done-condition attempt |
@@ -73,9 +73,13 @@ A stale copy of one SQL file caused weeks of confusing column errors (DEF-053, D
 
 Every layer was checked for teeth by breaking the system on purpose: a detector tuned too tight and too loose, a review gate loosened to pass untested findings, the NULL-confounder bug reintroduced, a database permission leaked, the old skip-and-continue behaviour restored. Each turned specific tests red. The statistical layer also contains a test whose only job is to prove the other statistical tests are not vacuous (a naive analysis must be shown to be wrong). **Prove the test can fail before trusting that it passes.**
 
-### 3.9 Record known defects so they cannot be forgotten
+### 3.9 Record known defects so they cannot be forgotten, then fix them with evidence
 
-Two defects were deliberately not fixed because fixing them changes behaviour the owner should decide on. They are strict expected-failures: visible on every run, and the moment someone fixes one, the suite demands the marker's removal. This is more honest than a comment and more durable than a ticket.
+Two defects were deliberately left unfixed at first because fixing them changes behaviour the owner should decide on. They were made strict expected-failures: visible on every run, and the moment someone fixes one the suite demands the marker's removal. This worked as designed. When the owner asked for the refutation gate to be repaired, the repair came with its own proof: the expected-failure became a passing assertion and the marker was deleted. One such defect remains (the twin's redelivery double-count). This is more honest than a comment and more durable than a ticket.
+
+### 3.9a Measure before you repair
+
+The refutation gate was fixed only after an experiment: four candidate rules were evaluated on 60 pure-noise datasets and four genuine effect sizes, inside the production image. The result chose the rule and the threshold (0 of 60 noise datasets pass at 0.01; 0.05 would pass 4; genuine effects down to -5 g pass), and it also showed something a guess would have missed: DoWhy's own placebo p-value never rejected anything, noise or genuine, so it could not have been the discriminator (DEF-130). Two earlier "measurements" of the broken gate had also disagreed (87%, then 77%) because the permutations were unseeded (DEF-129), a warning to seed anything random before trusting a figure drawn from it. Trying to *show* the repaired gate's verdict on the live stack then exposed an unrelated defect: importing DoWhy silently switched off the engine's own INFO logging (DEF-132). Two cheap experiments ruled out output being lost in transport before the cause was sought in the code. Whatever you build to make a decision auditable has to be checked end to end, down to whether its log line reaches a human.
 
 ### 3.10 Measure thresholds, do not guess them
 
@@ -118,7 +122,7 @@ Everything here was verified by the people who built it. The mutation checks and
 - **Writing down the root cause and what was ruled out,** in the status log, every time.
 - **Testing one invariant after every fault** instead of many vague checks.
 - **Hand-rolling infrastructure** around official images when wrappers failed.
-- **Strict expected-failures** for deliberately open defects.
+- **Strict expected-failures** for deliberately open defects (one was later fixed and its marker removed).
 - **Making the documentation itself testable.**
 - **Honest verification language** ("not yet confirmed by an actual run"): it prevented several overclaims and is why the CI-never-ran discovery (DEF-081) was possible at all.
 

@@ -28,7 +28,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 
 ## Summary
 
-**128 entries** (117 defects and 11 informational difficulties), recorded between 2026-08 and 2026-10-03.
+**132 entries** (119 defects and 13 informational difficulties), recorded between 2026-08 and 2026-10-03.
 
 ### By severity
 
@@ -36,21 +36,21 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 |---|---|
 | S1 Critical | 6 |
 | S2 High | 29 |
-| S3 Medium | 38 |
+| S3 Medium | 40 |
 | S4 Low | 44 |
-| Info | 11 |
-| **Total** | **128** |
+| Info | 13 |
+| **Total** | **132** |
 
 ### By status
 
 | Status | Count |
 |---|---|
-| Fixed+tested | 28 |
+| Fixed+tested | 31 |
 | Fixed | 71 |
 | Mitigated | 7 |
-| Clarified | 13 |
+| Clarified | 14 |
 | Open | 9 |
-| **Total** | **128** |
+| **Total** | **132** |
 
 ### By part (project period)
 
@@ -64,35 +64,36 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Part F: Product defects found by the test regime (2026-10-02 to 2026-10-03) | 9 |
 | Part G: Failures and difficulties of the test regime itself and its environment (2026-10-02 to 2026-10-03) | 16 |
 | Part H: Discrepancies found while preparing the quality documents (2026-10-03) | 4 |
-| **Total** | **128** |
+| Part I: Found and fixed while repairing the refutation gate (2026-10-03) | 4 |
+| **Total** | **132** |
 
 ### By how it was found
 
 | Found by | Count |
 |---|---|
 | Live operation, deployment or manual run | 74 |
-| Review (static or manual) | 17 |
-| Test-regime run or observation | 15 |
+| Review (static or manual) | 19 |
+| Test-regime run or observation | 17 |
 | Automated test regime (2026-10-02) | 7 |
 | Chaos test | 5 |
 | Attempting the done condition | 3 |
 | CI or first push | 3 |
 | User report | 3 |
 | Audit script | 1 |
-| **Total** | **128** |
+| **Total** | **132** |
 
 ### By class
 
 | Class | Count |
 |---|---|
 | Deployment | 22 |
-| Logic | 19 |
+| Logic | 21 |
 | Environment/tooling | 17 |
 | Test defect | 15 |
-| Observability | 8 |
+| Observability | 9 |
+| Dependency | 6 |
 | Configuration | 6 |
 | Documentation | 5 |
-| Dependency | 5 |
 | Portability | 5 |
 | Integration | 4 |
 | Contract | 4 |
@@ -103,7 +104,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Repository hygiene | 2 |
 | Operator error | 2 |
 | Code quality | 1 |
-| **Total** | **128** |
+| **Total** | **132** |
 
 ### Open items (9)
 
@@ -114,10 +115,10 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | DEF-058 | The aggregator restarted once on a `cook_duration_ms` computed negative (a timestamp-ordering edge case). `_duration_ms` still permits negative values... | S3 Medium |
 | DEF-091 | Whether `PodCrashLooping` had notified continuously during those 10 hours could not be established afterwards; Kubernetes' restart backoff may have pu... | Info |
 | DEF-093 | `strimzi-cluster-operator` sat at 90% of its memory limit during the investigation. | Info |
-| DEF-106 | **The causal engine's refutation gate passes roughly 77% to 87% of pure-noise findings** (26 and then 23 of 30 datasets with no true effect, in two ru... | S2 High |
 | DEF-107 | The digital twin's per-station `open_ticket_count` is incremented rather than derived, so a Kafka redelivery of `order_fired` inflates it. | S3 Medium |
 | DEF-123 | Two Compose providers coexist on the development machine (a v1 `docker-compose` via the Podman shim, and the user's own Compose plugin, v5.5.1), so a... | Info |
 | DEF-128 | No line-coverage measurement exists. Test counts and the requirements traceability matrix stand in for it, which measures requirement coverage rather... | Info |
+| DEF-131 | The gate certifies statistical significance, not causation: it cannot detect an omitted confounder or a mis-specified treatment (for example the staff... | Info |
 
 ## Part A. Phases 1-3 (before 2026-09-10): recovered lessons
 
@@ -265,7 +266,7 @@ Found by running the new layers against the existing codebase. Each was reproduc
 | DEF-103 | Test regime | TESTING.md findings | Three batch workloads had no resource limits (MinIO bucket-init Job, TimescaleDB schema-init Job, backup CronJob); the live audit had missed them because it skips Helm hooks and excludes the backup chart. | S3 Medium | Static test | Limits added to all three. | Fixed+tested |
 | DEF-104 | Test regime | TESTING.md findings | `requests==2.32.3` (finding-narrator) had two published advisories (`PYSEC-2026-1872`, `PYSEC-2026-2275`). | S3 Medium | Dependency audit | Bumped to 2.33.0; the narrator's only call (`requests.post`) is unchanged and its tests pass. | Fixed+tested |
 | DEF-105 | Test regime | TESTING.md findings | Six unused imports or variables. | S4 Low | Lint | Removed. | Fixed+tested |
-| DEF-106 | Test regime | TESTING.md findings | **The causal engine's refutation gate passes roughly 77% to 87% of pure-noise findings** (26 and then 23 of 30 datasets with no true effect, in two runs; the placebo permutations are unseeded, so the figure varies). DoWhy's placebo `new_effect` is the mean of 100 simulated runs, so it is ~10x quieter than a single estimate and the engine's rule `\|placebo\| < 0.25*\|estimate\|` is met by almost any noise. The estimates themselves recover planted effects accurately; the gate gives far less protection against a spurious one than "refutation-tested" implies. The README makes that claim. | S2 High | Statistical test | Not fixed (changes which findings are narrated: an owner decision). Recorded as a strict expected-failure so it stays visible; a sounder rule would test the estimate against the placebo distribution's spread. | Open |
+| DEF-106 | Test regime | TESTING.md findings | **The causal engine's refutation gate passed most pure-noise findings**: 78% to 87% of datasets with no true effect in three measurements (47 of 60 with a seeded permutation placebo; 26 of 30 and 23 of 30 with the engine's original unseeded default placebo). DoWhy's placebo `new_effect` is the mean of 100 simulated runs, so it is ~10x quieter than a single estimate and the engine's rule `\|placebo\| < 0.25*\|estimate\|` was met by almost any noise. The estimates themselves recovered planted effects accurately; the gate gave far less protection against a spurious one than "refutation-tested" implied. The README makes that claim. | S2 High | Statistical test | Fixed 2026-10-03. A finding now passes only if its effect's own regression p-value (DoWhy's t-test of the treatment coefficient, adjusted for the confounders) is below 0.01 and DoWhy's seeded placebo refuter is consistent with zero. Measured: 0 of 60 noise datasets pass (a 0.05 threshold would pass 4), and genuine effects down to -5 g on 1,500 rows pass 20 of 20. Guarded by three statistical tests; the strict expected-failure is gone. | Fixed+tested |
 | DEF-107 | Test regime | TESTING.md findings | The digital twin's per-station `open_ticket_count` is incremented rather than derived, so a Kafka redelivery of `order_fired` inflates it. | S3 Medium | Integration test | Not fixed. Recorded as a strict expected-failure; staff state is unaffected (absolute). | Open |
 | DEF-108 | Test regime | TESTING.md findings | Consumers log `Topic ... not found in cluster metadata` and `DNS Resolution failure` at ERROR during start-up races, in bursts of dozens of lines for a few seconds. | Info | End-to-end test | Benign; allowed explicitly, with a test requiring that it never persists beyond 60 seconds. | Clarified |
 
@@ -302,6 +303,17 @@ Found by reading the project's own records against each other while writing this
 | DEF-126 | Docs | CODEBASE-GUIDE.md 11.1 | The codebase guide said the extended k3s realign script "has not been run against the cluster", while the status log records that it was run successfully on 2026-09-22. | S4 Low | Review | Update note added at the head of 11.1 pointing to the status log and the audit script. | Fixed |
 | DEF-127 | Docs | implementation-status.md | The status log uses two unrelated numbering schemes (problem-log items 26-51, and Section 7 "items 1-22"), and its items 1-25 are absent, so a reference such as "item 12" is ambiguous without context. | S4 Low | Review | This defect log gives every entry a unique `DEF-nnn` id and keeps the original reference in its Source column. | Mitigated |
 | DEF-128 | Docs | (absent) | No line-coverage measurement exists. Test counts and the requirements traceability matrix stand in for it, which measures requirement coverage rather than code coverage. | Info | Review | Recorded as a gap in the SQA plan and the risk register; `pytest-cov` would close it cheaply. | Open |
+
+## Part I. Found and fixed while repairing the refutation gate (2026-10-03)
+
+Found while investigating DEF-106 at the owner's request to stabilise the gate.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-129 | Test regime | DEF-106 follow-up | The placebo refuter ran unseeded, so a finding's refutation verdict was not reproducible: the same data could pass on one run and fail on the next, and the measurement of the gate itself moved between 87% and 77%. | S3 Medium | Test run | The refuter now takes a fixed `random_state`; identical data gives an identical verdict and identical p-values (`test_the_refutation_verdict_is_identical_for_identical_data`). | Fixed+tested |
+| DEF-130 | Test regime | DEF-106 follow-up | DoWhy's reported placebo p-value tests whether *zero* lies inside the placebo estimates; it never compares the *real* estimate to them, so it cannot say whether a finding is distinguishable from noise. Across 120+ measurements it never rejected anything (all above 0.68), noise or genuine. | Info | Source review and measurement | Kept as a sanity check on the estimator, with the regression p-value as the real discriminator. | Clarified |
+| DEF-131 | Test regime | DEF-106 follow-up | The gate certifies statistical significance, not causation: it cannot detect an omitted confounder or a mis-specified treatment (for example the staffing-level proxy used in the pickup-delay analysis is not a validated causal variable). | Info | Analysis | Recorded as a limitation; the engine controls only for the confounders it is told about. | Open |
+| DEF-132 | Test regime | DEF-106 follow-up | **The causal engine's INFO logs vanished after its first estimate.** `import dowhy` resets the root logger to WARNING, and the engine imports DoWhy lazily on its first estimate, so every later INFO line ("Emitted CausalFinding ...", and now the gate's p-values) was silently dropped; it also hid the earlier unreproducible verdicts. Found while trying to display the repaired gate's p-values in the live stack and finding the line missing, after ruling out transport (output lost through `compose exec`) with two experiments. | S3 Medium | Investigation | The engine's own logger now has an explicit INFO level. `test_the_engines_own_info_logs_survive_importing_dowhy` reproduces the real import order in a fresh interpreter and was shown to fail without the fix. | Fixed+tested |
 
 ## How the defects were found, and what that says about the process
 

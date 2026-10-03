@@ -21,7 +21,7 @@ Lists the risks to the project's goals (a credible, runnable portfolio piece who
 | RSK-001 | Data integrity | **Silent data loss in the storage consumer during a database outage.** A database outage longer than the retry budget, or a restart, would make the consumer skip events or stop storing while appearing healthy. | 1 | 3 | 3 (Medium) | Realised, mitigated | Reconnect and rewind fixes; conservation check after every injected fault; four regression tests that fail on the old behaviour. | Low-medium. Re-verified live 2026-10-03 (7 of 7 resilience tests). | DEF-100, DEF-101 |
 | RSK-002 | Data integrity | **A pipeline hop fails partially and silently.** A connector, consumer or task fails while its parent reports healthy, so most data stops while the system looks alive (12 days in one case). | 2 | 2 | 4 (Medium) | Realised, mitigated | End-to-end connector-health test; per-table arrival tests; pipeline-health metrics. | Medium. Nothing alerts on a failed connector *task* on Kubernetes; the check exists only in the test. | DEF-008, DEF-035 |
 | RSK-003 | Operations | **A fix is committed but never deployed.** The repository and the live cluster diverge, so a known bug stays live (a 10-hour outage). | 2 | 3 | 6 (High) | Realised, partly mitigated | `k8s/audit/audit-live-cluster.sh` compares committed charts with the live cluster; run after deploys. | Medium. The audit is manual and cannot run in CI. | DEF-090, DEF-094 |
-| RSK-004 | Analytics validity | **The refutation gate lets spurious findings through.** On pure noise the gate passed 77% to 87% of findings, so they would be marked narrative-ready and narrated, undermining the project's central claim. | 3 | 3 | 9 (High) | Open | Recorded as a strict expected-failure so it stays visible; the README is honest elsewhere that narration verifies faithfulness to the finding, not truth of it. | **High until the owner decides.** A sounder rule would test the estimate against the placebo distribution's spread. | DEF-106 |
+| RSK-004 | Analytics validity | **The refutation gate lets spurious findings through.** The old rule passed 78% of pure-noise findings (DEF-106), so spurious results would have been marked narrative-ready and narrated, undermining the project's central claim. | 1 | 3 | 3 (Medium) | Realised, mitigated | Fixed 2026-10-03: a finding passes only if its effect's regression p-value is below 0.01 and the seeded placebo refuter is consistent with zero; 0 of 60 noise datasets pass, genuine effects pass; verdicts are deterministic; three statistical tests guard it. | Low-medium. The gate certifies significance, not causation, so an omitted confounder is invisible to it (DEF-131). Live clusters keep the old gate until their images are rebuilt and imported. | DEF-106, DEF-129, DEF-131 |
 | RSK-005 | Analytics validity | **The language model fabricates detail.** A small local model invents numbers, directions or statistical claims within a finding it is given. | 2 | 2 | 4 (Medium) | Realised, mitigated | Verification guard (numbers must trace, direction must match, no unsupported claims), retries, then a labelled deterministic template; fake-model loop tests. | Medium. The checks are mechanical and cannot prove meaning; on CPU most narrations are the template. | DEF-054 |
 | RSK-006 | Analytics validity | **The digital twin drifts under redelivery.** An at-least-once redelivery of `order_fired` inflates a station's open-ticket count permanently. | 2 | 2 | 4 (Medium) | Open | Recorded as a strict expected-failure; staff state is unaffected. | Medium: the dashboard can show a wrong workload. | DEF-107 |
 | RSK-007 | Analytics validity | **The anomaly detector misses real slowdowns on production defaults.** A few tickets stalled for up to ~79 minutes inflate the standard deviation so a 3x slowdown is invisible. | 2 | 2 | 4 (Medium) | Open | Documented; the acceptance test shows detection works under the test stack's pacing. | Medium: no test exercises the stalled-ticket case. | DEF-056 |
@@ -53,18 +53,17 @@ Lists the risks to the project's goals (a credible, runnable portfolio piece who
 
 | Rating | Count |
 |---|---|
-| High | 5 |
-| Medium | 19 |
+| High | 4 |
+| Medium | 20 |
 | Low | 6 |
 | **Total** | **30** |
 
-Of these, 14 are risks that **actually happened** during the project.
+Of these, 15 are risks that **actually happened** during the project.
 
 ### The risks to act on first
 
 | ID | Risk | Score | What to do |
 |---|---|---|---|
-| RSK-004 | The refutation gate lets spurious findings through | 9 | Owner decision: replace the rule with one that tests the estimate against the placebo distribution (or requires statistical significance), then remove the expected-failure marker. |
 | RSK-003 | A fix is committed but never deployed | 6 | Run the audit after every deploy; move the drift check into a disposable-cluster CI job. |
 | RSK-016 | Backups are not routinely proven | 6 | Schedule the restore drill and alert when it has not succeeded recently. |
 | RSK-022 | A reviewer's first run fails or takes too long | 6 | Run the first-run path on a clean machine and on Docker Engine; measure the cold build; try Codespaces. |

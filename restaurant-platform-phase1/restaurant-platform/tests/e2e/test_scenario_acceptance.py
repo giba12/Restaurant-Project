@@ -79,6 +79,9 @@ def test_a_finding_computed_for_the_scenario_carries_its_id(scenario):
         timeout=300, check=False,
     )
     assert out.returncode == 0, out.stdout + out.stderr
+    # Show the engine's own verdict line (effect size, whether the refutation gate passed, and the
+    # p-values behind that decision), so a run leaves the evidence and not only pass or fail.
+    print("\n" + "\n".join(line for line in (out.stdout + out.stderr).splitlines() if "Emitted CausalFinding" in line))
     row = sql(f"SELECT scenario_injection_id, refutation_passed, effect_estimate_unit FROM causal_findings "
               f"WHERE scenario_injection_id = '{scenario['id']}'")
     assert row, "no finding was stored for the injected scenario"

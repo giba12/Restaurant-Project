@@ -59,7 +59,14 @@ A correct fix sat in the repository for days while the live cluster kept the bug
 
 ### 3.5 Run the failure path
 
-Reconnection, rewinding, restart behaviour, the recovery of in-memory state: none of these is exercised by a happy-path test. Each was wrong. The resilience layer's first full run failed four of seven tests; the second failed two; the third passed. **Each of those failures was a real product defect, not a test defect,** which is the layer paying for itself.
+Reconnection and rewinding are not exercised by a happy-path test, and in the storage consumer both were wrong (DEF-100, DEF-101). The resilience layer's first full run failed four of seven tests (database outage, Kafka restart, MQTT restart, full stop and start); after the reconnect fix the second run failed two (database outage and Kafka restart), each with a one-message mismatch (517 messages in Kafka, 516 rows), which was the rewind defect; the third run passed. What is and is not established about those failures:
+
+- **Run 2 is verified:** the assertion messages show a one-message loss, the fix was written for it, and a regression test written for it fails on the old behaviour.
+- **Run 1 is attributed, not individually verified.** I did not diagnose the four failures one by one. The reconnect fix removed them, and the consumer stayed unable to store after the database test, which the three later tests share, so a cascade from DEF-100 is the likely explanation. The fix and the later passes are the evidence; the per-test causes were not separately confirmed.
+- **Not every failure along the way was a product defect.** The first version of the crash test used `docker kill`, which Podman does not treat as a crash, so it measured Podman and not the platform (DEF-118). That was found by a small experiment during an earlier, partial run, and corrected before the three runs above.
+- **Some recovery behaviour was right all along.** The Kafka restart, MQTT restart and full stop/start tests passed in run 2 and run 3, so the claim is not that every restart path was broken. The aggregator's loss of tickets caught mid-flight by a crash is a documented limitation that the test tolerates, not a defect it found.
+
+**Run the failure path, and read each failure as evidence about the product only after ruling out the test.**
 
 ### 3.6 Third parties change under you
 

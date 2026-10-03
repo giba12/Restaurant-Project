@@ -103,7 +103,9 @@ def test_version_1_never_references_version_2():
     exclusions = re.search(r'grep -v "([^"]+)"', readme)
     assert exclusions, "could not find the exclusion list in game/README.md"
     excluded = [re.compile(pattern.replace("\\.", r"\.")) for pattern in exclusions.group(1).split("\\|")]
-    needle = re.compile(r"game-bridge|game/bridge|game/client|game/k8s")
+    # Assembled from pieces so this file does not contain the strings it hunts
+    # for (it would otherwise flag itself -- it is tracked, and not game code).
+    needle = re.compile("|".join(re.escape(p) for p in ("game-" "bridge", "game/" "bridge", "game/" "client", "game/" "k8s")))
     offenders = []
     for path in _tracked_files():
         rel = str(path.relative_to(ROOT))

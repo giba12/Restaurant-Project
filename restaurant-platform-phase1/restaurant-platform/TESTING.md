@@ -4,10 +4,6 @@ This document describes how the platform is tested, and — for every test in th
 
 It is a catalogue meant to be read by a person, and it is also under test: `tests/static/test_testing_doc.py` fails if a test exists that is not described here, or if this document describes a test that no longer exists. It cannot quietly rot.
 
-> **Status at the 2026-10-02 stopping point (temporary — delete this box once a full run is green).**
-> Verified by actually running them: layers 1–4 (static 174 pass; unit suites all pass; database integration 91 pass + 1 expected-fail; statistical 9 pass + the slow noise-gate measurement), the end-to-end layer (all substantive tests pass; the log-health tests were corrected and then passed against the live stack), the acceptance test's measurements (3.7× slowdown, 131 anomalies at loaded stations vs 5 at the removed one), and the load measurements (p95 latency 1.04 s; dashboard p95 479 ms; 3,000-event burst stored exactly once).
-> **Not yet verified end to end:** (1) the resilience layer with the two storage-consumer fixes built in — the fixes are proven by integration tests that fail on the old behaviour, but the live database-outage and Kafka-restart tests still need a clean run (the previous run, before the second fix, failed only on a one-message loss that the second fix addresses); (2) the corrected acceptance assertion and the load test's memory/restart checks (the first run stopped at a throughput floor before reaching them); (3) none of the GitHub workflows has run on GitHub. To close these out, run `bash tests/run_stack_tests.sh full` (about an hour) and fix anything it reports.
-
 ## The idea: test it the way production attacks it
 
 A system is not tested by checking that it works. It is tested by checking that it keeps working while the world does to it what the world does to every production system. This regime is organised around exactly that list:
@@ -73,6 +69,27 @@ The stack layers run as Compose project `rp-test` on dashboard port `18080`, so 
 - **Thresholds are floors, not targets.** Load assertions catch a collapse or a leak, not a 10% change, so the suite does not flap.
 - **Isolation.** The stack layers use their own Compose project and port; the database layer uses its own container and port.
 
+## Measured results
+
+A clean, complete run on 2026-10-03 on a developer laptop (WSL2, rootless Podman, 15 GB RAM, with the three Ollama services left out). These are *measurements, not benchmarks* — a CI runner will differ — recorded so each future run has something to be compared with.
+
+| Layer | Result | Notes |
+|---|---|---|
+| 1 · Static | 174 passed, 3 skipped | the 3 skips are documented exceptions (two operator-managed charts, one nginx image) |
+| 2 · Unit | all suites pass | e.g. detector 19, aggregator 30, causal engine 15, narrator 35, game bridge 50 |
+| 3 · Database integration | 91 passed, 1 expected-fail | the expected-fail is the twin's redelivery double-count |
+| 4 · Statistical | 9 passed, plus 1 slow expected-fail | the expected-fail is the refutation gate (below) |
+| 5 · End-to-end | 62 passed in 9 min | |
+| 5 · Acceptance | 3 passed in 10 min | below |
+| 6 · Resilience | 7 passed in 38 min | every fault left Kafka and the database in exact agreement |
+| 7 · Load | 4 passed in 7 min | below |
+
+**Acceptance (an injected staffing shortage):** mean pickup delay at the loaded stations rose from 5.1 s to 16.1 s (**3.1×**); **142 anomalies** were flagged at the stations absorbing the load and **1** at the removed station.
+
+**Load:** event-to-storage latency p95 **0.98 s**; a 3,000-event burst was fully stored, exactly once, at **~18 events/s** end to end (a floor of 10 is asserted; the stack's real default traffic is ~0.7 events/s); no service grew by more than **2 MB** or restarted; the dashboard API held p95 **408 ms** at 20 concurrent users with no errors.
+
+**Not yet seen anywhere but this laptop:** none of the GitHub workflows has run on GitHub. They were validated locally by running each command they contain, but their first real run may still surface a runner-specific difference.
+
 ## What building this regime found
 
 Running the new layers against the existing codebase for the first time turned up real defects. Each is listed with what found it, and what was done.
@@ -81,8 +98,8 @@ Running the new layers against the existing codebase for the first time turned u
 
 | Finding | Found by | Resolution |
 |---|---|---|
-| **The storage consumer permanently stopped storing after any database restart.** It opened one connection at start-up and never replaced it; its error handler then crashed on the dead connection. The process stayed "running", so no restart policy ever fired and nothing alerted. | The resilience layer (`test_a_database_outage_is_survived_by_every_service_that_uses_it`), confirmed live: the database had been healthy for minutes while the consumer logged "giving up" on every message. | `write_with_retry` now replaces a dead connection and returns the live one. Regression: `test_the_consumer_reconnects_after_the_database_drops_its_connection`. |
-| **The storage consumer lost events during any database outage longer than ~30 s.** After exhausting its retries it skipped the message, and the next success committed Kafka's position over it. The code's own comment claimed the opposite. | The resilience layer's conservation check: 517 messages in Kafka, 516 rows (off by exactly one). | The message loop is extracted into `handle_message`, which rewinds to a message it cannot store instead of skipping it. Regression: `test_a_later_message_can_never_commit_over_one_that_failed_to_store` (verified to fail on the old behaviour). |
+| **The storage consumer permanently stopped storing after any database restart.** It opened one connection at start-up and never replaced it; its error handler then crashed on the dead connection. The process stayed "running", so no restart policy ever fired and nothing alerted. | The resilience layer (`test_a_database_outage_is_survived_by_every_service_that_uses_it`), confirmed live: the database had been healthy for minutes while the consumer logged "giving up" on every message. | `write_with_retry` now replaces a dead connection and returns the live one. Regression: `test_the_consumer_reconnects_after_the_database_drops_its_connection`; also verified live: the database-outage chaos test now passes. |
+| **The storage consumer lost events during any database outage longer than ~30 s.** After exhausting its retries it skipped the message, and the next success committed Kafka's position over it. The code's own comment claimed the opposite. | The resilience layer's conservation check: 517 messages in Kafka, 516 rows (off by exactly one). | The message loop is extracted into `handle_message`, which rewinds to a message it cannot store instead of skipping it. Regression: `test_a_later_message_can_never_commit_over_one_that_failed_to_store` (verified to fail on the old behaviour); also verified live: after the outage and the Kafka restart, every Kafka message is stored exactly once. |
 | The Compose Kafka Connect image **ran as root**; the Kubernetes variant of the same image already dropped it. | `test_final_image_does_not_run_as_root` | Added `USER appuser`; the full stack's connectors still reach `RUNNING`. |
 | **Three batch workloads had no resource limits** (the MinIO bucket-init Job, the TimescaleDB schema-init Job, the backup CronJob). The live audit script had missed them because it deliberately skips Helm hooks and excludes the backup chart. | `test_every_container_has_cpu_and_memory_limits` | Limits added to all three. |
 | The narrator pinned **`requests==2.32.3`, which has two published vulnerabilities**. | `test_no_pinned_dependency_has_a_known_vulnerability` | Bumped to 2.33.0; verified the narrator's only call (`requests.post`) is unchanged and its tests pass. |

@@ -2,6 +2,8 @@
 
 This document describes how the platform is tested, and — for every test in the repository — **what it is, what it does, why it was created, and why it matters.**
 
+The wider quality documentation (requirements, test plan, traceability matrix, SQA plan, risk register, defect log, results, lessons, environment baseline and release readiness) is in [`docs/quality/`](docs/quality/README.md).
+
 It is a catalogue meant to be read by a person, and it is also under test: `tests/static/test_testing_doc.py` fails if a test exists that is not described here, or if this document describes a test that no longer exists. It cannot quietly rot.
 
 ## The idea: test it the way production attacks it
@@ -75,14 +77,15 @@ A clean, complete run on 2026-10-03 on a developer laptop (WSL2, rootless Podman
 
 | Layer | Result | Notes |
 |---|---|---|
-| 1 · Static | 174 passed, 3 skipped | the 3 skips are documented exceptions (two operator-managed charts, one nginx image) |
-| 2 · Unit | all suites pass | e.g. detector 19, aggregator 30, causal engine 15, narrator 35, game bridge 50 |
-| 3 · Database integration | 91 passed, 1 expected-fail | the expected-fail is the twin's redelivery double-count |
+| 1 · Static | 185 passed, 3 skipped | the 3 skips are documented exceptions (two operator-managed charts, one nginx image) |
+| 2 · Unit | 182 passed | detector 19, aggregator and origin 30, causal engine 15, narrator 35, dashboard API 21, alert relay 5, game bridge 50, schema compatibility 7 |
+| 3 · Database integration | 95 passed, 1 expected-fail | the expected-fail is the twin's redelivery double-count |
 | 4 · Statistical | 9 passed, plus 1 slow expected-fail | the expected-fail is the refutation gate (below) |
 | 5 · End-to-end | 62 passed in 9 min | |
 | 5 · Acceptance | 3 passed in 10 min | below |
 | 6 · Resilience | 7 passed in 38 min | every fault left Kafka and the database in exact agreement |
 | 7 · Load | 4 passed in 7 min | below |
+| 8 · Security | 10 passed | one case per requirements file; no known vulnerabilities |
 
 **Acceptance (an injected staffing shortage):** mean pickup delay at the loaded stations rose from 5.1 s to 16.1 s (**3.1×**); **142 anomalies** were flagged at the stations absorbing the load and **1** at the removed station.
 
@@ -107,7 +110,7 @@ Running the new layers against the existing codebase for the first time turned u
 
 **Recorded but not fixed — decisions for the owner.** Both are strict expected-failures, visible in every run:
 
-1. **The refutation gate is much weaker than "refutation-tested" implies.** On 30 datasets with *no* real effect, the gate passed **26 (87%)** as trustworthy, so they would be marked narrative-ready and narrated. Cause, confirmed in DoWhy's source: the placebo's `new_effect` is the mean of 100 simulated placebo runs, so it is about ten times quieter than a single estimate, and the engine's rule `|placebo| < 0.25·|estimate|` is satisfied by almost any noise. The estimates themselves are sound (the engine recovers planted effects accurately); it is the *gate* that gives little protection against a spurious one. A sounder rule would test the estimate against the spread of the placebo distribution (its p-value), or require the estimate to be statistically distinguishable from zero. Changing it alters which findings the live system narrates, so it is a decision for the owner, not a quiet edit.
+1. **The refutation gate is much weaker than "refutation-tested" implies.** On 30 datasets with *no* real effect, the gate passed **26 (87%)** as trustworthy on the first run and **23 (77%)** on a re-run (the placebo permutations are unseeded), so they would be marked narrative-ready and narrated. Cause, confirmed in DoWhy's source: the placebo's `new_effect` is the mean of 100 simulated placebo runs, so it is about ten times quieter than a single estimate, and the engine's rule `|placebo| < 0.25·|estimate|` is satisfied by almost any noise. The estimates themselves are sound (the engine recovers planted effects accurately); it is the *gate* that gives little protection against a spurious one. A sounder rule would test the estimate against the spread of the placebo distribution (its p-value), or require the estimate to be statistically distinguishable from zero. Changing it alters which findings the live system narrates, so it is a decision for the owner, not a quiet edit.
 2. **The digital twin's per-station `open_ticket_count` double-counts on redelivery.** It is incremented rather than derived, so Kafka's at-least-once delivery can inflate it after a crash. Staff state does not have this problem (it is absolute).
 
 
@@ -189,6 +192,24 @@ Every test in the repository, grouped by layer. For each: **what it is** (its ki
 |---|---|---|---|
 | `test_every_test_function_is_documented_in_testing_md` | **Documentation test.** Scans every test file in the repository and fails if any test function is not described in this catalogue. | A test catalogue that silently falls out of date looks authoritative while being wrong. | Adding a test without explaining what it is and why it exists now fails CI. It caught three omissions while this document was being written. |
 | `test_testing_md_does_not_describe_tests_that_no_longer_exist` | **Documentation test.** The reverse: fails if the catalogue names a test that has been deleted or renamed. | The other direction of the same rot. | The catalogue can be trusted in both directions. |
+
+#### `test_quality_docs.py` — the quality documents are internally consistent
+
+The documents in `docs/quality/` (requirements, traceability matrix, defect log, risk register and the rest) are registers whose value is that their numbers and cross-references can be trusted. Earlier documents in this project drifted from the truth, so these are checked mechanically.
+
+| Test | What it is and does | Why I created it | Why it matters |
+|---|---|---|---|
+| `test_requirement_ids_are_unique_and_well_formed` | **Documentation test.** Every requirement id in the specification is unique and follows the naming scheme. | Everything else cites these ids. | An ambiguous id makes the whole traceability chain unreliable. |
+| `test_every_requirement_is_traced_in_the_matrix_and_nothing_else_is_cited` | **Documentation test.** The matrix covers exactly the specification's requirements: none missing, none invented. | A requirement with no row looks verified by omission. | The matrix would otherwise quietly shrink or grow. |
+| `test_every_test_cited_in_the_matrix_exists` | **Documentation test.** Every test the matrix names is a real test function. | Renamed or deleted tests leave dangling evidence. | A traceability claim pointing at nothing is worse than no claim. |
+| `test_the_matrix_coverage_summary_matches_its_rows` | **Documentation test.** The coverage totals equal what the rows add up to. | A summary written by hand drifts from its rows. | Readers quote the summary, not the rows. |
+| `test_defect_ids_are_unique_and_sequential` | **Documentation test.** Defect ids run `DEF-001`, `DEF-002`, ... with no gaps or repeats. | The original problem log lost its first 25 entries when it was revised (DEF-127). | Stable ids are what let other documents cite a defect safely. |
+| `test_the_defect_log_summary_matches_its_entries` | **Documentation test.** The entry total and the severity and status tables equal the entries. | The same drift risk, in the document most likely to be quoted. | A headline number that is wrong discredits the whole log. |
+| `test_every_defect_id_cited_anywhere_in_the_quality_documents_exists` | **Documentation test.** Every `DEF-nnn` mentioned in any quality document is a real entry. | I mis-cited defect ids while drafting these documents. | Dangling cross-references are the commonest form of documentation rot. |
+| `test_risk_ids_are_unique_and_sequential` | **Documentation test.** Risk ids run `RSK-001`, `RSK-002`, ... with no gaps. | Same reasoning as the defect ids. | Stable ids for the risk register. |
+| `test_every_risk_id_cited_in_the_quality_documents_exists` | **Documentation test.** Every `RSK-nnn` mentioned anywhere is a real risk. | Same reasoning. | Same. |
+| `test_every_quality_document_has_a_version_and_a_date` | **Documentation test.** Each document opens with a control table holding a version and date. | An undated register cannot be judged for staleness. | Readers need to know when a document was last true. |
+| `test_the_index_lists_every_document_and_every_link_resolves` | **Documentation test.** The index names every document in the folder and every relative link in the documents resolves. | A document missing from the index is effectively lost. | Broken links are how a document set rots. |
 
 ### Layer 2 — Unit tests (next to each service)
 
@@ -520,7 +541,7 @@ The README states the LLM narrator is "structurally incapable of inventing a cla
 | `test_estimates_are_stable_across_independent_samples` | **Statistical test.** Five independent datasets must all land near the truth. | One lucky seed proves little. | Reliability, not luck. |
 | `test_a_strong_effect_passes_its_refutation_test_and_the_flag_is_a_real_bool` | **Regression test.** A real effect passes refutation, and the flag is a Python `bool`. | Problem log item 48: a `numpy.bool_` failed schema validation. | The last step between "estimated" and "stored". |
 | `test_when_there_is_no_effect_the_engine_estimates_roughly_zero` | **False-positive control.** Truth is zero; the estimate must be near zero. | The mirror of recovering a real effect. | A detector that finds effects everywhere is worthless. |
-| `test_the_refutation_gate_rejects_findings_that_are_pure_noise` | **Documented known weakness (strict expected-fail, slow).** 30 datasets with a true effect of exactly zero; fewer than 20% should pass the gate. **Measured: 26 of 30 (87%) passed.** | I expected about 16%; measuring showed far worse. DoWhy's placebo `new_effect` is the mean of 100 simulated placebo runs, so it is ~10× quieter than a single estimate, and the engine's rule (`|placebo| < 0.25·|estimate|`) is satisfied by almost any noise. | **The most important finding of this regime.** The "refutation-tested" label gives much less protection than it implies. Recorded as a strict expected-fail until the gate is fixed. |
+| `test_the_refutation_gate_rejects_findings_that_are_pure_noise` | **Documented known weakness (strict expected-fail, slow).** 30 datasets with a true effect of exactly zero; fewer than 20% should pass the gate. **Measured: 26 of 30 (87%) passed, and 23 of 30 (77%) on a re-run; the figure varies because the placebo permutations are unseeded.** | I expected about 16%; measuring showed far worse. DoWhy's placebo `new_effect` is the mean of 100 simulated placebo runs, so it is ~10× quieter than a single estimate, and the engine's rule (`|placebo| < 0.25·|estimate|`) is satisfied by almost any noise. | **The most important finding of this regime.** The "refutation-tested" label gives much less protection than it implies. Recorded as a strict expected-fail until the gate is fixed. |
 | `test_too_few_rows_is_refused_rather_than_estimated` | **Robustness test.** 15 rows raise `ValueError`. | The stream consumer catches that and skips. | Never estimate from too little data. |
 | `test_rows_with_missing_values_are_dropped_not_fatal` | **Robustness test.** 10% missing confounders still yields a good estimate. | Real data has gaps. | Graceful degradation. |
 | `test_estimates_are_reproducible_for_identical_input` | **Determinism test.** The same data gives the same estimate. | A finding no one can reproduce cannot be audited. | Auditability. |

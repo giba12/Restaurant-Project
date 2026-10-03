@@ -1,0 +1,76 @@
+# Risk Register
+
+| | |
+|---|---|
+| Document | Risk register |
+| Project | Restaurant Operations Digital Twin Platform |
+| Version | 1.0 |
+| Date | 2026-10-03 |
+| Status | Current as of commit `898c7aa`; checked by `tests/static/test_quality_docs.py` |
+
+## Purpose and method
+
+Lists the risks to the project's goals (a credible, runnable portfolio piece whose claims are true), with what has already happened, what is in place, and what remains. It is **retrospective**: many entries are risks that were realised during the project, recorded with their evidence in `06-defect-log.md`. Ratings are the judgement of the assistant that built the project and have not been independently reviewed.
+
+**Likelihood** and **impact** are each 1 (low), 2 (medium) or 3 (high); the score is their product. 6-9 is High, 3-4 Medium, 1-2 Low. For a risk already realised, likelihood is the chance of *recurrence given the controls now in place*, so it is lower than history alone suggests.
+
+**Status:** *Open* (no sufficient control), *Realised, mitigated* (it happened, a control now exists), *Realised, partly mitigated*, *Mitigated*, *Accepted* (a deliberate trade-off).
+
+| ID | Category | Risk | L | I | Score | Status | Controls in place | Residual position | Evidence |
+|---|---|---|---|---|---|---|---|---|---|
+| RSK-001 | Data integrity | **Silent data loss in the storage consumer during a database outage.** A database outage longer than the retry budget, or a restart, would make the consumer skip events or stop storing while appearing healthy. | 1 | 3 | 3 (Medium) | Realised, mitigated | Reconnect and rewind fixes; conservation check after every injected fault; four regression tests that fail on the old behaviour. | Low-medium. Re-verified live 2026-10-03 (7 of 7 resilience tests). | DEF-100, DEF-101 |
+| RSK-002 | Data integrity | **A pipeline hop fails partially and silently.** A connector, consumer or task fails while its parent reports healthy, so most data stops while the system looks alive (12 days in one case). | 2 | 2 | 4 (Medium) | Realised, mitigated | End-to-end connector-health test; per-table arrival tests; pipeline-health metrics. | Medium. Nothing alerts on a failed connector *task* on Kubernetes; the check exists only in the test. | DEF-008, DEF-035 |
+| RSK-003 | Operations | **A fix is committed but never deployed.** The repository and the live cluster diverge, so a known bug stays live (a 10-hour outage). | 2 | 3 | 6 (High) | Realised, partly mitigated | `k8s/audit/audit-live-cluster.sh` compares committed charts with the live cluster; run after deploys. | Medium. The audit is manual and cannot run in CI. | DEF-090, DEF-094 |
+| RSK-004 | Analytics validity | **The refutation gate lets spurious findings through.** On pure noise the gate passed 77% to 87% of findings, so they would be marked narrative-ready and narrated, undermining the project's central claim. | 3 | 3 | 9 (High) | Open | Recorded as a strict expected-failure so it stays visible; the README is honest elsewhere that narration verifies faithfulness to the finding, not truth of it. | **High until the owner decides.** A sounder rule would test the estimate against the placebo distribution's spread. | DEF-106 |
+| RSK-005 | Analytics validity | **The language model fabricates detail.** A small local model invents numbers, directions or statistical claims within a finding it is given. | 2 | 2 | 4 (Medium) | Realised, mitigated | Verification guard (numbers must trace, direction must match, no unsupported claims), retries, then a labelled deterministic template; fake-model loop tests. | Medium. The checks are mechanical and cannot prove meaning; on CPU most narrations are the template. | DEF-054 |
+| RSK-006 | Analytics validity | **The digital twin drifts under redelivery.** An at-least-once redelivery of `order_fired` inflates a station's open-ticket count permanently. | 2 | 2 | 4 (Medium) | Open | Recorded as a strict expected-failure; staff state is unaffected. | Medium: the dashboard can show a wrong workload. | DEF-107 |
+| RSK-007 | Analytics validity | **The anomaly detector misses real slowdowns on production defaults.** A few tickets stalled for up to ~79 minutes inflate the standard deviation so a 3x slowdown is invisible. | 2 | 2 | 4 (Medium) | Open | Documented; the acceptance test shows detection works under the test stack's pacing. | Medium: no test exercises the stalled-ticket case. | DEF-056 |
+| RSK-008 | Analytics validity | **The simulators' behaviour is asserted, not tested.** The timing distribution and the to-go effect that the causal story relies on have no tests; a change could break the premise silently. | 2 | 2 | 4 (Medium) | Open | None beyond inspection. | Low-medium. A statistical test on generated events would close it. | FR-ING-02, FR-ING-03 |
+| RSK-009 | Supply chain | **A third-party chart, image or registry policy changes.** Distribution channels have vanished three times in one phase (the TimescaleDB chart, Bitnami's catalogue, MinIO's own images). | 2 | 2 | 4 (Medium) | Realised, mitigated | Hand-rolled manifests around official images; exact pins; digest-pinning where no version tag is free; a habit of checking maintenance status first. | Medium. Ollama is unpinned by design; base-image tags and registries can still change. | DEF-017, DEF-022, DEF-023 |
+| RSK-010 | Supply chain | **Vulnerable dependencies appear over time.** A pinned version acquires a published advisory (one did). | 2 | 2 | 4 (Medium) | Realised, mitigated | Nightly `pip-audit` of every pin (not yet run on GitHub); the finding was fixed. | Medium. The one unpinned range and all container images are unscanned. | DEF-104 |
+| RSK-011 | Supply chain | **An old client library is incompatible with newer servers.** kafka-python 2.0.2 failed against Kafka 4.3.1 and under Python 3.12 and TLS. | 1 | 2 | 2 (Low) | Realised, mitigated | Moved to 3.0.11 (verified live); Python pinned to 3.11; explicit `api_version`. | Low-medium: the replacement library's long-term maintenance is unproven. | DEF-026, DEF-027, DEF-071 |
+| RSK-012 | Security | **A secret reaches the repository or stays at a placeholder.** A real credential is committed, or a placeholder survives into a deployment. | 1 | 3 | 3 (Medium) | Realised, partly mitigated | Secrets in a gitignored directory; placeholders everywhere else; a tracked-file scan; rotation scripts; the live audit checks placeholders. | Low-medium. **Git history has not been scanned**; only tracked files are. | DEF-087, DEF-088 |
+| RSK-013 | Security | **Plaintext or weak transport and access on the Compose path.** Anonymous MQTT, plain HTTP, self-signed certificates and unauthenticated ntfy topics are acceptable for a local demo only. | 1 | 3 | 3 (Medium) | Accepted | Documented as a local-development trade-off; only the dashboard is published to the host (tested); TLS and authentication exist on the Kubernetes path. | Low if run on a laptop; **High if ever exposed to a network.** | CON-04 |
+| RSK-014 | Security | **The database permission boundary erodes.** A migration or grant change lets the narrator read raw data, voiding the project's headline safety claim. | 1 | 3 | 3 (Medium) | Mitigated | Six tests log in as the narrator role and attack the boundary. | Low. | FR-NAR-01 |
+| RSK-015 | Operations | **A routine migration blocks on an idle transaction.** A client holding a transaction open stalls an `ALTER TABLE` and everything queued behind it. | 2 | 2 | 4 (Medium) | Realised, mitigated | The causal engine commits after each read; the realign script stops all clients first. | Medium: a future migration is not guarded by a test. | DEF-057 |
+| RSK-016 | Operations | **Backups are not routinely proven.** pgBackRest backups exist and a restore worked once (2026-09-24), but nothing repeats the proof. | 2 | 3 | 6 (High) | Open | Scheduled full and differential jobs; a restore-drill script. | Medium. An untested backup is not a backup. | NFR-OPS-01 |
+| RSK-017 | Operations | **Single replicas and in-memory state.** Every service is one replica; the aggregator, simulators and bridge lose in-memory state on restart; mid-flight tickets are dropped. | 2 | 2 | 4 (Medium) | Accepted | Documented design trade-offs; restart policies; bounded loss tested. | Accepted for a portfolio project; unacceptable for production. | FR-ANA-01 |
+| RSK-018 | Maintainability | **Hand-synchronised copies drift apart.** SQL files, connector definitions and the Mosquitto config exist in two places; a stale SQL copy once caused real bugs. | 2 | 2 | 4 (Medium) | Realised, partly mitigated | Chart copies of the schemas are checked byte for byte; the others are listed in the codebase guide. | Medium for the unchecked copies. | DEF-031, DEF-053 |
+| RSK-019 | Maintainability | **Documentation drifts from the system.** Hand-edited documents have been wrong repeatedly (chart layout, k3s status, disk size). | 3 | 1 | 3 (Medium) | Realised, partly mitigated | The test catalogue and these registers are machine-checked; periodic cleanup passes. | Medium for hand-edited documents. | DEF-014, DEF-018, DEF-125, DEF-126 |
+| RSK-020 | Maintainability | **Project knowledge is lost when documents are revised.** The original problem-log entries 1-25 were dropped in a revision. | 1 | 2 | 2 (Low) | Realised, mitigated | Partly reconstructed (defect log Part A); defect ids now stable. | Low going forward. | DEF-127 |
+| RSK-021 | Environment | **Rootless Podman on WSL2 behaves unlike Docker.** The API socket is down after a restart, a restart policy does not apply after `docker kill`, and a loaded machine can drop the build connection. | 2 | 2 | 4 (Medium) | Realised, mitigated | Preflight check with a clear message; tests crash processes the realistic way; isolated test project and port; documented. | Medium for a reviewer who uses Podman. Docker Engine and Compose v2 are unexercised. | DEF-070, DEF-109, DEF-118, DEF-121, DEF-123 |
+| RSK-022 | Adoption | **A reviewer's first run fails or takes too long.** About 15 GB of images, a cold build of minutes, and a machine under pressure all threaten the first-run experience the project exists to deliver. | 2 | 3 | 6 (High) | Open | QUICKSTART; a GHCR publish workflow and a Codespaces devcontainer exist but have never run. | Medium-high until measured on a clean machine. | CON-04, NFR-POR-03, NFR-POR-04 |
+| RSK-023 | Test regime | **New CI workflows behave differently on GitHub.** The `static`, `integration`, nightly and image-publish workflows were validated by running their commands locally, never on GitHub's runners. | 3 | 1 | 3 (Medium) | Open | Every command was run locally; `gh` access to watch the first runs. | Medium: at least one needs a fix on first run. | DEF-081, DEF-084 |
+| RSK-024 | Test regime | **Scheduled workflows are quietly disabled or cost minutes.** GitHub disables scheduled workflows after a period of repository inactivity; heavy nightly runs use Actions minutes. | 2 | 1 | 2 (Low) | Open | Nightly runs are also triggerable on demand. | Low. | (none) |
+| RSK-025 | Test regime | **The heavy tests are flaky or slow.** Timing thresholds, shared-machine load and a one-hour full run could make results unstable or discourage running them. | 2 | 2 | 4 (Medium) | Open | Floors rather than targets; polling with timeouts; isolation; strict expected-failures. Only one fully clean run exists. | Medium until repeated nightly. | DEF-115, DEF-117 |
+| RSK-026 | Test regime | **No independent verification.** The author of the tests also wrote the code and judged the results; a shared misunderstanding passes every test. | 3 | 2 | 6 (High) | Open | Tests assert measured facts, mutation checks confirm they can fail, and known weaknesses are published. | **High for credibility.** External review is the remedy. | (SQA plan, section 11) |
+| RSK-027 | Test regime | **Code coverage is unknown.** Requirement coverage is traced, but line and branch coverage are not measured. | 2 | 1 | 2 (Low) | Open | The traceability matrix and its list of weakly verified requirements. | Low-medium. `pytest-cov` would close it cheaply. | DEF-128 |
+| RSK-028 | Test regime | **The assistant makes a mistake.** Observed: leaving a test stack running that broke the owner's build, wrong assumptions baked into tests, mis-guessed identifiers in a document. | 2 | 2 | 4 (Medium) | Realised, mitigated | The owner reviews and approves commits; evidence-first working; machine checks on documents and tests. | Medium. Retrospective documents like this one may still contain errors, and are checked by machine where possible. | DEF-109, DEF-110, DEF-116 |
+| RSK-029 | Compliance | **Licence obligations.** MinIO's server is AGPLv3 (run as a separate container); TimescaleDB TSL features are present in the image but unused; model licences differ. | 1 | 2 | 2 (Low) | Mitigated | Identified and documented; nothing in this project's own code depends on a restricted feature. | Low. | NFR-LIC-01 |
+| RSK-030 | Scope | **Version 2 couples to version 1.** The game drifts into the platform's code and stops being a removable add-on. | 1 | 2 | 2 (Low) | Mitigated | The boundary is a test that reads its exclusion list from the README. | Low. Hit three times before it was a test. | DEF-076 |
+
+## Summary
+
+| Rating | Count |
+|---|---|
+| High | 5 |
+| Medium | 19 |
+| Low | 6 |
+| **Total** | **30** |
+
+Of these, 14 are risks that **actually happened** during the project.
+
+### The risks to act on first
+
+| ID | Risk | Score | What to do |
+|---|---|---|---|
+| RSK-004 | The refutation gate lets spurious findings through | 9 | Owner decision: replace the rule with one that tests the estimate against the placebo distribution (or requires statistical significance), then remove the expected-failure marker. |
+| RSK-003 | A fix is committed but never deployed | 6 | Run the audit after every deploy; move the drift check into a disposable-cluster CI job. |
+| RSK-016 | Backups are not routinely proven | 6 | Schedule the restore drill and alert when it has not succeeded recently. |
+| RSK-022 | A reviewer's first run fails or takes too long | 6 | Run the first-run path on a clean machine and on Docker Engine; measure the cold build; try Codespaces. |
+| RSK-026 | No independent verification | 6 | Seek external review of the requirements and tests. |
+| RSK-006 | The digital twin drifts under redelivery | 4 | Derive the count from open tickets (or track ticket ids) instead of incrementing; the strict expected-failure will then demand its own removal. |
+| RSK-007 | The anomaly detector misses real slowdowns on production defaults | 4 | Add a test using stalled-ticket outliers; consider a robust spread estimate (median absolute deviation) in place of the standard deviation. |
+| RSK-008 | The simulators' behaviour is asserted, not tested | 4 | Add a statistical test on a batch of generated events (inter-arrival times; to-go effect on waste). |
+| RSK-018 | Hand-synchronised copies drift apart | 4 | Extend the byte-for-byte check to the SQL copies, connector definitions and Mosquitto config. |
+| RSK-025 | The heavy tests are flaky or slow | 4 | Repeat the nightly run several times before trusting the thresholds; loosen only with evidence. |

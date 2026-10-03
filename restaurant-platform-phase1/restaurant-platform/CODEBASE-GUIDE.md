@@ -186,6 +186,12 @@ The game touches version 1 in exactly four places, all intentional: the shared c
 - **Why it works this way:** The catalogue is itself tested: `tests/static/test_testing_doc.py` fails if a test is missing from it or if it describes a test that no longer exists.
 - **Purpose:** The reader's map of how this project knows it works.
 
+### `docs/quality/` (added 2026-10-03)
+- **What it does:** A complete quality-document set, written retrospectively from the project's own records: a requirements specification (85 identified requirements), master test plan, requirements traceability matrix, SQA plan, risk register (30 risks), defect and difficulty log (128 entries, including failures of the test regime itself), test summary report, lessons learned, environment and configuration baseline, and a release-readiness assessment with known issues. `README.md` indexes them and holds a glossary.
+- **Why it works this way:** The project began from a design brief and a technical log, not formal requirements, so these documents state the requirements, show which test proves each, and list every failure honestly (including the open ones). They claim no compliance with IEEE or ISO standards. Their registers are checked by `tests/static/test_quality_docs.py`: ids must be unique and real, every requirement must be traced, every test cited must exist, and every summary total must match its rows.
+- **Connects to:** `TESTING.md` (the per-test catalogue), `restaurant-platform-implementation-status.md` (the original problem log whose items are cross-referenced in the defect log's Source column).
+- **Purpose:** The evidence trail a reviewer can read to judge how the project was verified, what failed, and what is still open.
+
 ### `tests/` (added 2026-10-02)
 - **What it does:** The cross-cutting test layers, those needing more than one service, a real database, or the whole stack. `static/` (compose, Dockerfiles, Helm, schemas, lint, secrets, the version boundary), `integration/` (real application code against a real TimescaleDB built from the real migrations, run by `run_db_tests.sh`), `statistical/` (the causal engine against data with a known answer), `e2e/` (the running stack end to end, plus the slow injected-scenario acceptance test), `resilience/` (kill the consumer, database, Kafka, MQTT), `load/` (bursts, memory, concurrency), `security/` (dependency advisories). `run_stack_tests.sh` brings the real stack up as an isolated compose project, runs the stack layers and tears it down; `e2e/docker-compose.test.yml` only speeds up pacing. Per-service unit tests are *not* here: they stay next to the service they test.
 - **Why it works this way:** Each layer simulates one thing production does to a system; see the table at the top of `TESTING.md`.
@@ -1046,6 +1052,8 @@ Everything above is described, test by test, in `TESTING.md`. The suites under `
 A first version of this section (2026-09-20) listed a set of stale comments, dangling references and unused files. Those were cleaned up the same day (see the end of this section); what remains below is what genuinely remains. Each item was checked against the files or the running systems.
 
 ### 11.1 The k3s deployment is behind the repo again (the important one)
+
+**Update 2026-10-03:** this subsection is out of date. The implementation-status log (Section 7, item 3) records that the extended `k8s/realign/realign-live-cluster.sh` *was* run successfully on 2026-09-22 and that every touched pod's image ID was confirmed to match. The "History" and "Now" paragraphs below describe the state *before* that run and are kept for the record. The current way to check for drift is `bash k8s/audit/audit-live-cluster.sh`, which was clean on 2026-10-01.
 
 **History.** k3s was once out of step with the repo (old raw-table layout, old images). `k8s/realign/realign-live-cluster.sh` repaired that; the user ran it on 2026-09-21 and it worked (all workloads rolled out on the new images, and the recreated tables filled, including `pos_transaction_line_items`).
 

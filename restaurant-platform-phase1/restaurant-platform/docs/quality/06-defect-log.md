@@ -1,0 +1,308 @@
+# Defect and Difficulty Log
+
+| | |
+|---|---|
+| Document | Defect and difficulty log |
+| Project | Restaurant Operations Digital Twin Platform |
+| Version | 1.0 |
+| Date | 2026-10-03 |
+| Status | Current as of commit `898c7aa`; the "open" entries are the project's known gaps |
+
+## Purpose and honesty note
+
+This is a single list of **every failure, bug and difficulty** that could be recovered from the project's records: the implementation-status problem log (items 26-51), its outstanding-work history, the codebase guide's known-issues section, the study guide's lessons, 60 commits of git history, and the 2026-10-02/03 test-regime work.
+
+Three limits on its completeness:
+
+1. **Phases 1-3 are only partly recoverable.** The original problem-log entries 1-25 were dropped from the repository's documents when they were revised. Part A reconstructs what can be recovered with confidence and says so; it is almost certainly incomplete.
+2. **Severity is retrospective and a judgement.** It was assigned in 2026-10 by the assistant that helped build the project, not at the time of discovery.
+3. **"Found by" credits the method, not the person.** Most of these were found by the project owner and the assistant working together.
+
+Failures of the regime and of the assistant's own work (Part G) are included on purpose.
+
+## Scales
+
+**Severity:** **S1 Critical**, silent data loss or corruption, a security exposure, or a silent total outage. **S2 High**, a component or feature unusable or wrong until fixed, or blocking a documented done-condition. **S3 Medium**, degraded behaviour, a contained wrong result, or a hazard found before harm. **S4 Low**, cosmetic, tooling, documentation or test-side. **Info**, a difficulty or observation that was not a defect.
+
+**Status:** **Fixed+tested**, a test in the current suite fails if the defect returns. **Fixed**, corrected and verified when found, but nothing in the current suite would catch a recurrence. **Mitigated**, a practice or guard reduces it without removing it. **Clarified**, a misunderstanding resolved, nothing to fix. **Open**, known and deliberately not fixed.
+
+## Summary
+
+**128 entries** (117 defects and 11 informational difficulties), recorded between 2026-08 and 2026-10-03.
+
+### By severity
+
+| Severity | Count |
+|---|---|
+| S1 Critical | 6 |
+| S2 High | 29 |
+| S3 Medium | 38 |
+| S4 Low | 44 |
+| Info | 11 |
+| **Total** | **128** |
+
+### By status
+
+| Status | Count |
+|---|---|
+| Fixed+tested | 28 |
+| Fixed | 71 |
+| Mitigated | 7 |
+| Clarified | 13 |
+| Open | 9 |
+| **Total** | **128** |
+
+### By part (project period)
+
+| Part | Count |
+|---|---|
+| Part A: Phases 1-3 (before 2026-09-10) | 16 |
+| Part B: Phase 4 | 12 |
+| Part C: Phase 5 | 14 |
+| Part D: Phases 6-7, portability, version 2 and hardening (2026-09-16 to 2026-09-30) | 42 |
+| Part E: Alerting, chaos testing and the live audit (2026-09-28 to 2026-10-01) | 15 |
+| Part F: Product defects found by the test regime (2026-10-02 to 2026-10-03) | 9 |
+| Part G: Failures and difficulties of the test regime itself and its environment (2026-10-02 to 2026-10-03) | 16 |
+| Part H: Discrepancies found while preparing the quality documents (2026-10-03) | 4 |
+| **Total** | **128** |
+
+### By how it was found
+
+| Found by | Count |
+|---|---|
+| Live operation, deployment or manual run | 74 |
+| Review (static or manual) | 17 |
+| Test-regime run or observation | 15 |
+| Automated test regime (2026-10-02) | 7 |
+| Chaos test | 5 |
+| Attempting the done condition | 3 |
+| CI or first push | 3 |
+| User report | 3 |
+| Audit script | 1 |
+| **Total** | **128** |
+
+### By class
+
+| Class | Count |
+|---|---|
+| Deployment | 22 |
+| Logic | 19 |
+| Environment/tooling | 17 |
+| Test defect | 15 |
+| Observability | 8 |
+| Configuration | 6 |
+| Documentation | 5 |
+| Dependency | 5 |
+| Portability | 5 |
+| Integration | 4 |
+| Contract | 4 |
+| Security | 4 |
+| Supply chain | 3 |
+| Process | 3 |
+| Test infrastructure | 3 |
+| Repository hygiene | 2 |
+| Operator error | 2 |
+| Code quality | 1 |
+| **Total** | **128** |
+
+### Open items (9)
+
+| ID | Summary | Severity |
+|---|---|---|
+| DEF-015 | A "connection burst" hypothesis about Mosquitto restarts was raised and never confirmed or refuted. | Info |
+| DEF-056 | The anomaly detector is nearly blind to a 3x slowdown on simulated data: a few tickets stalled for up to ~79 minutes inflate its standard deviation to... | S3 Medium |
+| DEF-058 | The aggregator restarted once on a `cook_duration_ms` computed negative (a timestamp-ordering edge case). `_duration_ms` still permits negative values... | S3 Medium |
+| DEF-091 | Whether `PodCrashLooping` had notified continuously during those 10 hours could not be established afterwards; Kubernetes' restart backoff may have pu... | Info |
+| DEF-093 | `strimzi-cluster-operator` sat at 90% of its memory limit during the investigation. | Info |
+| DEF-106 | **The causal engine's refutation gate passes roughly 77% to 87% of pure-noise findings** (26 and then 23 of 30 datasets with no true effect, in two ru... | S2 High |
+| DEF-107 | The digital twin's per-station `open_ticket_count` is incremented rather than derived, so a Kafka redelivery of `order_fired` inflates it. | S3 Medium |
+| DEF-123 | Two Compose providers coexist on the development machine (a v1 `docker-compose` via the Podman shim, and the user's own Compose plugin, v5.5.1), so a... | Info |
+| DEF-128 | No line-coverage measurement exists. Test counts and the requirements traceability matrix stand in for it, which measures requirement coverage rather... | Info |
+
+## Part A. Phases 1-3 (before 2026-09-10): recovered lessons
+
+The original problem-log entries 1-25 for these phases are **not preserved in the repository's current documents** (the implementation-status document says only that they were "unchanged from the prior revision" and then omits them). What follows is what could be recovered with confidence from the study guide's lessons, from later entries that cite them (items 6, 14, 17-18, 22, 25) and from git history. Dates are approximate and some details are lost; they are included because leaving them out would understate the difficulties.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-001 | Phases 1-3 | study guide 1.1, 4.4 | Relative-path failures from working-directory assumptions, made worse by spaces in the repository path (`res proj`). Recurred in Phase 4 (a script run one directory level too shallow) and as Helm's misleading `repo k8s not found`. | S4 Low | Live operation | `pwd` discipline and quoting; documented as a rule; later made a habit (`find` to verify conventions). | Mitigated |
+| DEF-002 | Phases 1-3 | study guide 1.3, 6 | Large pasted heredocs and inline `python3 -c` blocks rendered interleaved or duplicated in the terminal, risking silently corrupt files. | S4 Low | Live operation | Always write multi-line content to a real file, inspect it, then execute. | Mitigated |
+| DEF-003 | Phases 1-3 | study guide 1.5 | A backgrounded interactive (`-it`) process was stopped by SIGTTIN/SIGTTOU: a shell/TTY interaction, not a timing bug. | S4 Low | Live operation | Two terminals, or drop the TTY and redirect to a file. | Clarified |
+| DEF-004 | Phases 1-3 | study guide 1.7 | An `apt`/`dpkg` lock-file error looked like a permissions problem but was a transient conflict with another process. | S4 Low | Live operation | Check real permissions independently (`sudo -l`) before treating it as a permissions issue. | Clarified |
+| DEF-005 | Phases 1-3 | orig. items 17-18 | Python tooling on Debian/Ubuntu: `ensurepip`/venv setup and PEP 668 "externally managed environment" refusals blocked `pip install`. | S4 Low | Live operation | Use virtual environments; documented in the study guide. | Fixed |
+| DEF-006 | Phases 1-3 | study guide 2.3 | Container image builds under rootless Podman ran in an isolated network namespace and could not reach package registries (DNS failure) although the host's own `curl` worked. | S3 Medium | Real build failure | `docker build --network=host`, applied proactively to every later build. | Fixed |
+| DEF-007 | Phases 1-3 | study guide 2.6 | Exec-form `ENTRYPOINT` appends arguments rather than accepting a replacement command, so a debugging command became arguments to the simulator entrypoint (the edge-simulator incident). | S4 Low | Live operation | Use `--entrypoint` to override; documented. | Clarified |
+| DEF-008 | Phases 1-3 | study guide 3.7 | A Kafka connector reported `RUNNING` while its data-moving task was `FAILED`; task state is independent and does not auto-retry. (The same shape returned as item 44.) | S2 High | Live operation | Inspect `Status.Connector Status` with `describe`; restart the task through the Connect REST API. | Fixed |
+| DEF-009 | Phases 1-3 | orig. item 14; study guide 4.3 | Helm refused to touch a `KafkaConnector` created earlier with `kubectl apply` (ownership labels missing). Recurred for a Secret in Phase 4. | S3 Medium | Real deployment failure | Delete the manual object and let the chart own it; all connectors consolidated into one chart. | Fixed |
+| DEF-010 | Phases 1-3 | orig. item 6 | A Kafka broker reconciliation timeout was read as a defect; it was a slow cold image pull. The same misreading recurred as item 29. | S4 Low | Real deployment failure | Wait, then `get` and `describe` before concluding anything failed. | Clarified |
+| DEF-011 | Phases 1-3 | study guide 4.5 | Helm renders every file under `templates/` independently with no cross-file checks, so stale or superseded templates are not detected. | S4 Low | Live operation | Find and remove stale templates manually; read `# Source:` comments in `helm template` output. | Mitigated |
+| DEF-012 | Phases 1-3 | study guide 3.6 | Assumed Strimzi-managed Kafka Connect was a `Deployment`; it is a `StrimziPodSet`, so pod lookups by controller type failed. | S4 Low | Live operation | Locate pods by label rather than assuming controller type. | Clarified |
+| DEF-013 | Phases 1-3 | study guide 3.5 | Re-importing an image under an unchanged tag left pods running the stale cached image (`imagePullPolicy: IfNotPresent`). | S3 Medium | Live operation | Delete the pod to force a re-check, or bump the tag; compare image digests. | Mitigated |
+| DEF-014 | Phases 1-3 | orig. item 22 | The project's own written conventions drifted from the live repository (recurred as item 27). | S4 Low | Live operation | Spot-check documents against the filesystem; later enforced by tests for several documents. | Mitigated |
+| DEF-015 | Phases 1-3 | orig. item 25 | A "connection burst" hypothesis about Mosquitto restarts was raised and never confirmed or refuted. | Info | Live operation | Left open deliberately; revisit if it recurs. (Test `test_an_mqtt_broker_restart_is_survived` now exercises a broker restart and passes.) | Open |
+| DEF-016 | Phases 1-3 | git 2026-09-16 | A stale duplicate top-level `restaurant-platform/` directory and a stray `README2.md` had been committed alongside the real project. | S4 Low | Review | Deleted; commits `e3b9c80`, `02566c3`. | Fixed |
+
+## Part B. Phase 4: storage layer (original items 26-37)
+
+Recorded verbatim in the implementation-status problem log; summarised here with severity added.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-017 | Phase 4 | item 26 | `helm dependency update` failed: the `timescaledb-single` chart repository was archived in January 2024 and no published version satisfied the constraint. | S3 Medium | Real deployment failure | Dropped the wrapper chart; hand-rolled StatefulSet/Service/Secret/Job around the still-published image. | Fixed |
+| DEF-018 | Phase 4 | item 27 | The implementation-status document stated the wrong Helm chart layout (`k8s/charts/<service>/`) and had carried it since Phase 3. | S4 Low | Live operation | Verified with `find`; text struck through and corrected. | Fixed |
+| DEF-019 | Phase 4 | item 28 | A fully duplicated `timescaledb` chart sat nested inside `k8s/storage-consumer/` (a `mv` landing one level too deep). | S4 Low | Review | Confirmed byte-identical with `diff -r`, then deleted. | Fixed |
+| DEF-020 | Phase 4 | item 29 | `helm upgrade --install` failed with a hook wait-timeout; the Job was fine, the 16-minute first pull of the large TimescaleDB image was not. | S4 Low | Real deployment failure | Waited; the hook completed by itself. Documented the `get pods` + `get jobs` check. | Clarified |
+| DEF-021 | Phase 4 | item 30 | MinIO pod stuck `ContainerCreating` for 175+ minutes: the chart referenced a Secret that no template created. | S2 High | Real deployment failure | Unblocked by hand, then added `templates/secret.yaml`; deleted the manual Secret to avoid an ownership conflict. | Fixed |
+| DEF-022 | Phase 4 | item 31 | MinIO console sub-pod `ErrImagePull`: Bitnami stopped publishing versioned tags under its free namespace on 2025-08-28. | S3 Medium | Real deployment failure | Disabled the console (not needed for the S3 contract). | Fixed |
+| DEF-023 | Phase 4 | item 32 | MinIO server image also gone from Bitnami; MinIO itself stopped publishing free images on 2025-10-23, and the last free tag carries an unpatched high-severity CVE. | S2 High | Real deployment failure | Hand-rolled MinIO on Chainguard's free build; later pinned by digest (2026-09-28). | Fixed |
+| DEF-024 | Phase 4 | item 33 | MinIO bucket-init Job failed with empty logs: the image's default tag is distroless and has no shell for `sh -c`. | S3 Medium | Real deployment failure | Used the `-dev` tag for the init Job only. | Fixed |
+| DEF-025 | Phase 4 | item 34 | Storage-consumer `ImagePullBackOff`: Podman silently tags locally built images `localhost/...`, and the chart omitted the prefix. | S3 Medium | Real deployment failure | Corrected the repository value; rule recorded. | Fixed |
+| DEF-026 | Phase 4 | item 35 | Storage-consumer crash loop `No module named 'kafka.vendor.six.moves'`: kafka-python 2.0.2 is incompatible with Python 3.12. | S2 High | Real deployment failure | Rebuilt on `python:3.11-slim`; later enforced project-wide by a test. | Fixed+tested |
+| DEF-027 | Phase 4 | item 36 | Storage-consumer crash loop `NoBrokersAvailable` against a healthy broker: kafka-python 2.0.2 cannot auto-detect the protocol version of Kafka 4.3.1. | S2 High | Real deployment failure | Pinned `api_version=(2, 8, 0)` after ruling out network, listener and broker causes layer by layer. | Fixed |
+| DEF-028 | Phase 4 | item 37 | Password authentication failed for user `$(DB_USER)`: Kubernetes `$(VAR)` substitution only sees variables declared earlier in the same `env:` list. | S3 Medium | Real deployment failure | Reordered the env list. | Fixed |
+
+## Part C. Phase 5: causal and anomaly engine (original items 38-51)
+
+Items 38-42 were found by static review before anything was deployed; 43-48 only by deploying and running; 49-51 only by trying to close the done-condition loop with a real injected scenario.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-029 | Phase 5 | item 38 | All three database-writing charts named the wrong Secret (`timescaledb-app-credentials`); every pod would have failed with `CreateContainerConfigError`. | S2 High | Static review | Corrected the value in all three charts. | Fixed |
+| DEF-030 | Phase 5 | item 39 | The `phase5-schemas` ConfigMap the services mount was never created by any chart. | S2 High | Static review | New chart `k8s/phase5-schemas` owning that one ConfigMap. | Fixed |
+| DEF-031 | Phase 5 | item 40 | `TicketTimingSummary.schema.json` existed only in a stale sibling copy of the repository, so the aggregator would crash on its first call. | S2 High | Static review | Copied into the active tree; later guarded by a schema-copy test. | Fixed+tested |
+| DEF-032 | Phase 5 | item 41 | The simulator emitted new `stage` names but the schema still listed the old enum, so every event would fail its own validation and crash-loop. | S2 High | Static review | Updated the enum and description to match the code. | Fixed+tested |
+| DEF-033 | Phase 5 | item 42 | Migration `002` was never wired into the schema-init Job, so the three Phase 5 tables would not exist. | S2 High | Static review | Added a second `-f` argument and ConfigMap key. | Fixed |
+| DEF-034 | Phase 5 | item 43 | The aggregator crash-looped on any ticket already mid-sequence at restart (null `order_time` violates the schema): guaranteed under normal operation. | S2 High | Live deployment | Skip emitting a summary when `order_time` was never observed; still clean up on delivery. | Fixed+tested |
+| DEF-035 | Phase 5 | item 44 | The MQTT-to-Kafka bridge silently failed for 3 of 4 sensor topics: five connectors in one worker shared an implicit MQTT client id and kicked each other off. `service-timing-events` held ~35 messages after 12 days of publishing. | S1 Critical | Live deployment | Unique `clientId` on every connector; all five `RUNNING` within 20 s. A pre-existing Phase 2/3 gap, found only when Phase 5 needed volume. Now guarded by the end-to-end connector-health test. | Fixed+tested |
+| DEF-036 | Phase 5 | item 45 | `AnomalyEvent.expected_range` typed strictly `object` although documented as null for isolation-forest events; crashed the detector live ~50 minutes after deploy. | S2 High | Live deployment | Type changed to `["object", "null"]`; services restarted to reload schemas. | Fixed+tested |
+| DEF-037 | Phase 5 | item 46 | The storage consumer had silently discarded real data since it first ran: confounders read under a wrong key (100% NULL across 342 rows), a misnamed dietary key, and a wrong shift-action key. | S1 Critical | Live operation | Corrected three `.get(...)` calls; backfilled 360 plate-waste and 170 staff-shift rows from `raw_payload`. Now guarded by integration tests. | Fixed+tested |
+| DEF-038 | Phase 5 | item 47 | Unpinned transitive dependencies (`scipy`, `networkx`) resolved to versions that broke `statsmodels` and `dowhy` at startup. | S2 High | Live deployment | Pinned `scipy==1.13.1`, `networkx==3.2.1`; exact pinning now enforced by a test. | Fixed+tested |
+| DEF-039 | Phase 5 | item 48 | A `numpy.bool_` refutation flag failed strict JSON Schema boolean validation, the last step between a correct estimate and a stored finding. | S3 Medium | Live deployment | Explicit `bool(...)` coercion; now a regression test. | Fixed+tested |
+| DEF-040 | Phase 5 | item 49 | The scenario-injection feature was dormant: `SCENARIO_CONTROL_ENABLED` was never set in the simulators' chart. | S2 High | Done-condition attempt | Added `scenarioControlEnabled: true` to the chart. | Fixed |
+| DEF-041 | Phase 5 | item 50 | Even enabled, the simulator image lacked `kafka-python` and was still on Python 3.12 (the item 35 failure). | S2 High | Done-condition attempt | Added `kafka-python`, moved the base image to 3.11. | Fixed |
+| DEF-042 | Phase 5 | item 51 | A `staffing_shortage` scenario was causally inert: removing a station only changed where new tickets landed, not any ticket's timing. Two fixes were tried and rejected first. | S2 High | Done-condition attempt | Raise the open-ticket cap 5x during a shortage so backlog genuinely grows; empirically confirmed (mean pickup delay ~31.6 s to ~105 s). | Fixed+tested |
+
+## Part D. Phases 6-7, portability, version 2 and hardening (2026-09-16 to 2026-09-30)
+
+From the implementation-status table rows and problem-log narrative. Original item numbers do not exist for these; they are recorded as prose in Sections 4 and 7.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-043 | Phase 7 | Sec. 4 row 7 | Kafka exporter `CrashLoopBackOff` (`kafka_exporter_run.sh` not found) after overriding its `image:` with the upstream image instead of Strimzi's bundled one. | S3 Medium | Live deployment | Left `image:` unset. | Fixed |
+| DEF-044 | Phase 7 | Sec. 4 row 7 | The per-pod `kafka-jmx` scrape job also discovered the exporter pod, producing duplicate `kafka_consumergroup_lag` series. | S4 Low | Live verification | Filtered the job on `strimzi.io/component-type`. | Fixed |
+| DEF-045 | Portability | Sec. 4 portability row (1) | Several base images (`nginx`, `node`) failed to resolve under Podman, which has no unqualified-search registries. | S2 High | Real run | Fully qualified every image reference; now enforced by two static tests. | Fixed+tested |
+| DEF-046 | Portability | Sec. 4 portability row (2) | The Compose Kafka Connect image (Alpine) has `wget` but not `curl` or `apt-get`. | S4 Low | Real run | Used `wget`. | Fixed |
+| DEF-047 | Portability | Sec. 4 portability row (3) | The Kafka healthcheck's default timeout was too tight under load. | S4 Low | Real run | Generous timing, with the reasoning written beside it. | Fixed |
+| DEF-048 | Portability | Sec. 4 portability row (4) | `ollama pull`'s HTTP API returns 200 even on failure, so the init script silently treated a failed model download as success. | S3 Medium | Real run | Check the response body and retry. | Fixed |
+| DEF-049 | Portability | Sec. 4 portability row (5) | No service had a restart policy, so a transient crash (the anomaly detector under CPU contention) stayed down forever. | S3 Medium | Real run | `restart: unless-stopped` everywhere; enforced by a static test. | Fixed+tested |
+| DEF-050 | Portability | Sec. 4 portability row | Kafka data was wiped on every container recreation: `KAFKA_LOG_DIRS` was never set, so Kafka wrote to `/tmp` and the named volume was never mounted where it wrote. An earlier "just a debugging artefact" guess was wrong. | S1 Critical | Real run | Set `KAFKA_LOG_DIRS`; verified by a before/after restart comparison. Now covered by the whole-stack restart test. | Fixed+tested |
+| DEF-051 | Portability | Sec. 4 portability row | The consumer inserted into columns that do not exist (`menu_item_id` and four POS columns). Inserts failed silently and, because the consumer is single-threaded, starved even the topics with correct columns. | S2 High | Real run | Corrected both column lists against the real schemas; now caught by real-database integration tests. | Fixed+tested |
+| DEF-052 | Portability | Sec. 4 portability row | `dietary_restriction_flag` and `shift_event_type` were renamed in the SQL to match the schemas, but the consumer and causal engine still used the old names. | S2 High | Real run | Fixed both places and migrated the live k3s database. | Fixed+tested |
+| DEF-053 | Version 2 | Sec. 4 row (v2 groundwork) | `k8s/timescaledb/files/001_hypertables.sql` was a stale older copy of the real migration, the actual root cause of the earlier k3s column drift. | S2 High | Real run | Re-synced; a hand-copied-files list is now in the codebase guide. | Fixed |
+| DEF-054 | Version 2 | Sec. 4 row (Godot client) | The 0.5B narrator invented a number ("1.81% greater than the baseline") for a finding with no percentage. The database boundary held; it cannot stop a weak model fabricating within the finding it is given. | S2 High | Live verification | Added `narration_guard`: numbers must trace, direction must match the sign, no unsupported statistical claims; retry, then a labelled template. Measured: the guard rejected 60-100% of raw generations. | Fixed+tested |
+| DEF-055 | Version 2 | Sec. 4 row (Godot client) | A prompt with a worked style example looked better on 5 samples and then made the model parrot the definitions back in real runs. | Info | Live verification | Reverted; recorded so it is not retried. | Clarified |
+| DEF-056 | Version 2 | Sec. 4 quarantine row; guide 11.8 | The anomaly detector is nearly blind to a 3x slowdown on simulated data: a few tickets stalled for up to ~79 minutes inflate its standard deviation to ~110 s on a 31 s mean. Pre-existing; quarantine neither causes nor fixes it. | S3 Medium | Live verification | Recorded as a known limitation; not fixed. (The acceptance test does detect its injected slowdown, 142 anomalies, under different pacing, so this limitation concerns stalled-ticket outliers on the production defaults, which no test currently exercises.) | Open |
+| DEF-057 | Version 2 | Sec. 4 quarantine row | Applying migration `005` hung on the causal engine's 42-minute idle read transaction (`ALTER TABLE` waits for a lock, and every insert behind it queued), stalling the aggregator. | S2 High | Live operation | The engine now commits after each read; the k3s realign script stops every database client first. | Fixed |
+| DEF-058 | Version 2 | Sec. 7 item 3 | The aggregator restarted once on a `cook_duration_ms` computed negative (a timestamp-ordering edge case). `_duration_ms` still permits negative values. | S3 Medium | Live operation | Not reproduced and not fixed; noted. A bounded-duration check would close it. | Open |
+| DEF-059 | Version 2 | Sec. 4 roles row | A global open-ticket cap let one backed-up station starve a cook who arrived at another. | S3 Medium | Live test | Cap is now per staffed station. | Fixed+tested |
+| DEF-060 | Version 2 | Sec. 4 expo row | A line cook could be assigned `station-expo`, and any schema station could receive a ticket. | S3 Medium | Live test | Validate against a `PLAYABLE_STATIONS` list. | Fixed+tested |
+| DEF-061 | Version 2 | Sec. 4 guest-expiry row | A guest who never paid held their table forever; nothing evicted them. | S3 Medium | Code review | Eviction after delivery plus `MAX_GUEST_AGE_SECONDS`; leaving frees the guest. | Fixed+tested |
+| DEF-062 | Version 2 | Sec. 4 guest-expiry row | Two guests, or a guest and the dining room, could be seated at one table: no exclusivity check. | S3 Medium | Code review | `_table_occupied()` checked on every seating path. | Fixed+tested |
+| DEF-063 | Version 2 | Sec. 4 guest-expiry row | The smoke test itself collided on a table under the new exclusivity rule (two scenarios happened to pick the same one). | S4 Low | Live test | The test asks the live board for a free table. | Fixed |
+| DEF-064 | Hardening | Sec. 7 item 1 | MinIO's StatefulSet had no restart-on-secret-change wiring, so a password rotation did not take effect. | S3 Medium | Live hardening run | `checksum/secret` annotation. | Fixed |
+| DEF-065 | Hardening | Sec. 7 item 1 | pgBackRest defaults to a `postgres` role this cluster does not have (the only superuser is `restaurant_app`). | S2 High | Live hardening run | Set `pg1-user` explicitly. | Fixed |
+| DEF-066 | Hardening | Sec. 7 item 1 | pgBackRest's S3 driver requires TLS and has no plain-HTTP mode, but MinIO ran plain HTTP. | S3 Medium | Live hardening run | Self-signed certificate for MinIO. | Fixed |
+| DEF-067 | Hardening | Sec. 7 item 2 | The restore-drill Job ran on every normal install/upgrade: a missing hook annotation does not stop a template from rendering. | S3 Medium | Live hardening run | Gated behind `restoreDrill.enabled`. | Fixed |
+| DEF-068 | Hardening | Sec. 7 item 2 | A fixed `sleep 8` was too short for WAL replay to finish in the restore drill. | S4 Low | Live hardening run | `pg_isready` polling loop. | Fixed |
+| DEF-069 | Hardening | Sec. 4 hardening row | `helm upgrade --reuse-values` silently ignores any `values.yaml` key added after the release already existed. | S3 Medium | Live hardening run | `--reset-then-reuse-values` everywhere. | Mitigated |
+| DEF-070 | Hardening | Sec. 4 hardening row | The Compose consumer and all four simulators had silently exited hours earlier despite `restart: unless-stopped`. (Explained on 2026-10-03: Podman does not apply a restart policy after an API-level kill, only after a real crash.) | S3 Medium | Live operation | Documented; the resilience layer now distinguishes the two. | Clarified |
+| DEF-071 | TLS | Sec. 11.5 | First Kafka TLS cutover: kafka-python 2.0.2's own SSL context failed the handshake against the broker although a hand-rolled `ssl` handshake from the same pod succeeded. | S2 High | Live cutover | Pass a pre-built `ssl_context`; later moved to kafka-python 3.0.11, verified to fix it. | Fixed |
+| DEF-072 | TLS | Sec. 7 item 4b | Over TLS the edge simulators connected then failed every publish in a tight, never-crashing loop: `runtime.py` never registered `on_connect` and assumed "connected" once `connect()` returned. Plaintext's fast round trip had hidden the race for years. | S2 High | Live cutover | `connect()` now waits on an event set by a real `on_connect` callback. | Fixed |
+| DEF-073 | TLS | Sec. 7 item 4c | Strimzi rejected the Connect truststore mount: volume paths must start with `/mnt`. | S4 Low | Live cutover | Moved the mount. | Fixed |
+| DEF-074 | TLS | Sec. 7 item 4c | `helm upgrade --wait --timeout 180s` gave up before Strimzi finished a pod restart that had in fact succeeded. | S4 Low | Live cutover | Timeout raised to 360 s after confirming the rollout. | Fixed |
+| DEF-075 | TLS | Sec. 7 item 4d | Verifying the dashboard's TLS from inside its pod failed (`localhost` resolved to `::1`; nginx had no IPv6 listener) although the deployment was correct. | S4 Low | Live verification | Verify against `127.0.0.1`; a 401 proved the handshake and auth worked. | Clarified |
+| DEF-076 | TLS | Sec. 7 item 4d | The version-boundary exclusion list in `game/README.md` was missing `k8s/kafka-tls/`, then `k8s/web-tls/`, then `k8s/audit/`: three times a new script that names the game broke the documented rule. | S4 Low | Review | Added each; the check is now a test that reads the list from the README. | Fixed+tested |
+| DEF-077 | Right-sizing | Sec. 7 item 12 | Five containers had no memory limit (Connect, Mosquitto, kube-state-metrics, Strimzi's topic and user operators). | S3 Medium | Metrics review | Limits added; the live audit script checks the cluster and a static test checks rendered charts (operator-managed charts excepted). | Fixed |
+| DEF-078 | Right-sizing | Sec. 7 item 12 | A `cpu: "1"` limit crash-looped Kafka Connect: the JVM then saw one vCPU, plugin scanning serialised, and one classloader took 34 s, past the ~40 s liveness window. | S2 High | Live deployment | Raised to `cpu: "4"`. | Fixed |
+| DEF-079 | Right-sizing | Sec. 7 item 12 | The Strimzi `userOperator` crash-looped the same way; doubling its memory (a red herring) did not help, a CPU limit of 200m was too tight for its startup. | S3 Medium | Live deployment | Raised to `cpu: "1"`. | Fixed |
+| DEF-080 | Right-sizing | Sec. 7 item 13 | After a TimescaleDB restart two services crash-looped on a transient DNS failure; it looked like a limits regression and was not (exit 1, not `OOMKilled`). | Info | Live deployment | Confirmed from exit codes; both recovered by normal restart-and-retry. | Clarified |
+| DEF-081 | CI | Sec. 7 item 15 | **The CI workflow had never run since the day it was added.** It lived under the project subdirectory, and GitHub Actions only discovers `<repo-root>/.github/workflows/`; `gh run list` was empty. | S2 High | First push | Moved to the repository root; paths prefixed. | Fixed |
+| DEF-082 | CI | Sec. 7 item 15 | The smoke test's guest-order check failed with no error detail, unlike every other check. | S4 Low | CI | Surfaced the UI's status text. | Fixed |
+| DEF-083 | CI | Sec. 7 item 15 | `SPAWN_SECONDS=1` in CI spawned 8x more background tickets and exhausted `MAX_OPEN_TICKETS`, starving the test's own guest order. | S3 Medium | CI | Dropped the override; raised the cap to 15. | Fixed |
+| DEF-084 | CI | git `4a1bb47` | Two CI jobs (`anomaly-detector`, `schema-compatibility`) never installed `prometheus-client` after the metrics work added it, so both failed with `ModuleNotFoundError` from 2026-10-01 until reported on 2026-10-02. | S3 Medium | User report of CI logs | Install lines updated (and `numpy`); verified locally in a clean venv. | Fixed |
+
+## Part E. Alerting, chaos testing and the live audit (2026-09-28 to 2026-10-01)
+
+The first live chaos test and the audit script that followed it found defects that had been silently present for days.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-085 | Alerting | Sec. 7 item 10 | ntfy has no native Alertmanager integration; Alertmanager's webhook schema is fixed and untemplatable. | Info | Design review | Built a ~90-line stdlib relay rather than adopt a third-party binary. | Fixed+tested |
+| DEF-086 | Alerting | Sec. 7 item 10 | `alert-relay`'s `print()` output never reached `kubectl logs`: stdout is block-buffered when not a TTY. | S4 Low | Live verification | `ENV PYTHONUNBUFFERED=1`. | Fixed |
+| DEF-087 | Alerting | Sec. 7 item 10 | The alert topic shipped as a guessable placeholder (ntfy topics have no access control); the rotation in the hardening script had never been run. | S3 Medium | Audit script (2026-10-01) | Rotated to a random topic; the audit now checks it. | Fixed |
+| DEF-088 | Alerting | Sec. 7 item 11 | Grafana's admin password was the one credential never swept into the rotation script. | S3 Medium | Review | Added to the script; rotated live; old password confirmed rejected. | Fixed |
+| DEF-089 | Alerting | Sec. 7 item 17 | TimescaleDB was not a Prometheus target and `DeploymentReplicasMismatch` only watched Deployments, so a database outage would not alert. | S3 Medium | Chaos test | Added `StatefulSetReplicasMismatch`. | Fixed |
+| DEF-090 | Chaos | Sec. 7 item 17 | **Kafka Connect had been crash-looping for 10 hours** and the pipeline had silently stopped: the `cpu: "4"` fix was committed but never redeployed (`helm history` showed no revision after the bug). | S1 Critical | Chaos test (manual) | `helm upgrade --reset-then-reuse-values`; rows resumed within a minute. | Fixed |
+| DEF-091 | Chaos | Sec. 7 item 17 | Whether `PodCrashLooping` had notified continuously during those 10 hours could not be established afterwards; Kubernetes' restart backoff may have pushed the rate across the threshold intermittently. | Info | Chaos test | Left an open question and stated as one: correct alerting and someone acting on it are different things. | Open |
+| DEF-092 | Chaos | Sec. 7 item 18 | The Kafka exporter had crash-looped for 41 hours (`connection refused` to a verified-healthy port), so lag alerts had no data for two days. Extensive elimination ruled out port, TLS, DNS and NetworkPolicy. | S3 Medium | Live operation | Deleted the pod for a fresh network namespace; recovery was immediate. Cause (stale conntrack after the broker's IP changed) is inferred, not proven. | Fixed |
+| DEF-093 | Chaos | Sec. 7 item 18 | `strimzi-cluster-operator` sat at 90% of its memory limit during the investigation. | Info | Live operation | Noted, not chased. | Open |
+| DEF-094 | Instrumentation | Sec. 7 item 19 | `finding-reviewer` had never been migrated to Kafka TLS (still on the removed plaintext listener); a routine redeploy exposed it. For over two days 13 real findings sat un-reviewed. | S2 High | Live deployment | Matched the other charts' SSL configuration and added the missing volume mount; backlog drained in two seconds. | Fixed |
+| DEF-095 | Instrumentation | Sec. 7 item 19 | A Grafana `legendFormat` of `{{passed}}` collided with Helm's own template syntax. | S4 Low | Render | Backtick-escape idiom. | Fixed |
+| DEF-096 | Audit script | Sec. 7 item 20 | First drift check flagged all 17 charts: `helm upgrade --dry-run` stdout carries a status header ahead of the YAML. | S4 Low | Live run | Switched to `helm template` against the release's own values. | Fixed |
+| DEF-097 | Audit script | Sec. 7 item 20 | Still flagged every chart on two trailing blank lines. | S4 Low | Live run | Normalise trailing whitespace. | Fixed |
+| DEF-098 | Audit script | Sec. 7 item 20 | Still flagged MinIO and TimescaleDB: their hook Jobs appear in `helm template` but not `helm get manifest`. | S4 Low | Live run | `--no-hooks`. (Side effect: hook Jobs are therefore not audited for limits; found 2026-10-02 by the new static tests, see the next part.) | Fixed |
+| DEF-099 | Audit script | Sec. 7 item 20 | The limits check flagged `volumeClaimTemplates` (storage `resources`, no cpu/memory). | S4 Low | Live run | Only flag blocks that mention cpu or memory. | Fixed |
+
+## Part F. Product defects found by the test regime (2026-10-02 to 2026-10-03)
+
+Found by running the new layers against the existing codebase. Each was reproduced by a test first where practical.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-100 | Test regime | TESTING.md findings | **The storage consumer never reconnected after a database restart.** It opened one connection at start-up and never replaced it, and its own error handler crashed on the dead connection. The process stayed "running", so no restart policy fired and nothing alerted; confirmed live (database healthy for minutes, consumer logging "giving up" on every message). | S1 Critical | Chaos test (automated) | `write_with_retry` replaces a dead connection and returns the live one. Regression: `test_the_consumer_reconnects_after_the_database_drops_its_connection`; verified live by the resilience layer. | Fixed+tested |
+| DEF-101 | Test regime | TESTING.md findings | **The storage consumer lost events during any database outage longer than ~30 s.** After exhausting its retries it logged "offset not committed" and moved on; the next success called `commit()`, which commits the consumer's position (already past the failed message). The code's own comment claimed the opposite. Found as an off-by-one: 517 messages in Kafka, 516 rows. | S1 Critical | Chaos test (automated) | Message loop extracted into `handle_message`, which rewinds with `seek` instead of skipping. Regression `test_a_later_message_can_never_commit_over_one_that_failed_to_store` was verified to fail on the old behaviour; verified live (7/7 resilience tests pass). | Fixed+tested |
+| DEF-102 | Test regime | TESTING.md findings | The Compose Kafka Connect image ran as root; the Kubernetes variant of the same image already dropped it. | S3 Medium | Static test | `USER appuser`; all four connectors still reach `RUNNING`. | Fixed+tested |
+| DEF-103 | Test regime | TESTING.md findings | Three batch workloads had no resource limits (MinIO bucket-init Job, TimescaleDB schema-init Job, backup CronJob); the live audit had missed them because it skips Helm hooks and excludes the backup chart. | S3 Medium | Static test | Limits added to all three. | Fixed+tested |
+| DEF-104 | Test regime | TESTING.md findings | `requests==2.32.3` (finding-narrator) had two published advisories (`PYSEC-2026-1872`, `PYSEC-2026-2275`). | S3 Medium | Dependency audit | Bumped to 2.33.0; the narrator's only call (`requests.post`) is unchanged and its tests pass. | Fixed+tested |
+| DEF-105 | Test regime | TESTING.md findings | Six unused imports or variables. | S4 Low | Lint | Removed. | Fixed+tested |
+| DEF-106 | Test regime | TESTING.md findings | **The causal engine's refutation gate passes roughly 77% to 87% of pure-noise findings** (26 and then 23 of 30 datasets with no true effect, in two runs; the placebo permutations are unseeded, so the figure varies). DoWhy's placebo `new_effect` is the mean of 100 simulated runs, so it is ~10x quieter than a single estimate and the engine's rule `\|placebo\| < 0.25*\|estimate\|` is met by almost any noise. The estimates themselves recover planted effects accurately; the gate gives far less protection against a spurious one than "refutation-tested" implies. The README makes that claim. | S2 High | Statistical test | Not fixed (changes which findings are narrated: an owner decision). Recorded as a strict expected-failure so it stays visible; a sounder rule would test the estimate against the placebo distribution's spread. | Open |
+| DEF-107 | Test regime | TESTING.md findings | The digital twin's per-station `open_ticket_count` is incremented rather than derived, so a Kafka redelivery of `order_fired` inflates it. | S3 Medium | Integration test | Not fixed. Recorded as a strict expected-failure; staff state is unaffected (absolute). | Open |
+| DEF-108 | Test regime | TESTING.md findings | Consumers log `Topic ... not found in cluster metadata` and `DNS Resolution failure` at ERROR during start-up races, in bursts of dozens of lines for a few seconds. | Info | End-to-end test | Benign; allowed explicitly, with a test requiring that it never persists beyond 60 seconds. | Clarified |
+
+## Part G. Failures and difficulties of the test regime itself and its environment (2026-10-02 to 2026-10-03)
+
+Mistakes and surprises encountered while building and running the regime, including the author's own. These are listed because the regime's credibility depends on showing how its own tests were corrected.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-109 | Test regime | session | The assistant left the full test stack running after a manual test. Later, the user's own `docker compose up --build` failed: WSL's connection to the Podman backend timed out mid-build (`accept4 failed 110`), most likely under the memory and CPU pressure the leftover stack caused (load average 5.2, 262 MB free). | S3 Medium | User report | Stack torn down (data volumes kept); user told to retry. Now the stack layers use an isolated project and the runner tears the stack down on exit. | Fixed |
+| DEF-110 | Test regime | session | The user's pasted CI logs showed two jobs failing; the missing `prometheus-client` dependency was the assistant's own earlier regression (see the CI entry above). | S3 Medium | User report | Fixed and verified locally in a clean venv before commit. | Fixed |
+| DEF-111 | Test regime | session | Local Python is 3.12 but DoWhy 0.11.1 supports only <3.12 (`pip` found no matching distribution), so the statistical layer could not run on the host. | S4 Low | Test run | That layer runs inside the project's own Python 3.11 causal-engine image via a script. | Fixed |
+| DEF-112 | Test regime | session | The Helm secret-hygiene test flagged `admin` and `narrator_app`: usernames are identifiers, not credentials. | S4 Low | Test run | Only keys naming a password, secret, token or key are checked. | Fixed |
+| DEF-113 | Test regime | session | The lint gate flagged unused imports in the assistant's own new test files, and the documentation-coverage test caught three tests the assistant had not yet described. | S4 Low | Test run | Fixed; recorded as the gates working as intended. | Fixed |
+| DEF-114 | Test regime | session | The version-boundary test flagged its own file the moment that file became tracked (it contained the strings it searches for); it passed before the commit only because `git ls-files` ignores untracked files. Would have failed CI on the first push. | S3 Medium | Re-run after commit | The pattern is assembled from pieces so the file no longer matches itself. | Fixed |
+| DEF-115 | Test regime | session | End-to-end log-health test: false positives in three successive forms. (1) `Topic ... not found` start-up message; (2) `DNS Resolution failure` on first connect; (3) my guard that counted occurrences (<=6, then <=10) failed because the retry loop emits dozens per second for a few seconds. | S4 Low | Test run | Allow-list with reasons, and a duration-based guard (all such lines within 60 s). Validated against the live stack. | Fixed |
+| DEF-116 | Test regime | session | Acceptance test assumed the freshly stored finding would still be un-promoted when checked; the live finding-reviewer had already, correctly, promoted it. | S4 Low | Test run | Assert the real property: promoted if and only if refutation passed. | Fixed |
+| DEF-117 | Test regime | session | The load test's throughput floor (20 events/s) was a guess; measured end-to-end ingest was 14.6 then 18 events/s. | S4 Low | Test run | Floor set to 10 (about 14x the real default traffic) with the measurement and cause documented. The ceiling comes from one transaction and one offset commit per message on a single thread. | Fixed |
+| DEF-118 | Test regime | session | Resilience tests used `docker kill` to simulate a crash. Podman treats that as a deliberate stop and does not apply the restart policy, so the first run measured Podman, not the platform. Isolated with a small experiment: a host-side SIGKILL was restarted; `docker kill` was not. | S4 Low | Test run | A `crash()` helper delivers SIGKILL from the host (as the OOM killer does), falling back to `docker kill` where the host cannot signal the process. | Fixed |
+| DEF-119 | Test regime | session | Three resilience runs were needed (4 failures, then 2, then 0). Both remaining failures after the first fix were the second consumer defect, visible only as a one-message mismatch. | Info | Test run | Each failure traced to a product defect rather than a test defect; recorded as the layer paying for itself. | Clarified |
+| DEF-120 | Test regime | session | A `pkill -f` pattern matched the assistant's own command line and killed its shell, leaving the run it meant to stop still going. | S4 Low | Test run | Killed by exact PID thereafter; recorded as a standing lesson. | Fixed |
+| DEF-121 | Test regime | session | Rootless Podman's API socket was down after a WSL restart, twice. The first time the stack-start produced a long Python traceback from `docker-compose` rather than a clear message. | S4 Low | Test run | `run_stack_tests.sh` now checks for the socket and names the fix. | Fixed |
+| DEF-122 | Test regime | session | The test virtual environment, kept in a session scratch directory, vanished with the session and had to be rebuilt. | S4 Low | Resume | Rebuilt in a persistent location, `~/.cache/rp-test-venv`; the exact install line is recorded. | Fixed |
+| DEF-123 | Test regime | session | Two Compose providers coexist on the development machine (a v1 `docker-compose` via the Podman shim, and the user's own Compose plugin, v5.5.1), so a run under one is not proof of the other. | Info | Observation | Tests use only syntax common to both. The final clean run used the v1 provider; the user's v5.5.1 plugin has not been exercised by the stack layers. | Open |
+| DEF-124 | Test regime | session | Long runs (the full stack pass takes about an hour) cannot be watched by sleep-polling in the assistant's tooling, and early "completed" notifications fired when only a launcher subshell had returned. | Info | Test run | Waited with background tasks and monitors; recorded because it shaped how results were read. | Clarified |
+
+## Part H. Discrepancies found while preparing the quality documents (2026-10-03)
+
+Found by reading the project's own records against each other while writing this document set.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-125 | Docs | QUICKSTART.md | `QUICKSTART.md` told a reviewer to expect "a few GB" of disk for images; the images total about 14.5 GB. The gap was measured and reported on 2026-10-01 but the document was not corrected until now. | S4 Low | Review | Corrected to about 15 GB, with the breakdown. | Fixed |
+| DEF-126 | Docs | CODEBASE-GUIDE.md 11.1 | The codebase guide said the extended k3s realign script "has not been run against the cluster", while the status log records that it was run successfully on 2026-09-22. | S4 Low | Review | Update note added at the head of 11.1 pointing to the status log and the audit script. | Fixed |
+| DEF-127 | Docs | implementation-status.md | The status log uses two unrelated numbering schemes (problem-log items 26-51, and Section 7 "items 1-22"), and its items 1-25 are absent, so a reference such as "item 12" is ambiguous without context. | S4 Low | Review | This defect log gives every entry a unique `DEF-nnn` id and keeps the original reference in its Source column. | Mitigated |
+| DEF-128 | Docs | (absent) | No line-coverage measurement exists. Test counts and the requirements traceability matrix stand in for it, which measures requirement coverage rather than code coverage. | Info | Review | Recorded as a gap in the SQA plan and the risk register; `pytest-cov` would close it cheaply. | Open |
+
+## How the defects were found, and what that says about the process
+
+Reading the "Found by" column as a whole: most serious defects (S1/S2) were found by **live operation, real deployment and chaos testing**, not by unit tests, and several sat undetected for days (a 10-hour outage, a 41-hour exporter failure, a 2-day review outage, a 12-day silent bridge failure). The Phase 5 static review found five defects before deployment. The automated regime of 2026-10-02/03 found two silent-data-loss defects in the storage consumer that had survived all earlier verification, because no earlier test killed a dependency while checking that Kafka and the database agreed. See `08-lessons-learned.md`.

@@ -131,7 +131,7 @@ def test_when_there_is_no_effect_the_engine_estimates_roughly_zero():
 @pytest.mark.slow
 @pytest.mark.xfail(
     strict=True,
-    reason="KNOWN WEAKNESS, measured 2026-10-02: the refutation gate passed 26/30 (87%) of findings built "
+    reason="KNOWN WEAKNESS, measured 2026-10-02/03: the refutation gate passed 26/30 and then 23/30 (87%, then 77%; the placebo permutations are unseeded, so it varies) of findings built "
            "from pure noise. DoWhy's placebo `new_effect` is the MEAN of 100 simulated placebo estimates "
            "(placebo_treatment_refuter.py), so its noise is ~1/10 of a single estimate's, and the engine's "
            "rule `|placebo| < 0.25*|estimate|` is met almost whenever the estimate is non-zero. "

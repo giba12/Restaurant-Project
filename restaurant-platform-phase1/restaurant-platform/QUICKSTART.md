@@ -7,7 +7,7 @@ This is a second, deliberately simpler deployment path alongside the project's p
 ## Requirements
 
 - Docker (or Podman with the `docker` compatibility shim) and Docker Compose v2.
-- ~4GB of free RAM, a few GB of disk for images and the LLM model.
+- About 4 GB of free RAM (measured: roughly 1.7 GB in use once running) and **about 15 GB of free disk**: the images total about 14.5 GB (the TimescaleDB and Ollama images alone are about 11 GB), plus the small LLM model.
 - No GPU needed — the portable path uses a small CPU-only model (`qwen2.5:0.5b-instruct`) instead of the k3s path's larger GPU-accelerated one.
 
 ## Run it

@@ -26,6 +26,10 @@ spec:
       initContainers:
         - name: wait-for-postgres
           image: postgres:16-alpine
+          # Short-lived psql clients: tiny, but still bounded (tests/static checks this).
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
           command:
             - sh
             - -c
@@ -45,6 +49,9 @@ spec:
       containers:
         - name: schema-init
           image: postgres:16-alpine
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 250m, memory: 128Mi}
           command:
             - psql
             - -v

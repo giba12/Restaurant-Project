@@ -27,8 +27,6 @@ import time
 import jsonschema
 import paho.mqtt.client as mqtt
 
-from common.ids import new_event_id, now_iso  # re-exported for generators
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",

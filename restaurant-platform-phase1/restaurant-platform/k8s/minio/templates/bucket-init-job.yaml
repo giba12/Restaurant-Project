@@ -20,6 +20,11 @@ spec:
       containers:
         - name: bucket-init
           image: cgr.dev/chainguard/minio-client:{{ .Values.bucket.initImageTag }}
+          # A short-lived `mc` client: tiny, but still bounded -- an unbounded
+          # pod, even a brief one, can starve its node (tests/static checks this).
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
           command:
             - sh
             - -c

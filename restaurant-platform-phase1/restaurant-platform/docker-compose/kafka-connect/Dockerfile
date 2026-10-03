@@ -21,4 +21,9 @@ RUN mkdir -p /opt/kafka/plugins/camel-mqtt && \
 
 COPY connect-worker.properties /opt/kafka/config/connect-worker.properties
 
+# Root was only needed to install the plugin above. The base image's own
+# unprivileged user runs the worker, matching the k8s variant's USER 1001
+# (found by tests/static/test_dockerfiles.py: this image used to stay root).
+USER appuser
+
 ENTRYPOINT ["/opt/kafka/bin/connect-distributed.sh", "/opt/kafka/config/connect-worker.properties"]

@@ -323,7 +323,7 @@ def test_crew_events_are_tagged_crew(client):
 
 def test_crew_covers_a_break_but_stands_back_once_the_player_returns(client):
     on_shift(client, "ana", "expo")
-    ticket_id = fire(client, player="ana").json()["ticket_id"]
+    assert "ticket_id" in fire(client, player="ana").json()
     shift(client, "break_start", "ana", "expo")
     # nobody cooks at all -- the crew does cook_started regardless of expo's break
     tick(client)

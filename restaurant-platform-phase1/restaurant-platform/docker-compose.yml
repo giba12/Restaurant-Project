@@ -297,7 +297,9 @@ services:
     depends_on:
       - dashboard-api
     ports:
-      - "8080:80"
+      # DASHBOARD_PORT lets a second stack (tests/e2e runs one) coexist with
+      # a dev stack without a host-port collision; unset, it is 8080 as ever.
+      - "${DASHBOARD_PORT:-8080}:80"
     environment:
       # Injected into nginx.conf.template at container start (envsubst,
       # built into the nginx:1.27-alpine image); must match dashboard-api's

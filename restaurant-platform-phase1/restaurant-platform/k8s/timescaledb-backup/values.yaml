@@ -67,6 +67,17 @@ kubectlImage:
   repository: docker.io/alpine/k8s
   tag: "1.30.2"
 
+# The CronJob pods only run `kubectl exec` -- the real pgBackRest work happens
+# inside timescaledb-0, under that pod's own limits -- so these stay small.
+# They exist so no pod in the chart is unbounded (tests/static checks this).
+kubectlResources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
 # existingSecret only -- this chart never generates MinIO credentials
 # itself. bootstrap.sh creates both the MinIO user and this Secret
 # together, so the two can never drift out of sync silently.

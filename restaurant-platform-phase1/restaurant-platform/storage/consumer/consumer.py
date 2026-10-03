@@ -16,9 +16,10 @@ edge simulators (see edge-simulators/common/runtime.py):
     that has already been published -- crashing this process fixes
     neither and would stop every other valid event on the topic from
     being persisted.
-  - Database write failure: retried with exponential backoff. The
-    consumer offset for that message is not committed until the write
-    succeeds, so a transient DB outage cannot silently drop events.
+  - Database write failure: retried with exponential backoff; if the retry
+    budget runs out the consumer rewinds to that message and tries again
+    rather than moving on, so a database outage of any length delays events
+    and never drops them (see handle_message).
 
 Environment variables:
   KAFKA_BOOTSTRAP_SERVERS   default "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9093"
@@ -33,14 +34,12 @@ import json
 import logging
 import os
 import ssl
-import sys
 import time
-from typing import Any
 
 import jsonschema
 import psycopg2
 import psycopg2.extras
-from kafka import KafkaConsumer
+from kafka import KafkaConsumer, TopicPartition
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -275,16 +274,28 @@ TOPIC_INSERT_FN = {
 }
 
 
-def write_with_retry(conn, insert_fn, event: dict) -> None:
+def write_with_retry(conn, insert_fn, event: dict):
+    """
+    Writes one event, retrying with backoff. Returns the connection to keep
+    using: if the database restarted or dropped the connection, the old one is
+    dead for good, so a fresh one replaces it (as part of the same retry
+    budget). Without this the consumer stayed "running" after a database
+    outage but stored nothing, and no restart policy ever fired.
+    """
     attempt = 0
     while True:
         try:
+            if conn.closed:
+                conn = psycopg2.connect(TIMESCALE_DSN)
             with conn.cursor() as cur:
                 insert_fn(cur, event)
             conn.commit()
-            return
+            return conn
         except psycopg2.Error as exc:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except psycopg2.Error:
+                pass  # the connection is already gone; the next attempt replaces it
             attempt += 1
             if attempt > DB_MAX_RETRIES:
                 log.error(
@@ -298,6 +309,52 @@ def write_with_retry(conn, insert_fn, event: dict) -> None:
                 attempt, DB_MAX_RETRIES, backoff, exc,
             )
             time.sleep(backoff)
+
+
+def handle_message(consumer, conn, schemas: dict, message):
+    """
+    Processes one Kafka message and returns the database connection to keep
+    using. Every path either commits the message's offset or rewinds to it;
+    none leaves the offset to be committed implicitly by a later message.
+
+    That last point is the one that matters. `consumer.commit()` commits the
+    consumer's *position* -- everything fetched so far -- not "this message".
+    So a message that failed to store and was merely `continue`d past would be
+    committed over by the next message that succeeded: silently, permanently
+    lost. (Found by the resilience tests: an outage longer than the retry
+    budget lost exactly one event.) A message that cannot be stored yet is
+    therefore rewound to, and retried, never skipped.
+    """
+    topic = message.topic
+    try:
+        event = json.loads(message.value.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        log.error("unparseable message on %s at offset %d: %s", topic, message.offset, exc)
+        consumer.commit()
+        return conn
+
+    try:
+        jsonschema.validate(instance=event, schema=schemas[topic])
+    except jsonschema.ValidationError as exc:
+        log.error(
+            "SCHEMA VIOLATION on %s at offset %d, event_id=%s: %s",
+            topic, message.offset, event.get("event_id"), exc.message,
+        )
+        consumer.commit()  # non-fatal: skip and move on, see module docstring
+        return conn
+
+    try:
+        conn = write_with_retry(conn, TOPIC_INSERT_FN[topic], event)
+    except psycopg2.Error:
+        log.error(
+            "could not store event_id=%s yet; rewinding to offset %d so it is retried, not skipped",
+            event.get("event_id"), message.offset,
+        )
+        consumer.seek(TopicPartition(message.topic, message.partition), message.offset)
+        return conn
+
+    consumer.commit()
+    return conn
 
 
 def main() -> None:
@@ -319,34 +376,7 @@ def main() -> None:
               KAFKA_BOOTSTRAP_SERVERS, topics)
 
     for message in consumer:
-        topic = message.topic
-        try:
-            event = json.loads(message.value.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            log.error("unparseable message on %s at offset %d: %s", topic, message.offset, exc)
-            consumer.commit()
-            continue
-
-        try:
-            jsonschema.validate(instance=event, schema=schemas[topic])
-        except jsonschema.ValidationError as exc:
-            log.error(
-                "SCHEMA VIOLATION on %s at offset %d, event_id=%s: %s",
-                topic, message.offset, event.get("event_id"), exc.message,
-            )
-            consumer.commit()  # non-fatal: skip and move on, see module docstring
-            continue
-
-        try:
-            write_with_retry(conn, TOPIC_INSERT_FN[topic], event)
-        except psycopg2.Error:
-            # Do not commit the offset -- this message will be redelivered
-            # on restart/rebalance once the DB is reachable again.
-            log.error("giving up on event_id=%s for this cycle; offset not committed",
-                       event.get("event_id"))
-            continue
-
-        consumer.commit()
+        conn = handle_message(consumer, conn, schemas, message)
 
 
 if __name__ == "__main__":

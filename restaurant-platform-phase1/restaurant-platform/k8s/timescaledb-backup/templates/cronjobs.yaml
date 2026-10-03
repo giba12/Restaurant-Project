@@ -30,6 +30,8 @@ spec:
           containers:
             - name: backup-full
               image: "{{ .Values.kubectlImage.repository }}:{{ .Values.kubectlImage.tag }}"
+              resources:
+                {{- toYaml .Values.kubectlResources | nindent 16 }}
               command:
                 - kubectl
                 - exec
@@ -63,6 +65,8 @@ spec:
           containers:
             - name: backup-diff
               image: "{{ .Values.kubectlImage.repository }}:{{ .Values.kubectlImage.tag }}"
+              resources:
+                {{- toYaml .Values.kubectlResources | nindent 16 }}
               command:
                 - kubectl
                 - exec

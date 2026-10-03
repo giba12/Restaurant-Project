@@ -10,3 +10,5 @@ venv/
 # k8s/*/bootstrap*.sh and never committed. See k8s/timescaledb-backup/README.md
 # for why nothing here is a chart-generated Secret with a plaintext default.
 restaurant-platform/k8s/secrets/
+# Container logs saved by tests/run_stack_tests.sh when a stack-level test fails.
+restaurant-platform/tests/artifacts/

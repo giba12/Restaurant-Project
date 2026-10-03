@@ -1,0 +1,73 @@
+name: production-readiness
+
+# The heavy half of the test regime (see restaurant-platform-phase1/
+# restaurant-platform/TESTING.md): the layers that need the whole stack, minutes
+# of runtime, or the internet. They answer "would this survive production?"
+# rather than "does this commit still compile?", so they run on a schedule
+# instead of on every push -- tests.yml already covers the fast layers there.
+#
+#   stack         the real Docker Compose stack: end-to-end data flow, the
+#                 injected-scenario acceptance test, load, and resilience
+#                 (killing the consumer, the database, Kafka and MQTT).
+#   statistical   the causal engine against synthetic data with a known answer,
+#                 inside the project's own Python 3.11 image.
+#   security      every pinned Python dependency checked against published
+#                 advisories (a new advisory is not caused by a commit, which
+#                 is why this runs nightly).
+#
+# Must live at <repo-root>/.github/workflows/, like every workflow here.
+
+on:
+  schedule:
+    - cron: "17 7 * * *"   # nightly, 07:17 UTC (off the hour on purpose: top-of-hour runs queue)
+  workflow_dispatch:
+    inputs:
+      stack_layer:
+        description: "Which stack-level layer to run"
+        type: choice
+        default: full
+        options: [full, all, e2e, load, resilience, acceptance]
+
+defaults:
+  run:
+    working-directory: restaurant-platform-phase1/restaurant-platform
+
+jobs:
+  stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest pyyaml
+      - name: Run the stack-level test layers
+        run: bash tests/run_stack_tests.sh "${{ inputs.stack_layer || 'full' }}"
+      - name: Keep container logs from a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stack-logs
+          path: restaurant-platform-phase1/restaurant-platform/tests/artifacts/
+          if-no-files-found: ignore
+
+  statistical:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Causal engine vs synthetic ground truth (includes the slow noise-gate measurement)
+        run: bash tests/statistical/run_statistical_tests.sh --run-slow
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest pip-audit
+      - name: Dependency vulnerability audit
+        run: python -m pytest tests/security -v -p no:cacheprovider

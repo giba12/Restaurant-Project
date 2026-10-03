@@ -30,10 +30,10 @@ To confirm the rule still holds, this should print nothing:
 
 ```bash
 grep -rIl "game-bridge\|game/bridge\|game/client\|game/k8s" --exclude-dir=game --exclude-dir=node_modules --exclude-dir=.git . \
-  | grep -v "CODEBASE-GUIDE.md\|restaurant-platform-implementation-status.md\|restaurant-platform-project-notes.md\|k8s/harden/harden-live-cluster.sh\|k8s/timescaledb-backup/README.md\|k8s/kafka-tls/\|k8s/web-tls/\|k8s/audit/\|\.env\.example"
+  | grep -v "CODEBASE-GUIDE.md\|restaurant-platform-implementation-status.md\|restaurant-platform-project-notes.md\|TESTING.md\|k8s/harden/harden-live-cluster.sh\|k8s/timescaledb-backup/README.md\|k8s/kafka-tls/\|k8s/web-tls/\|k8s/audit/\|\.env\.example"
 ```
 
-(The excluded files are documentation that describes the game, or operations tooling that names `game-bridge-credentials`/`BRIDGE_API_KEY`/`game-bridge-tls` while rotating secrets, cutting TLS over, or auditing both versions' charts -- neither is version 1's own runtime code depending on version 2. `k8s/kafka-tls/` and `k8s/web-tls/` were added to this list 2026-09-28, correcting a gap from when those scripts were first written: they already named `game-bridge` as one of the services they migrate, and were never added here. `k8s/audit/` added 2026-10-01 for the same reason, found doing this exact cleanup pass: `audit-live-cluster.sh` checks `game-bridge`'s chart alongside every other one, and was never added when it was written days after the exclusion list's last update.)
+(The excluded files are documentation that describes the game, or operations tooling that names `game-bridge-credentials`/`BRIDGE_API_KEY`/`game-bridge-tls` while rotating secrets, cutting TLS over, or auditing both versions' charts -- neither is version 1's own runtime code depending on version 2. `k8s/kafka-tls/` and `k8s/web-tls/` were added to this list 2026-09-28, correcting a gap from when those scripts were first written: they already named `game-bridge` as one of the services they migrate, and were never added here. `k8s/audit/` added 2026-10-01 for the same reason, found doing this exact cleanup pass: `audit-live-cluster.sh` checks `game-bridge`'s chart alongside every other one, and was never added when it was written days after the exclusion list's last update. `TESTING.md` added 2026-10-02: it documents the whole test regime, including the version-boundary test that runs this very check. That test, `tests/static/test_repo_hygiene.py`, reads this exclusion list straight out of this file, so the two cannot drift apart.)
 
 ## Run it
 

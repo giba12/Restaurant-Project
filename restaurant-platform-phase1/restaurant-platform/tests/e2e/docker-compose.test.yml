@@ -1,0 +1,25 @@
+# Overlay for the stack-level tests (tests/e2e, tests/resilience, tests/load).
+#
+# It changes pacing only -- no service, image or wiring differs from the real
+# docker-compose.yml, so what these tests exercise is what a user runs. The
+# real defaults (a few events a minute) would need an hour to build the
+# 30-ticket-per-station baselines the anomaly detector wants; here the same
+# pipeline gets the same data in minutes.
+services:
+  edge-sim-plate-waste:
+    environment:
+      EVENT_RATE_PER_MIN: "60"
+  edge-sim-pos-transaction:
+    environment:
+      EVENT_RATE_PER_MIN: "60"
+  edge-sim-service-timing:
+    environment:
+      # Per-stage waits are (open tickets x 60/rate) seconds, so 6x the rate
+      # makes every ticket ~6x faster, and a baseline of tickets builds quickly.
+      EVENT_RATE_PER_MIN: "120"
+  edge-sim-staff-shift:
+    environment:
+      EVENT_RATE_PER_MIN: "30"
+  anomaly-detector:
+    environment:
+      ANOMALY_MIN_WINDOW_SIZE: "10"

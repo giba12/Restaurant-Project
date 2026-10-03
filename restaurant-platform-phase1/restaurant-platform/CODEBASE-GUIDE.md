@@ -170,6 +170,27 @@ The game touches version 1 in exactly four places, all intentional: the shared c
   - Runs as its own job, not folded into the fast matrix above, exactly per that job's own header comment anticipating this as a future need: a slow or flaky Compose stack should never block or delay the fast, dependency-free unit tests.
 - **Purpose:** The first automated coverage of the actual event pipeline (bridge to Kafka to storage-consumer to TimescaleDB to dashboard-api) -- previously provable only by a human running Godot by hand. **Not yet confirmed by an actual run on GitHub's own runners**, same honest caveat as the rest of this workflow when it was first added.
 
+### `.github/workflows/production-readiness.yml` (added 2026-10-02)
+- **What it does:** The heavy half of the test regime, run nightly (07:17 UTC) and on demand from the Actions tab. Three jobs: `stack` (the real Docker Compose stack: end-to-end, the injected-scenario acceptance test, load, and resilience), `statistical` (the causal engine against synthetic ground truth, inside the project's own Python 3.11 image) and `security` (every pinned dependency against published advisories). `tests.yml` also gained `static` and `integration` jobs, which run on every push.
+- **Why it works this way:** `tests.yml` answers "does this commit still work?" in minutes. These layers answer "would it survive production?" and take 40+ minutes or need the internet; running them on every push would make every push slow, so they run on a schedule instead.
+- **Connects to:** `TESTING.md` (what each test is and why it exists), `tests/run_stack_tests.sh`, `tests/statistical/run_statistical_tests.sh`.
+- **Purpose:** The production-analogous testing regime's scheduler. Written and validated locally (each command run for real); not yet observed running on GitHub.
+
+### `.github/workflows/publish-images.yml` and `.devcontainer/devcontainer.json` (added 2026-10-02)
+- **What they do:** Set up, deliberately inert. The workflow builds the 11 custom images and pushes them to `ghcr.io`, but only on a manual trigger (`workflow_dispatch`). The devcontainer lets a recruiter open a GitHub Codespace and get the Compose stack running with no local installs; it still builds from source rather than pulling from `ghcr.io`.
+- **Why they work this way:** Written while the Codespaces allowance was exhausted, so neither has ever been run. Nothing pulls from `ghcr.io` yet; wiring Compose or the devcontainer to prebuilt images is a follow-up once a real publish run is checked.
+- **Purpose:** Cutting a recruiter's first-run time and removing the "install Docker" step.
+
+### `TESTING.md` (added 2026-10-02)
+- **What it does:** The catalogue of the whole test regime: the production-analogy rationale, how to run each layer, what building the regime found, and then every test in the repository with *what it is, what it does, why it was created, and why it matters*.
+- **Why it works this way:** The catalogue is itself tested: `tests/static/test_testing_doc.py` fails if a test is missing from it or if it describes a test that no longer exists.
+- **Purpose:** The reader's map of how this project knows it works.
+
+### `tests/` (added 2026-10-02)
+- **What it does:** The cross-cutting test layers, those needing more than one service, a real database, or the whole stack. `static/` (compose, Dockerfiles, Helm, schemas, lint, secrets, the version boundary), `integration/` (real application code against a real TimescaleDB built from the real migrations, run by `run_db_tests.sh`), `statistical/` (the causal engine against data with a known answer), `e2e/` (the running stack end to end, plus the slow injected-scenario acceptance test), `resilience/` (kill the consumer, database, Kafka, MQTT), `load/` (bursts, memory, concurrency), `security/` (dependency advisories). `run_stack_tests.sh` brings the real stack up as an isolated compose project, runs the stack layers and tears it down; `e2e/docker-compose.test.yml` only speeds up pacing. Per-service unit tests are *not* here: they stay next to the service they test.
+- **Why it works this way:** Each layer simulates one thing production does to a system; see the table at the top of `TESTING.md`.
+- **Connects to:** `docker-compose.yml` (the stack under test), `storage/schema/` (applied by `run_db_tests.sh`), `game/README.md` (whose version-boundary exclusion list `test_repo_hygiene.py` reads).
+
 ### `restaurant-platform-phase1/.gitignore`
 - **What it does:** Ignores `__pycache__/`, compiled Python, and the virtualenvs `.venv/`, `.venv-1/`, `venv/`.
 - **Why it works this way:** Two virtualenv directories had been committed by accident; they were untracked and added here so they cannot come back.
@@ -368,7 +389,7 @@ One image runs all four sensors; an environment variable picks which. Every simu
 ### `storage/consumer/consumer.py`
 - **What it does:** One Kafka consumer subscribed to all four raw topics (`auto_offset_reset="earliest"`, manual commits). For each message it decodes JSON, validates against that topic's schema, then inserts into the matching hypertable through a per-topic insert function that fills typed columns and a `raw_payload` JSONB copy.
 - **Why it works this way:**
-  - Failures are split by kind. An unparseable or schema-invalid message is logged and skipped (offset committed) so one bad message cannot block the topic. A database failure is retried with exponential backoff and, if it persists, the offset is not committed so the message is redelivered.
+  - Failures are split by kind. An unparseable or schema-invalid message can never be stored, so it is logged and skipped (offset committed) and cannot block the topic. A database failure *can* be recovered from, so it is retried with exponential backoff and, if the retry budget runs out, the consumer **rewinds** to that message and tries again; it never moves past it. `write_with_retry` also replaces a dead database connection, so a database restart delays storage instead of ending it. (Both were bugs until 2026-10-02: the consumer kept one connection forever, and after exhausting its retries it skipped the message and the next success committed Kafka's position over it, losing events. `handle_message` holds the per-message logic so it can be tested; see `TESTING.md`.)
   - Inserts use `ON CONFLICT (event_id, "timestamp") DO NOTHING`, so redelivery after a crash never duplicates rows.
   - `raw_payload` is kept on every row so the true event survives even if a typed column is wrong.
   - It is a single-threaded consumer of all four topics, so one persistently failing insert delays every topic behind it. That is exactly what happened when `insert_plate_waste` referenced a column that does not exist: it retried for about 30 seconds per message and starved the working topics too.
@@ -1010,8 +1031,13 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 | Alert relay | `cd services/alert-relay && python -m pytest test_alert_relay.py` | `pytest` only (no network) |
 | Schema compatibility | `cd schemas && python -m pytest test_producer_schema_compatibility.py` | `pip install jsonschema pandas pytest` (no Kafka/DB) |
 | Godot client | `godot4 --headless --path game/client -s res://tests/smoke_test.gd` | the Compose stack running with the game overlay |
+| Static checks | `python -m pytest tests/static` | `pip install pytest pyyaml jsonschema ruff`, `helm` |
+| Database integration | `bash tests/integration/run_db_tests.sh` | Docker, `pip install pytest psycopg2-binary jsonschema pandas numpy scikit-learn fastapi httpx kafka-python prometheus-client` |
+| Statistical validation | `bash tests/statistical/run_statistical_tests.sh` | Docker (runs inside the causal-engine image) |
+| End-to-end, load, resilience, acceptance | `bash tests/run_stack_tests.sh e2e` (or `load`, `resilience`, `acceptance`, `full`) | Docker, ~4 GB RAM; starts and removes its own stack |
+| Dependency advisories | `python -m pytest tests/security` | `pip install pytest pip-audit`, internet |
 
-There is no full behavioral test suite for the simulators, the storage consumer, or causal-engine's actual DoWhy estimation -- those are verified by running the pipeline and checking row counts and consumer-group lag, as the handoff documents describe. The schema-compatibility suite above covers one specific, narrower thing well: whether each producer's real event-construction function still emits something that validates against its own committed schema, catching the class of drift this project has otherwise only found by hand.
+Everything above is described, test by test, in `TESTING.md`. The suites under `tests/` cover what the per-service tests cannot: the storage consumer, digital twin and the analysis SQL against a real database; the causal engine's estimates against known truth; and the whole running stack, including what happens when parts of it fail. The simulators themselves are still verified only through that end-to-end path and the schema-compatibility test, not by tests of their own.
 
 ---
 

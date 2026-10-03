@@ -49,16 +49,20 @@ jobs:
             run: python -m pytest test_auth.py test_comparison.py -v
           - name: anomaly-detector
             dir: restaurant-platform-phase1/restaurant-platform/services/anomaly-detector
-            install: pip install numpy pytest jsonschema prometheus-client==0.26.0
-            run: python -m pytest test_quarantine.py -v
+            install: pip install numpy scikit-learn pytest jsonschema prometheus-client==0.26.0
+            run: python -m pytest test_quarantine.py test_detector.py -v
           - name: ticket-timing-aggregator
             dir: restaurant-platform-phase1/restaurant-platform/services/ticket-timing-aggregator
             install: pip install jsonschema pytest
-            run: python -m pytest test_origin.py -v
+            run: python -m pytest test_origin.py test_aggregator.py -v
+          - name: causal-engine
+            dir: restaurant-platform-phase1/restaurant-platform/services/causal-engine
+            install: pip install pandas jsonschema pytest prometheus-client==0.26.0
+            run: python -m pytest test_causal_engine.py -v
           - name: finding-narrator
             dir: restaurant-platform-phase1/restaurant-platform/services/finding-narrator
-            install: pip install pytest
-            run: python -m pytest test_narration_guard.py -v
+            install: pip install pytest requests
+            run: python -m pytest test_narration_guard.py test_narrator_loop.py -v
           - name: alert-relay
             dir: restaurant-platform-phase1/restaurant-platform/services/alert-relay
             install: pip install pytest
@@ -85,6 +89,36 @@ jobs:
       - name: Run tests
         working-directory: ${{ matrix.dir }}
         run: ${{ matrix.run }}
+
+  # The cross-cutting test regime (see TESTING.md). The two fast layers run on
+  # every push; the heavy ones (full-stack, resilience, load, statistical,
+  # security) run nightly in production-readiness.yml.
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # helm is preinstalled on GitHub's ubuntu runners.
+      - run: pip install pytest pyyaml jsonschema ruff
+      - name: Static checks (compose, Dockerfiles, Helm charts, schemas, lint, secrets, version boundary)
+        working-directory: restaurant-platform-phase1/restaurant-platform
+        run: python -m pytest tests/static -v -p no:cacheprovider
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest psycopg2-binary jsonschema pandas numpy scikit-learn fastapi httpx kafka-python==3.0.11 prometheus-client==0.26.0
+      - name: Database integration tests (real TimescaleDB, the real migrations)
+        working-directory: restaurant-platform-phase1/restaurant-platform
+        run: bash tests/integration/run_db_tests.sh
 
   game-smoke-test:
     runs-on: ubuntu-latest

@@ -74,7 +74,6 @@ def _duration_ms(start_iso, end_iso):
         return None
     import datetime
 
-    fmt = "%Y-%m-%dT%H:%M:%S.%f%z" if "." in start_iso else "%Y-%m-%dT%H:%M:%S%z"
     try:
         start = datetime.datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
         end = datetime.datetime.fromisoformat(end_iso.replace("Z", "+00:00"))

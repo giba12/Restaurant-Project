@@ -15,3 +15,5 @@ data:
 {{ .Files.Get "files/004_player_source_kind.sql" | indent 4 }}
   005_ticket_origin.sql: |
 {{ .Files.Get "files/005_ticket_origin.sql" | indent 4 }}
+  006_twin_open_tickets.sql: |
+{{ .Files.Get "files/006_twin_open_tickets.sql" | indent 4 }}

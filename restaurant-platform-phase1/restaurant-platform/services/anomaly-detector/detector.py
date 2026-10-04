@@ -8,8 +8,9 @@ per-(station_id, metric_name) rolling window and runs two independent
 detection modes against it:
 
   1. control_limit: mean +/- CONTROL_LIMIT_SIGMA * stddev over the rolling
-     window. Simple, interpretable, cheap -- runs on every completed
-     ticket.
+     window, after trimming extreme outliers from it (see
+     OUTLIER_TRIM_SIGMA). Simple, interpretable, cheap -- runs on every
+     completed ticket.
   2. isolation_forest: scikit-learn IsolationForest refit periodically
      (every ISOLATION_FOREST_REFIT_EVERY completed tickets per station)
      over the window's full feature vector (all tracked metrics jointly,
@@ -76,10 +77,35 @@ TRACKED_METRICS = ["time_to_cook_start_ms", "cook_duration_ms", "pickup_delay_ms
 WINDOW_SIZE = int(os.environ.get("ANOMALY_WINDOW_SIZE", "200"))
 MIN_WINDOW_SIZE = int(os.environ.get("ANOMALY_MIN_WINDOW_SIZE", "30"))
 CONTROL_LIMIT_SIGMA = float(os.environ.get("CONTROL_LIMIT_SIGMA", "3.0"))
+# Before the control limits are computed, values further than this many robust
+# standard deviations (1.4826 x the median absolute deviation) from the median are
+# left out of the mean and standard deviation. A handful of tickets that stalled for
+# up to ~79 minutes used to inflate the standard deviation to ~110 s on a ~31 s mean,
+# which blinded the detector to a 3x slowdown (DEF-056); measured on data shaped like
+# that, the old limits flagged 0% of 3x-slowed tickets and the trimmed limits 49.5%.
+# On data with no such outliers nothing is trimmed and the limits are unchanged.
+OUTLIER_TRIM_SIGMA = float(os.environ.get("ANOMALY_OUTLIER_TRIM_SIGMA", "10.0"))
 ISOLATION_FOREST_REFIT_EVERY = int(os.environ.get("ISOLATION_FOREST_REFIT_EVERY", "20"))
 ISOLATION_FOREST_CONTAMINATION = float(os.environ.get("ISOLATION_FOREST_CONTAMINATION", "0.05"))
 QUARANTINE_ORIGINS = {o.strip() for o in os.environ.get("QUARANTINE_ORIGINS", "interactive").split(",") if o.strip()}
 STATUS_LOG_EVERY = 25  # log window sizes once per this many quarantined tickets
+
+
+def _baseline(values) -> tuple[float, float]:
+    """
+    Mean and standard deviation of `values` with extreme outliers left out
+    (see OUTLIER_TRIM_SIGMA). If the median absolute deviation is zero (more
+    than half the values identical) there is no robust spread to trim by, and
+    the plain figures are used. By construction at least half the values lie
+    within one median absolute deviation of the median, so trimming at several
+    robust sigmas can never discard more than a minority of the window.
+    """
+    data = np.asarray(values, dtype=float)
+    median = np.median(data)
+    robust_sigma = 1.4826 * np.median(np.abs(data - median))
+    if robust_sigma > 0:
+        data = data[np.abs(data - median) <= OUTLIER_TRIM_SIGMA * robust_sigma]
+    return float(np.mean(data)), float(np.std(data))
 
 
 def is_quarantined(summary: dict) -> bool:
@@ -106,8 +132,7 @@ class StationWindow:
         values = [r[metric_name] for r in self.rows if r.get(metric_name) is not None]
         if len(values) < MIN_WINDOW_SIZE:
             return None
-        mean = float(np.mean(values))
-        std = float(np.std(values))
+        mean, std = _baseline(values)
         lower = mean - CONTROL_LIMIT_SIGMA * std
         upper = mean + CONTROL_LIMIT_SIGMA * std
         if value < lower or value > upper:

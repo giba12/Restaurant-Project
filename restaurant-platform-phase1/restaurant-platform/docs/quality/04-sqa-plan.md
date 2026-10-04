@@ -86,11 +86,11 @@ To assure that the system's code, configuration, data contracts and documents me
 
 | Metric | Value |
 |---|---|
-| Entries in the defect log | 143 (128 defects, 15 informational) |
-| By severity | S1 Critical 6; S2 High 30; S3 Medium 45; S4 Low 47; Info 15 |
-| By status | Fixed and guarded by a test 36; fixed 73; mitigated 7; clarified 15; open 12 |
-| Distinct tests | 353, plus the GDScript smoke test (about 80 checks) |
-| Requirements | 92: 68 verified by automated test, 6 by inspection, 8 live or manual only, 8 partial, 1 not verified, 1 not met |
+| Entries in the defect log | 145 (130 defects, 15 informational) |
+| By severity | S1 Critical 6; S2 High 30; S3 Medium 45; S4 Low 49; Info 15 |
+| By status | Fixed and guarded by a test 40; fixed 75; mitigated 8; clarified 16; open 6 |
+| Distinct tests | 396, plus the GDScript smoke test (about 80 checks) |
+| Requirements | 96: 73 verified by automated test, 6 by inspection, 8 live or manual only, 8 partial, 1 not verified, 0 not met |
 | Latest complete test cycle | 2026-10-04: every layer re-run passed on the final code, after repeated failed attempts at the heavy layers (flaky in this environment); the injected scenario's finding is refuted (DEF-141) |
 | Line or branch code coverage | **Not measured** |
 | Mean time to detect a silent failure | Not tracked; observed range: minutes (found by test) to 12 days (the silent MQTT bridge failure, DEF-035) |
@@ -120,7 +120,7 @@ See `02-test-plan.md`.
 4. It is fixed, then verified by re-running the real thing, not only the new test.
 5. The test is shown to **fail on the old behaviour**.
 6. It is logged in the status log and now in `06-defect-log.md`, with severity, method of detection, cause, resolution and status.
-7. A defect deliberately not fixed is marked **Open** and kept visible as a strict expected-failure.
+7. A defect deliberately not fixed is marked **Open** and kept visible as a strict expected-failure (none is in that state now; both were fixed and their markers removed).
 
 Corrective actions that changed the process, in the order they happened:
 

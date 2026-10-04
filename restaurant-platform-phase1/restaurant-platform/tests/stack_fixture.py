@@ -15,7 +15,7 @@ from helpers import DASHBOARD_PORT, compose, inspect, wait_for
 # llm-narrator): pulling a model on every run would dominate the runtime for
 # no pipeline coverage, since the narrator's logic is covered by its own tests.
 STACK_SERVICES = [
-    "mosquitto", "kafka", "kafka-connect", "kafka-connect-init", "timescaledb",
+    "mosquitto", "kafka", "kafka-connect", "kafka-connect-init", "kafka-connect-supervisor", "timescaledb",
     "edge-sim-plate-waste", "edge-sim-pos-transaction", "edge-sim-service-timing", "edge-sim-staff-shift",
     "storage-consumer", "ticket-timing-aggregator", "anomaly-detector", "causal-engine", "finding-reviewer",
     "scenario-injection-controller", "digital-twin", "dashboard-api", "dashboard-web",

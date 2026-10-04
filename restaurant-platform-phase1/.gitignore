@@ -12,3 +12,7 @@ venv/
 restaurant-platform/k8s/secrets/
 # Container logs saved by tests/run_stack_tests.sh when a stack-level test fails.
 restaurant-platform/tests/artifacts/
+
+# Line-coverage data written by pytest-cov (DEF-128)
+.coverage
+.coverage.*

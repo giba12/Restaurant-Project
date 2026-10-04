@@ -187,7 +187,7 @@ The game touches version 1 in exactly four places, all intentional: the shared c
 - **Purpose:** The reader's map of how this project knows it works.
 
 ### `docs/quality/` (added 2026-10-03)
-- **What it does:** A complete quality-document set, written retrospectively from the project's own records: a requirements specification (92 identified requirements), master test plan, requirements traceability matrix, SQA plan, risk register (34 risks), defect and difficulty log (143 entries, including failures of the test regime itself), test summary report, lessons learned, environment and configuration baseline, and a release-readiness assessment with known issues. `README.md` indexes them and holds a glossary.
+- **What it does:** A complete quality-document set, written retrospectively from the project's own records: a requirements specification (96 identified requirements), master test plan, requirements traceability matrix, SQA plan, risk register (34 risks), defect and difficulty log (145 entries, including failures of the test regime itself), test summary report, lessons learned, environment and configuration baseline, and a release-readiness assessment with known issues. `README.md` indexes them and holds a glossary.
 - **Why it works this way:** The project began from a design brief and a technical log, not formal requirements, so these documents state the requirements, show which test proves each, and list every failure honestly (including the open ones). They claim no compliance with IEEE or ISO standards. Their registers are checked by `tests/static/test_quality_docs.py`: ids must be unique and real, every requirement must be traced, every test cited must exist, and every summary total must match its rows.
 - **Connects to:** `TESTING.md` (the per-test catalogue), `restaurant-platform-implementation-status.md` (the original problem log whose items are cross-referenced in the defect log's Source column).
 - **Purpose:** The evidence trail a reviewer can read to judge how the project was verified, what failed, and what is still open.
@@ -222,7 +222,7 @@ The game touches version 1 in exactly four places, all intentional: the shared c
 - **Purpose:** The "clone and run" document.
 
 ### `docker-compose.yml`
-- **What it does:** Defines the whole portable stack, 21 services, in dependency order: Mosquitto; Kafka; Kafka Connect and a one-shot connector registrar; TimescaleDB; the four simulators; storage-consumer; the Phase 5 services (aggregator, anomaly detector, causal engine, reviewer, scenario controller); digital twin; narrator; dashboard API and web; Ollama and a one-shot model puller. It is version 1 only: the game bridge is added separately by `game/docker-compose.game.yml`. Three named volumes persist Kafka, TimescaleDB and Ollama data.
+- **What it does:** Defines the whole portable stack, 22 services, in dependency order: Mosquitto; Kafka; Kafka Connect, a one-shot connector registrar and a connector supervisor that restarts failed or stuck connectors; TimescaleDB; the four simulators; storage-consumer; the Phase 5 services (aggregator, anomaly detector, causal engine, reviewer, scenario controller); digital twin; narrator; dashboard API and web; Ollama and a one-shot model puller. It is version 1 only: the game bridge is added separately by `game/docker-compose.game.yml`. Three named volumes persist Kafka, TimescaleDB and Ollama data.
 - **Why it works this way:**
   - YAML anchors (`&edge-sim`, `&phase5-service`, `&phase5-env`) remove duplication, since four simulators share one image and most Phase 5 services share their environment.
   - `restart: unless-stopped` is on every long-running service because Compose, unlike a Kubernetes Deployment, does not restart crashed containers by default. A load-induced anomaly-detector crash stayed down forever until this was added.
@@ -331,6 +331,7 @@ One image runs all four sensors; an environment variable picks which. Every simu
 ### `edge-simulators/common/runtime.py`
 - **What it does:** Defines the `Simulator` class: load one schema, connect to MQTT with exponential backoff, validate each event against the schema, publish it (QoS 1) and sleep a Poisson-distributed interval.
 - **Why it works this way:**
+- **Added 2026-10-04:** `subscribe` (handlers per topic, re-subscribed on every connect because a clean-session reconnect drops them), `_on_message` (routes by topic; a failing handler is logged, never raised into the network thread) and `publish_state` (retained, QoS 1) so simulators can share simulated-world state.
   - A schema violation is fatal (`sys.exit(1)`) because it means the generator has a bug; logging and skipping would hide it and could let bad data reach Kafka.
   - Connection and publish errors are logged and retried because the broker may simply not be up yet, and a crash loop would fix nothing.
   - The interval is floored at 0.5 s so a tiny random draw cannot hammer the broker.
@@ -358,6 +359,36 @@ One image runs all four sensors; an environment variable picks which. Every simu
 - **Why it works this way:** The confounder relationship is still encoded in the true waste on purpose, so the causal engine has something real to find in estimates that now come from a model. The model is loaded in `main()` before the event loop, because `Simulator.run_forever` logs and continues past errors raised while generating an event; a model that failed its integrity check inside the generator would be retried forever instead of stopping the pod.
 - **Connects to:** `common/runtime.py`, `common/world.py`, `edge_ai/`; MQTT topic `sensors/plate-waste`; `schemas/PlateWasteEvent.schema.json` (schema 1.1.0).
 - **Purpose:** Source of the plate-waste stream, the ground truth for the waste finding, and the project's edge-intelligence node.
+
+### `edge-simulators/simulators/pos_transaction.py`
+- **What it does:** Builds a sale of one to five line items with quantities, a 3% chance each line is voided, an 8% chance of a 10 to 20% discount, and a randomly chosen server and payment method. The total is computed consistently from the non-voided lines.
+- **Why it works this way:** The total is derived from the lines so the event is internally consistent, which the schema cannot enforce itself.
+- **Connects to:** `common/`; topic `sensors/pos-transaction`.
+- **Purpose:** Source of the POS stream.
+
+### `edge-simulators/simulators/service_timing.py`
+- **What it does:** Simulates kitchen tickets moving through the five stages. `TicketLifecycle` keeps open tickets in memory, picks one at random to advance (or starts a new one), and computes `elapsed_since_previous_stage_ms` from real time. Tickets are forced forward when stale. The backlog the kitchen may hold is **inversely proportional to the staffing level** (`common/staffing.py`): more open tickets competing for the same tick budget means each waits longer for its next stage, so fewer people working really does slow the kitchen. The staffing level is read from a retained MQTT message the staff-shift simulator publishes. When `SCENARIO_CONTROL_ENABLED` is true it also follows `scenario-control-events` (through `common/scenario.py`) and removes the stations a staffing-shortage scenario names from the pool that new tickets land on.
+- **Why it works this way:** The long comment at the top records what was tried. Removing a station only changes where new tickets land. Weighting selection cancels itself out, and a real sleep would freeze the whole simulator, so letting the backlog grow is the mechanism. **Until 2026-10-04 a direct x5 multiplier on the backlog, applied while a scenario was active, did the slowing without touching the staffing signal, so the engine's `staffing_level` treatment had no true effect to find and the repaired refutation gate refuted the finding (DEF-141). Capacity now depends on staffing alone,** and the scenario acts by lowering staffing.
+- **Connects to:** `services/scenario-injection-controller` (via Kafka); `edge-simulators/simulators/staff_shift.py` (via the retained staffing message); `common/`.
+- **Purpose:** The producer behind the anomaly detector and digital twin, and the vehicle for the injected-scenario test.
+
+### `edge-simulators/simulators/staff_shift.py`
+- **What it does:** `ShiftState` tracks who is clocked in so the sequence is plausible (no clock-out without a clock-in, no reassignment for someone off shift), then emits clock-in, clock-out, break and reassign events. While a staffing-shortage scenario is active (`SCENARIO_CONTROL_ENABLED`, target `staff-shift` or `all`) it clocks the surplus out down to `SHORTAGE_MAX_CLOCKED_IN` (default 2), holds it there, and refills afterwards. After every event it publishes the number clocked in as a retained MQTT message (`sim/world/staffing`) for the timing simulator.
+- **Why it works this way:** A shortage is an intervention on staffing itself, which is what the causal engine's `staffing_level` counts. The simulator is the source of truth for staffing and shares it as simulated-world state, outside the bridged `sensors/` topics, so it never enters Kafka or the database. State is in memory and resets on restart, which is accepted for a simulator. Normal staffing settles at about 8.
+- **Connects to:** `common/`; topic `sensors/staff-shift`; consumed by the digital twin and the causal engine.
+- **Purpose:** Source of the staffing stream, and the lever the injected shortage pulls.
+
+### `edge-simulators/common/staffing.py`
+- **What it does:** Staffing as a real driver in the simulated world: the topic name, `NOMINAL_STAFFING` (8, measured), `backlog_factor` (capacity proportional to nominal over actual staffing, bounded 0.5 to 4), the wire encoding and a holder that keeps the latest valid level and ignores garbage.
+- **Why it works this way:** Until 2026-10-04 nothing encoded that staffing affects anything. This does for staffing what the to-go factor does for plate waste: puts the relationship into the data on purpose.
+- **Connects to:** `simulators/service_timing.py`, `simulators/staff_shift.py`, `test_world_coupling.py`.
+- **Purpose:** The staffing-to-delay relationship the staffing analysis depends on.
+
+### `edge-simulators/common/scenario.py`
+- **What it does:** The scenario-control consumer, moved out of the timing simulator so the staff-shift simulator can share it: a background thread following `scenario-control-events`, a pure `apply` that folds each message into the current scenario, and target filtering (each simulator answers to its own name and to `all`).
+- **Why it works this way:** One scenario can now act on the kitchen and the staff together. `kafka-python` is imported inside the function so a simulator without scenario control does not need it.
+- **Connects to:** both simulators; `services/scenario-injection-controller`.
+- **Purpose:** Shared scenario hook.
 
 ### `edge-simulators/edge_ai/__init__.py`
 - **What it does:** Empty. Makes `edge_ai` a package.
@@ -478,6 +509,12 @@ One image runs all four sensors; an environment variable picks which. Every simu
 - **Connects to:** the four schema files' `source_kind` enum; `game/bridge`; applied by the k8s schema-init Job, Compose `initdb.d`, and by hand on old volumes. It lives in the shared tree on purpose (see section 1.7).
 - **Purpose:** Lets human-driven events into the database. It is the one piece of version 2 that is deliberately part of version 1's tree, because the contract must be shared.
 
+### `storage/schema/006_twin_open_tickets.sql`
+- **What it does:** Creates `twin_open_tickets` (ticket id, station, opened-at) and an index on the station: the set from which the digital twin derives each station's open-ticket count.
+- **Why it works this way:** Idempotent like `004` and `005`. A set is what makes the count safe under Kafka's at-least-once redelivery (DEF-107). Tickets open before the migration are not in the set, so a station's count restarts from the tickets opened since. The twin runs the same statement at start-up (a test checks the two copies match) because Postgres only runs initdb scripts on an empty data directory. A static test checks that this file has a byte-identical copy in `k8s/timescaledb/files/` and is registered in Compose, the chart's ConfigMap and init Job, the integration harness and the migration test.
+- **Connects to:** `services/digital-twin/twin.py`; applied by the schema-init Job, Compose `initdb.d`, `tests/integration/run_db_tests.sh`.
+- **Purpose:** Makes the twin's workload figure correct under redelivery.
+
 ### `storage/schema/005_ticket_origin.sql`
 - **What it does:** Widens `service_timing_events.source_kind` to include `crew`, adds `ticket_timing_summaries.origin` (`TEXT NOT NULL DEFAULT 'simulated'`, checked against `simulated`, `vendor_integration`, `interactive`) and an index on `(origin, computed_at)`.
 - **Why it works this way:** The same idempotent pattern as `004`: constraints are dropped and re-added, the column and index use `IF NOT EXISTS`, and it is a numbered migration rather than an edit to `002` because `CREATE TABLE IF NOT EXISTS` never alters an existing table. Existing rows default to `simulated`; a database that already holds game tickets is fixed by the one-off `game/bridge/backfill-crew-origin.sql`, which lives under `game/` so version 1 never names the game. **A live gotcha:** its `ALTER TABLE` needs an exclusive lock, so it waits for any session sitting idle inside a transaction. Applied by hand to a running Compose stack it hung until the causal engine's 42-minute-old idle read was terminated; see section 11.
@@ -511,6 +548,12 @@ One image runs all four sensors; an environment variable picks which. Every simu
 - **Why it works this way:** With no Strimzi operator there are no `KafkaConnector` resources, so registration is a plain REST call. A failed or duplicate registration prints a hint rather than failing the stack.
 - **Connects to:** `connectors/*.json`; the `kafka-connect` REST API; run by `kafka-connect-init`.
 - **Purpose:** Compose's stand-in for the operator-managed connectors.
+
+### `docker-compose/kafka-connect/supervisor.py`
+- **What it does:** A small long-running supervisor (run by the `kafka-connect-supervisor` service) that polls Connect's REST status and restarts what is not healthy: a failed task or connector at once (`onlyFailed=true`); a connector that stays `UNASSIGNED`, or `RUNNING` with no task, for 30 seconds, in full. A restarted connector is left alone for 60 seconds, and paused or stopped connectors are never touched.
+- **Why it works this way:** Kafka Connect never restarts a failed task and reports a connector `RUNNING` while its task is `FAILED`. A transient start-up DNS failure (`UnknownHostException: mosquitto`) therefore left the whole pipeline ingesting nothing (DEF-137), and after a Kafka restart under Podman the connectors sat unassigned for about six minutes (DEF-142). The logic is a pure `classify` plus a `Supervisor` with an injectable clock and request function, so it is tested without Connect. Standard library only.
+- **Connects to:** the `kafka-connect` REST API; `docker-compose.yml`; `test_supervisor.py`.
+- **Purpose:** Compose's stand-in for what Strimzi can do on Kubernetes: self-healing connectors.
 
 ### `docker-compose/kafka-connect/connectors/plate-waste-source-connector.json`, `pos-transaction-source-connector.json`, `service-timing-source-connector.json`, `staff-shift-source-connector.json`
 - **What they do:** Each defines one Camel MQTT source connector: subscribe to `sensors/<name>` on `tcp://mosquitto:1883` and write to `<name>-events`, with byte-array converters and a unique `clientId` (`kafka-connect-plate-waste` and so on).
@@ -556,7 +599,7 @@ All Python services follow the same skeleton: read configuration from environmen
 - **Connects to:** `k8s/phase5-schemas` and the `./schemas` compose volume. The Dockerfile's comment now gives the actual build command (it used to point at a `PHASE5-SETUP.md` that does not exist).
 
 ### `services/anomaly-detector/detector.py`
-- **What it does:** Consumes `ticket-timing-summaries`, ignores incomplete tickets, and keeps a rolling window (default 200) per station. For each of four duration metrics it runs a control-limit test (mean plus or minus 3 standard deviations). It also periodically refits a scikit-learn `IsolationForest` over all four metrics jointly. Each flagged ticket becomes an `AnomalyEvent`, inserted into `anomaly_events` and published to `anomaly-events`.
+- **What it does:** Consumes `ticket-timing-summaries`, ignores incomplete tickets, and keeps a rolling window (default 200) per station. For each of four duration metrics it runs a control-limit test (mean plus or minus 3 standard deviations of the window **after trimming extreme outliers**: values further than 10 robust standard deviations, 1.4826 times the median absolute deviation, from the median are left out. A few tickets stalled for up to 78 minutes used to inflate the standard deviation until a 3x slowdown was invisible, 0% of 3x-slowed tickets flagged; trimmed, about 49.5% are, with an unchanged false-alarm rate where there are no such outliers, DEF-056). It also periodically refits a scikit-learn `IsolationForest` over all four metrics jointly. Each flagged ticket becomes an `AnomalyEvent`, inserted into `anomaly_events` and published to `anomaly-events`.
 - **Why it works this way:**
   - Two detectors are independent and may both flag the same ticket; `detection_method` lets consumers tell them apart instead of one hiding the other.
   - Nothing is evaluated until a window has 30 observations, because a short window is not a baseline.
@@ -607,9 +650,9 @@ All Python services follow the same skeleton: read configuration from environmen
 - **Purpose:** A long-lived CLI container.
 
 ### `services/digital-twin/twin.py`
-- **What it does:** Consumes `service-timing-events` and `staff-shift-events` and maintains three current-state tables by upsert: which tables are occupied (set on `order_fired`, cleared on `delivered`), how many open tickets each station holds, and each staff member's status and station (from clock-in, break and reassign events).
-- **Why it works this way:** It reads the raw streams rather than Phase 5's derived tables, so the twin is an independent view of live state rather than a by-product of analytics. It is a snapshot, not a log, so it upserts one row per entity. The open-ticket count is clamped at zero so a redelivered or missed event cannot drive it negative.
-- **Connects to:** Kafka in; `twin_table_state`, `twin_staff_state`, `twin_station_state`; read by `dashboard-api`.
+- **What it does:** Consumes `service-timing-events` and `staff-shift-events` and maintains three current-state tables by upsert: which tables are occupied (set on `order_fired`, cleared on `delivered`), how many open tickets each station holds, and each staff member's status and station (from clock-in, break and reassign events). **The station count is derived, not incremented (2026-10-04, DEF-107):** an `order_fired` adds the ticket to a set (`twin_open_tickets`, migration 006) and a `delivered` removes it, and the count is the size of the set, so Kafka's at-least-once redelivery cannot inflate or deflate it. At start-up it runs the table's idempotent `CREATE TABLE IF NOT EXISTS` so a Compose volume created before the migration does not leave it without the table.
+- **Why it works this way:** It reads the raw streams rather than Phase 5's derived tables, so the twin is an independent view of live state rather than a by-product of analytics. It is a snapshot, not a log, so it upserts one row per entity. A delivery for a ticket the twin never saw open leaves every count alone.
+- **Connects to:** Kafka in; `twin_table_state`, `twin_staff_state`, `twin_station_state`, `twin_open_tickets`; read by `dashboard-api`.
 - **Purpose:** The "digital twin": current restaurant state. Its docstring used to say nothing consumes it; it now says `dashboard-api` reads the tables.
 
 ### `services/digital-twin/Dockerfile`, `requirements.txt`

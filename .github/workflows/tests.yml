@@ -70,7 +70,11 @@ jobs:
           - name: edge-ai
             dir: restaurant-platform-phase1/restaurant-platform/edge-simulators
             install: pip install numpy jsonschema pytest scikit-learn==1.5.1
-            run: python -m pytest test_edge_ai.py training/test_training.py -v
+            run: python -m pytest test_edge_ai.py test_world_coupling.py training/test_training.py -v
+          - name: connector-supervisor
+            dir: restaurant-platform-phase1/restaurant-platform/docker-compose/kafka-connect
+            install: pip install pytest
+            run: python -m pytest test_supervisor.py -v
           - name: schema-compatibility
             dir: restaurant-platform-phase1/restaurant-platform/schemas
             install: pip install jsonschema pandas pytest numpy prometheus-client==0.26.0

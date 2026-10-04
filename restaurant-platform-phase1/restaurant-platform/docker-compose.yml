@@ -74,6 +74,20 @@ services:
     entrypoint: ["/bin/sh", "/register-connectors.sh"]
     restart: "no"
 
+  # Restarts a connector whose task failed, or that is stuck unassigned after a
+  # broker restart. Kafka Connect does not, and without this one transient
+  # start-up failure left the whole pipeline ingesting nothing (DEF-137, DEF-142).
+  kafka-connect-supervisor:
+    image: docker.io/library/python:3.11-slim
+    restart: unless-stopped
+    depends_on:
+      - kafka-connect
+    environment:
+      CONNECT_URL: http://kafka-connect:8083
+    volumes:
+      - ./docker-compose/kafka-connect/supervisor.py:/supervisor.py:ro
+    command: ["python", "-u", "/supervisor.py"]
+
   # -------------------------------------------------------------------
   # Storage
   # -------------------------------------------------------------------
@@ -96,6 +110,7 @@ services:
       - ./storage/schema/003_phase6.sql:/docker-entrypoint-initdb.d/003_phase6.sql:ro
       - ./storage/schema/004_player_source_kind.sql:/docker-entrypoint-initdb.d/004_player_source_kind.sql:ro
       - ./storage/schema/005_ticket_origin.sql:/docker-entrypoint-initdb.d/005_ticket_origin.sql:ro
+      - ./storage/schema/006_twin_open_tickets.sql:/docker-entrypoint-initdb.d/006_twin_open_tickets.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U restaurant_app -d restaurant_platform"]
       interval: 5s

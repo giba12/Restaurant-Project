@@ -6,8 +6,6 @@ restaurant right now", so its job is to mirror reality from a stream of
 events: tables fill and empty, staff clock in and out, stations carry work.
 These tests replay realistic event sequences and check the resulting state.
 """
-import pytest
-
 import factory
 import twin
 from conftest import rows, scalar
@@ -78,17 +76,77 @@ def test_stations_are_tracked_independently(conn):
     assert station_count(conn, "station-fry") == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN LIMITATION: open_ticket_count is incremented, not derived, so a Kafka redelivery "
-           "of order_fired (at-least-once delivery) inflates it. strict=True: when this is fixed the "
-           "test will start passing and CI will demand the marker be removed.",
-)
 def test_a_redelivered_order_fired_does_not_double_count(conn):
+    # Fixed 2026-10-04 (DEF-107): the count used to be incremented per delivery, so Kafka's
+    # at-least-once redelivery inflated it for good. It is now the size of the open-ticket set.
     event = factory.service_timing_event("order_fired", ticket_id="t1", table_id="table-1", station_id="station-grill")
     twin.handle_service_timing(conn, event)
     twin.handle_service_timing(conn, event)
+    twin.handle_service_timing(conn, event)
     assert station_count(conn, "station-grill") == 1
+
+
+def test_a_redelivered_delivered_does_not_undercount_other_tickets(conn):
+    for ticket in ("t1", "t2", "t3"):
+        twin.handle_service_timing(conn, factory.service_timing_event("order_fired", ticket_id=ticket, table_id=f"table-{ticket}", station_id="station-grill"))
+    done = factory.service_timing_event("delivered", ticket_id="t1", table_id="table-t1", station_id="station-grill")
+    twin.handle_service_timing(conn, done)
+    twin.handle_service_timing(conn, done)  # redelivered: must not take a second ticket off
+    assert station_count(conn, "station-grill") == 2
+
+
+def test_a_delivery_for_a_ticket_the_twin_never_saw_open_leaves_the_count_alone(conn):
+    twin.handle_service_timing(conn, factory.service_timing_event("order_fired", ticket_id="t1", table_id="table-1", station_id="station-grill"))
+    twin.handle_service_timing(conn, factory.service_timing_event("delivered", ticket_id="stranger", table_id="table-9", station_id="station-grill"))
+    assert station_count(conn, "station-grill") == 1, "an unknown ticket's delivery must not cancel a real open ticket"
+
+
+def test_a_delivery_is_charged_to_the_station_the_ticket_was_opened_at(conn):
+    twin.handle_service_timing(conn, factory.service_timing_event("order_fired", ticket_id="t1", table_id="table-1", station_id="station-grill"))
+    twin.handle_service_timing(conn, factory.service_timing_event("delivered", ticket_id="t1", table_id="table-1", station_id="station-saute"))
+    assert station_count(conn, "station-grill") == 0
+    assert station_count(conn, "station-saute") in (None, 0)
+
+
+def test_the_count_always_equals_the_number_of_open_tickets_whatever_the_delivery_pattern(conn):
+    import random
+
+    rng = random.Random(5)
+    open_now, expected = [], set()
+    for step in range(120):
+        if open_now and rng.random() < 0.45:
+            ticket = rng.choice(open_now)
+            event = factory.service_timing_event("delivered", ticket_id=ticket, table_id="table-1", station_id="station-grill")
+            expected.discard(ticket)
+            open_now.remove(ticket)
+        else:
+            ticket = f"t{step}"
+            event = factory.service_timing_event("order_fired", ticket_id=ticket, table_id="table-1", station_id="station-grill")
+            expected.add(ticket)
+            open_now.append(ticket)
+        for _ in range(rng.choice([1, 1, 2, 3])):  # each message delivered one to three times
+            twin.handle_service_timing(conn, event)
+        assert station_count(conn, "station-grill") == len(expected)
+
+
+def test_the_twin_creates_its_own_table_if_the_migration_never_ran(conn):
+    from conftest import scalar
+
+    with conn.cursor() as cur:
+        cur.execute("DROP TABLE twin_open_tickets")
+    conn.commit()
+    twin.ensure_schema(conn)
+    assert scalar(conn, "SELECT count(*) FROM twin_open_tickets") == 0
+    twin.ensure_schema(conn)  # idempotent
+
+
+def test_the_twins_own_copy_of_the_table_definition_matches_the_migration():
+    import re
+    from pathlib import Path
+
+    migration = (Path(__file__).resolve().parents[2] / "storage" / "schema" / "006_twin_open_tickets.sql").read_text()
+    statements = lambda sql: re.sub(r"\s+", " ", "\n".join(l for l in sql.splitlines() if not l.strip().startswith("--"))).strip()  # noqa: E731
+    assert statements(twin.ENSURE_OPEN_TICKETS_SQL) == statements(migration)
 
 
 # ------------------------------------------------------------------ staff

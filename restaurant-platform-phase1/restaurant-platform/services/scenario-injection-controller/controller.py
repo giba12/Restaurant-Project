@@ -34,14 +34,20 @@ here as a deliberate scope decision, not an oversight):
   }
 
 Consumer-side support status, this revision:
-  - service-timing: supported. See edge-simulators/simulators/
-    service_timing.py's SCENARIO_CONTROL_ENABLED hook (staffing_shortage
-    only).
-  - plate-waste, pos-transaction, staff-shift: NOT supported -- none of
-    those simulators has a consumption hook yet. A scenario targeting
-    these three is published to Kafka but has no observable effect until
-    each simulator gets its own hook, mirroring the one in
-    service_timing.py.
+  - service-timing: supported (staffing_shortage: removes the stations
+    listed). See edge-simulators/simulators/service_timing.py.
+  - staff-shift: supported (staffing_shortage: clocks staff out down to
+    SHORTAGE_MAX_CLOCKED_IN and holds it there). See edge-simulators/
+    simulators/staff_shift.py. The kitchen's backlog capacity depends on
+    the staffing level (edge-simulators/common/staffing.py), so a shortage
+    slows the kitchen because staffing fell, which makes `staffing_level`
+    the true cause in the data the causal engine analyses (DEF-141).
+  - plate-waste, pos-transaction: NOT supported -- no consumption hook.
+    A scenario targeting only these is published to Kafka but has no
+    observable effect.
+
+Use --target all to reach both the kitchen and the staff with one scenario:
+each simulator answers to its own name and to "all".
 """
 import argparse
 import json

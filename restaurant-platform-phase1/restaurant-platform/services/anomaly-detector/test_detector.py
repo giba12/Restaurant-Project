@@ -157,3 +157,84 @@ def test_built_events_satisfy_the_published_contract(schema_name):
     summary = ticket(1)
     jsonschema.validate(detector.build_control_limit_event(METRIC, summary, 99999.0, (1000.0, 2000.0)), schema)
     jsonschema.validate(detector.build_isolation_forest_event(summary, -0.2), schema)
+
+
+# ------------------------------------------------------------------ stalled tickets must not blind the detector (DEF-056)
+
+def stalled_baseline(rng, n=200, stall_rate=0.03):
+    """A right-skewed ~31 s baseline in which a few tickets stalled for 10 to 78 minutes."""
+    window = detector.StationWindow()
+    for i in range(n):
+        value = float(rng.gamma(3.0, 10300.0))
+        if rng.random() < stall_rate:
+            value = float(rng.uniform(600_000, 4_700_000))
+        window.add(ticket(i, **{METRIC: value}))
+    return window
+
+
+def test_a_few_stalled_tickets_do_not_blind_the_detector_to_a_threefold_slowdown():
+    # Measured on data shaped like this (300 windows, 200 slowed tickets each): the old
+    # mean-and-standard-deviation limits flagged 0% of tickets slowed 3x, because a few
+    # stalls of up to 78 minutes inflated the standard deviation; trimming them first
+    # flags about 49.5%. Requiring a third fails the old behaviour decisively.
+    rng = np.random.default_rng(31)
+    flagged = total = 0
+    for _ in range(40):
+        window = stalled_baseline(rng)
+        for value in rng.gamma(3.0, 31000.0, 100):
+            total += 1
+            flagged += window.control_limit_check(METRIC, float(value)) is not None
+    assert flagged / total > 0.33, f"only {flagged / total:.0%} of 3x-slowed tickets were flagged"
+
+
+def test_trimming_the_stalls_does_not_raise_the_false_alarm_rate_much():
+    # Measured 1.3% on clean tickets against a baseline with stalls; the same figure with
+    # no stalls at all is unchanged by the trimming (1.25% either way).
+    rng = np.random.default_rng(32)
+    alarms = total = 0
+    for _ in range(40):
+        window = stalled_baseline(rng)
+        for value in rng.gamma(3.0, 10300.0, 200):
+            total += 1
+            alarms += window.control_limit_check(METRIC, float(value)) is not None
+    assert alarms / total < 0.03
+
+
+def test_with_no_extreme_outliers_the_limits_are_exactly_what_they_were():
+    rng = np.random.default_rng(33)
+    values = rng.normal(30000.0, 3000.0, 200)
+    mean, std = detector._baseline(values)
+    assert mean == pytest.approx(float(np.mean(values)))
+    assert std == pytest.approx(float(np.std(values)))
+
+
+def test_a_baseline_of_identical_values_falls_back_to_the_plain_figures_instead_of_failing():
+    mean, std = detector._baseline([5000.0] * 60)
+    assert (mean, std) == (5000.0, 0.0)
+    window = detector.StationWindow()
+    for i in range(60):
+        window.add(ticket(i, **{METRIC: 5000.0}))
+    assert window.control_limit_check(METRIC, 5000.0) is None
+    assert window.control_limit_check(METRIC, 5001.0) is not None
+
+
+def test_trimming_removes_only_the_extreme_values_and_keeps_the_ordinary_ones():
+    rng = np.random.default_rng(35)
+    ordinary = rng.normal(30000.0, 3000.0, 190)
+    stalls = np.full(10, 4_000_000.0)
+    mean, std = detector._baseline(np.concatenate([ordinary, stalls]))
+    assert mean == pytest.approx(float(np.mean(ordinary)), rel=0.02)
+    assert std == pytest.approx(float(np.std(ordinary)), rel=0.2)
+
+
+def test_a_sustained_real_shift_still_becomes_the_new_normal():
+    # Trimming must not turn the window into a permanent memory of the old baseline: once the
+    # slowdown fills the window, the limits follow it.
+    rng = np.random.default_rng(34)
+    window = detector.StationWindow()
+    for i in range(detector.WINDOW_SIZE):
+        window.add(ticket(i, **{METRIC: float(rng.normal(30000.0, 3000.0))}))
+    assert window.control_limit_check(METRIC, 60000.0) is not None
+    for i in range(detector.WINDOW_SIZE):
+        window.add(ticket(1000 + i, **{METRIC: float(rng.normal(60000.0, 6000.0))}))
+    assert window.control_limit_check(METRIC, 60000.0) is None

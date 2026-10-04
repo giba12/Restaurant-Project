@@ -1,10 +1,10 @@
 """
 Integration tests: the migrations themselves.
 
-run_db_tests.sh already proves a fresh database comes up from the five
+run_db_tests.sh already proves a fresh database comes up from the six
 migrations. These tests check what that produced, and that re-running every
 migration is safe -- which is exactly what happens on every `helm upgrade`
-(the schema-init Job re-applies all five against a live database).
+(the schema-init Job re-applies all six against a live database).
 """
 import os
 import subprocess
@@ -13,13 +13,13 @@ import pytest
 
 from conftest import rows, scalar
 
-MIGRATIONS = ["001_hypertables.sql", "002_phase5_hypertables.sql", "003_phase6.sql", "004_player_source_kind.sql", "005_ticket_origin.sql"]
+MIGRATIONS = ["001_hypertables.sql", "002_phase5_hypertables.sql", "003_phase6.sql", "004_player_source_kind.sql", "005_ticket_origin.sql", "006_twin_open_tickets.sql"]
 CONTAINER = os.environ.get("TEST_PG_CONTAINER")
 
 EXPECTED_TABLES = {
     "plate_waste_events", "pos_transaction_events", "pos_transaction_line_items", "service_timing_events",
     "staff_shift_events", "ticket_timing_summaries", "anomaly_events", "causal_findings", "narrated_findings",
-    "twin_table_state", "twin_staff_state", "twin_station_state",
+    "twin_table_state", "twin_staff_state", "twin_station_state", "twin_open_tickets",
 }
 EXPECTED_HYPERTABLES = {"plate_waste_events", "pos_transaction_events", "pos_transaction_line_items", "service_timing_events", "staff_shift_events", "anomaly_events", "causal_findings"}
 

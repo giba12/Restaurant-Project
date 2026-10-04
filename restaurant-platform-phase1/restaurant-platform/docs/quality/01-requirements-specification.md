@@ -100,6 +100,7 @@ All data is simulated; there is no production deployment or real user. The syste
 | FR-ING-04 | An MQTT-to-Kafka bridge shall carry all four sensor topics into Kafka. | M | Project notes, phase 2 | T |
 | FR-ING-05 | A producer shall validate its own output against its schema, and a violation shall be fatal. | M | Status log, section 3.1 | T, I |
 | FR-ING-06 | A scenario controller shall be able to inject a known disturbance (a staffing shortage) into the service-timing simulator for a defined window. | M | Project notes, phase 5 | T |
+| FR-ING-07 | Staffing shall be a real driver in the simulated restaurant: the kitchen's backlog capacity shall be inversely proportional to the staff clocked in, and an injected staffing shortage shall act by lowering staffing (clocking staff out), not by a separate direct effect. | M | DEF-141, 2026-10-04 | T |
 
 ### 4.2 Storage (STO)
 
@@ -120,6 +121,7 @@ All data is simulated; there is no production deployment or real user. The syste
 | FR-ANA-02 | Each ticket shall carry an origin (simulated, vendor or interactive), and interactive tickets shall be excluded from baselines. | M | Status log, 2026-09-21 | T |
 | FR-ANA-03 | Anomalies shall be detected per station by control limits and by an isolation forest, over bounded windows, with a low false-alarm rate and a high detection rate for a genuine shift. | M | Project notes, phase 5 | T |
 | FR-ANA-04 | Anomaly events shall conform to their schema. | M | CON-02 | T |
+| FR-ANA-05 | The control limits shall not be inflated by a few extreme outliers (for example tickets stalled for tens of minutes): extreme values shall be trimmed before the mean and spread are computed, leaving ordinary data unchanged. | S | DEF-056, 2026-10-04 | T |
 
 ### 4.4 Causal inference (CAU)
 
@@ -131,6 +133,7 @@ All data is simulated; there is no production deployment or real user. The syste
 | FR-CAU-04 | Analyses shall exclude human-driven (player and interactive) data. | M | Status log, 2026-09-21 | T |
 | FR-CAU-05 | Too little data shall be refused rather than estimated. | S | Code behaviour | T |
 | FR-CAU-06 | The refutation gate shall reject findings built from pure noise with high probability (derived: the README describes findings as "refutation-tested"). | S | Derived from README claim | T |
+| FR-CAU-07 | The finding for an injected staffing-shortage scenario, computed over a window that includes the baseline, shall pass the refutation gate, have a negative effect (more staff, shorter pickup delay) and be promoted by the live reviewer. This is the phase-5 done-condition proper, beyond FR-CAU-03's traceability. | M | DEF-141, 2026-10-04 | T |
 
 ### 4.5 Digital twin (TWN)
 
@@ -215,6 +218,7 @@ Added 2026-10-03 at the owner's request: the plate-waste node estimates waste on
 | NFR-REL-02 | The pipeline shall survive the loss and return of the database, Kafka and the MQTT broker, with every message stored exactly once. | M | Derived (chaos test, 2026-10-01) | T |
 | NFR-REL-03 | Data shall persist across a stop and start of the stack. | M | Status log, 2026-09-17 | T |
 | NFR-REL-04 | At-least-once delivery combined with idempotent storage shall give an exactly-once effect. | M | Status log, section 3.5 | T |
+| NFR-REL-05 | On the Compose path, a connector whose task has failed, or that stays unassigned, shall be restarted automatically; a paused connector shall be left alone and a connector that cannot start shall not be restarted more than once a minute. | S | DEF-137, DEF-142, 2026-10-04 | T |
 
 ### 5.3 Performance (PER)
 
@@ -303,3 +307,4 @@ Computer-vision plate-waste detection (a solved, commercial problem; MinIO exist
 | 2026-10-01 | Pipeline-health metrics (FR-OBS-01); Codespaces option (NFR-POR-03) |
 | 2026-10-02/03 | Reliability, performance and security requirements made explicit and measured (NFR-REL, NFR-PER, NFR-SEC-05) |
 | 2026-10-03 | Edge intelligence added: the plate-waste node infers on the node, with integrity, budget, drift and fleet-view requirements (FR-EDG-01 to 07) |
+| 2026-10-04 | Staffing made a real driver of the simulated kitchen (FR-ING-07); the done-condition finding required to pass refutation (FR-CAU-07); robust control limits (FR-ANA-05); self-healing connectors on Compose (NFR-REL-05) |

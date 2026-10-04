@@ -47,16 +47,16 @@ Eight layers, each simulating one thing production does to a system. They are ca
 
 | # | Layer | Tests | What it simulates | Location |
 |---|---|---|---|---|
-| 1 | Static | 54 functions | Careless edits to config and files | `tests/static/` |
-| 2 | Unit | 187 functions | Careless edits to logic | beside each service; `game/bridge/`; `schemas/` |
-| 3 | Database integration | 66 | Drift between code and database | `tests/integration/` |
+| 1 | Static | 55 functions | Careless edits to config and files | `tests/static/` |
+| 2 | Unit | 221 functions | Careless edits to logic | beside each service; `game/bridge/`; `schemas/` |
+| 3 | Database integration | 72 | Drift between code and database | `tests/integration/` |
 | 4 | Statistical | 14 | Subtly wrong maths | `tests/statistical/` |
-| 5 | End-to-end and acceptance | 21 | One broken hop in a long pipeline | `tests/e2e/` |
-| 6 | Resilience (chaos) | 7 | Crashes, outages, restarts | `tests/resilience/` |
+| 5 | End-to-end and acceptance | 22 | One broken hop in a long pipeline | `tests/e2e/` |
+| 6 | Resilience (chaos) | 8 | Crashes, outages, restarts | `tests/resilience/` |
 | 7 | Load and stability | 4 | Bursts and long runs | `tests/load/` |
 | 8 | Security and supply chain | 1 | Ageing dependencies | `tests/security/` |
 
-Plus the Godot client's own end-to-end test (`game/client/tests/smoke_test.gd`, roughly 80 checks) and the live audit script (`k8s/audit/audit-live-cluster.sh`), which is not automated in CI. In total: **353 distinct test names** (one name is shared by two files) plus the GDScript suite.
+Plus the Godot client's own end-to-end test (`game/client/tests/smoke_test.gd`, roughly 80 checks) and the live audit script (`k8s/audit/audit-live-cluster.sh`), which is not automated in CI. In total: **396 distinct test names** (one name is shared by two files) plus the GDScript suite.
 
 ### 3.2 Test design techniques used
 
@@ -73,7 +73,7 @@ Plus the Godot client's own end-to-end test (`game/client/tests/smoke_test.gd`, 
 | Test doubles for external systems | Unit | A fake Ollama HTTP server; a fake Kafka consumer that models position |
 | Mutation checking ("does it have teeth?") | All layers, ad hoc | Deliberately breaking the system (mistuned detector, loosened gate, reintroduced bugs, leaked permission) and confirming the right test fails, then restoring it |
 | Regression capture | All | Each defect found gets a test that fails on the old behaviour where practical |
-| Known-defect recording | Integration, statistical | `xfail(strict=True)`: a defect stays visible and, once fixed, forces the marker's removal |
+| Known-defect recording | Integration, statistical | `xfail(strict=True)`: a defect stays visible and, once fixed, forces the marker's removal (none remains) |
 | Measurement | Load | Latency, throughput, memory growth and concurrency are printed on every run |
 
 ### 3.3 Where this differs from a team's process

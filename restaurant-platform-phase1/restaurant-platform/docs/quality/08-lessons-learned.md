@@ -6,7 +6,7 @@
 | Project | Restaurant Operations Digital Twin Platform |
 | Version | 1.0 |
 | Date | 2026-10-03 |
-| Status | Drawn from the 143 entries of `06-defect-log.md`; each lesson cites the entries that taught it |
+| Status | Drawn from the 145 entries of `06-defect-log.md`; each lesson cites the entries that taught it |
 
 ## 1. The short version
 
@@ -20,13 +20,13 @@
 
 ## 2. What the data says about how defects were found
 
-From the defect log (143 entries):
+From the defect log (145 entries):
 
 | Found by | Entries | Notes |
 |---|---|---|
 | Live operation, deployment or a manual run | 74 | The overwhelming majority of all entries |
-| Review, static or manual | 20 | Five serious defects found before Phase 5 was ever deployed; four documentation discrepancies found while preparing these documents; two observations from investigating the refutation gate; one stale threshold in the test catalogue |
-| The test regime's own runs and observations | 27 | Mostly defects *in the tests* (Part G), found by running them; eight found while building and verifying the edge feature (Part J), two of them in the author's own new work and one a blind spot in the harness |
+| Review, static or manual | 21 | Five serious defects found before Phase 5 was ever deployed; four documentation discrepancies found while preparing these documents; two observations from investigating the refutation gate; one stale threshold in the test catalogue |
+| The test regime's own runs and observations | 28 | Mostly defects *in the tests* (Part G), found by running them; eight found while building and verifying the edge feature (Part J), two of them in the author's own new work and one a blind spot in the harness |
 | The automated test regime | 7 | Including the statistical finding about the refutation gate (DEF-106) |
 | Chaos testing | 5 | Including the 10-hour silent outage (DEF-090, manual) and both silent-data-loss defects (DEF-100, DEF-101, automated) |
 | The rest | 10 | CI, the audit script, user reports, the done-condition attempt |
@@ -82,7 +82,7 @@ Every layer was checked for teeth by breaking the system on purpose: a detector 
 
 ### 3.9 Record known defects so they cannot be forgotten, then fix them with evidence
 
-Two defects were deliberately left unfixed at first because fixing them changes behaviour the owner should decide on. They were made strict expected-failures: visible on every run, and the moment someone fixes one the suite demands the marker's removal. This worked as designed. When the owner asked for the refutation gate to be repaired, the repair came with its own proof: the expected-failure became a passing assertion and the marker was deleted. One such defect remains (the twin's redelivery double-count). This is more honest than a comment and more durable than a ticket.
+Two defects were deliberately left unfixed at first because fixing them changes behaviour the owner should decide on. They were made strict expected-failures: visible on every run, and the moment someone fixes one the suite demands the marker's removal. This worked as designed. When the owner asked for the refutation gate to be repaired, the repair came with its own proof: the expected-failure became a passing assertion and the marker was deleted. The same happened to the other, the twin's redelivery double-count, on 2026-10-04: the marker went, a property test took its place, and the integration layer has no expected-failures left. This is more honest than a comment and more durable than a ticket.
 
 ### 3.9a Measure before you repair
 
@@ -91,6 +91,18 @@ The refutation gate was fixed only after an experiment: four candidate rules wer
 ### 3.9b Measure what a guard misses, not just what it falsely flags
 
 The edge node's per-reading out-of-distribution guard was calibrated the standard way: flag about 0.1% of clean readings. That is a statement about false alarms. Injecting the fault it exists to catch (a fouling lens) showed the other side: at fouling 0.4, where the estimates were already 4.7 times worse than clean, it flagged 0.84% of readings. Every reading stays individually plausible while the population drifts, so a per-reading threshold cannot see it (DEF-133). The remedy was a second guard over a window, and the measurement of *that* guard found its own limit: fouling of 0.2 is missed in about 40% of onsets. **A detector has two error rates; calibrate on the clean side, but publish the detection rate against the fault you built it for, and keep the weakness as a test so nobody forgets it.**
+
+### 3.9c The thing you analyse has to exist in the data, and a test that accepts either answer proves nothing
+
+The causal engine had a `staffing_level` to pickup-delay analysis from the start, and the Phase 5 done-condition was recorded as met. But the simulators never encoded that staffing affects anything: the injected "shortage" slowed the kitchen through a direct multiplier that left the staffing signal untouched. The original refutation gate passed noise, so it "found" an effect that was not there; the repaired gate refused it (p = 0.95), and the acceptance test, which had been relaxed to accept either verdict, kept passing over a refuted finding (DEF-141). Three habits would have caught it earlier: **put every relationship an analysis is meant to find into the data on purpose, and test that it is there** (the to-go effect on waste always had this; staffing did not); **make an acceptance test assert the outcome it names, not "a finding exists"**; and **treat a quality gate you have just fixed as a new instrument that may reveal old results were never real.** The fix was in the world, not in the engine or the gate: staffing now drives the kitchen's capacity, the shortage acts on staffing, and the finding passes with the right sign, in two independent runs. It remains a designed effect: passing shows the pipeline recovers what is there.
+
+### 3.9d Make the failure reproducible before trusting the fix for it
+
+The connector supervisor (DEF-137) was only believed after the failure was reproduced deliberately (stop the broker so its name stops resolving, restart Kafka Connect) and the same test was shown to **fail with the supervisor stopped**. The sister failure (DEF-142, a six-minute stall after a Kafka restart) could not be reproduced on demand, so its fix is recorded as a mitigation verified by unit tests only; a test that passed once, with the supervisor taking no action, is not evidence for it. **A fix is as verified as the failure is reproducible.**
+
+### 3.9e Replacing a range deletes what is in it
+
+While writing one entry in the codebase guide I replaced everything between two headings, and silently deleted three other entries (DEF-144). The edit was committed. Nothing checked that the guide covers every file. **When an edit replaces a span, read what was in the span; and where a document claims to be complete, a test should say so.**
 
 ### 3.10 Measure thresholds, do not guess them
 
@@ -133,7 +145,7 @@ Everything here was verified by the people who built it. The mutation checks and
 - **Writing down the root cause and what was ruled out,** in the status log, every time.
 - **Testing one invariant after every fault** instead of many vague checks.
 - **Hand-rolling infrastructure** around official images when wrappers failed.
-- **Strict expected-failures** for deliberately open defects (one was later fixed and its marker removed).
+- **Strict expected-failures** for deliberately open defects (both were later fixed and their markers removed).
 - **Making the documentation itself testable.**
 - **Honest verification language** ("not yet confirmed by an actual run"): it prevented several overclaims and is why the CI-never-ran discovery (DEF-081) was possible at all.
 

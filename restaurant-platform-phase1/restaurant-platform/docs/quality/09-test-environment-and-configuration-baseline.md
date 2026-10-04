@@ -69,7 +69,7 @@ Installed in a virtual environment at `~/.cache/rp-test-venv` (the exact install
 | Ollama | `docker.io/ollama/ollama:latest` (about 5.2 GB; **unpinned by design**), model `qwen2.5:0.5b-instruct` on Compose, `qwen2.5:3b-instruct` on k3s |
 | Application images | `python:3.11-slim`, non-root user 1001; `node:22-slim` and `nginx:1.27-alpine` for the dashboard |
 | MinIO | `cgr.dev/chainguard/minio`, pinned by digest (k3s only) |
-| Python dependencies | Exact pins in each service's `requirements.txt` (one range, `numpy>=1.26` in the simulators, which the edge node's model now also relies on); the offline trainer's own pins (`scikit-learn==1.5.1`, `numpy==1.26.4`) are in `edge-simulators/training/requirements.txt` and have not been through the dependency audit |
+| Python dependencies | Exact pins in each service's `requirements.txt` (one range, `numpy>=1.26` in the simulators, which the edge node's model now also relies on); the offline trainer's own pins (`scikit-learn==1.5.1`, `numpy==1.26.4`) are in `edge-simulators/training/requirements.txt` and, since 2026-10-04, are audited like every other requirements file |
 | Schemas | `schemas/*.schema.json`, JSON Schema 2020-12 |
 | Migrations | `storage/schema/001`-`005`, idempotent |
 
@@ -116,7 +116,7 @@ Nothing else differs from the real `docker-compose.yml`; the services, images an
 python3 -m venv ~/.cache/rp-test-venv
 ~/.cache/rp-test-venv/bin/pip install pytest pyyaml jsonschema==4.23.0 pandas==2.2.2 numpy==1.26.4 \
   scikit-learn==1.5.1 prometheus-client==0.26.0 psycopg2-binary==2.9.9 kafka-python==3.0.11 ruff \
-  pip-audit requests==2.33.0 fastapi==0.115.6 httpx
+  pip-audit requests==2.33.0 fastapi==0.115.6 httpx pytest-cov   # pytest-cov only to measure coverage (DEF-128)
 export PATH=~/.cache/rp-test-venv/bin:$PATH
 systemctl --user start podman.socket          # rootless Podman only, after a WSL restart
 

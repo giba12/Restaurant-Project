@@ -66,6 +66,8 @@ spec:
             - /sql/004_player_source_kind.sql
             - -f
             - /sql/005_ticket_origin.sql
+            - -f
+            - /sql/006_twin_open_tickets.sql
           env:
             - name: PGHOST
               value: {{ .Release.Name }}

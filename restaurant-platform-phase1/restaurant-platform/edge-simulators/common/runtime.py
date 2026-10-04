@@ -78,14 +78,38 @@ class Simulator:
         # connected" in a tight, never-crashing, never-recovering loop,
         # since nothing was waiting for or checking CONNACK at all).
         self._connected_event = threading.Event()
+        self._handlers = {}
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
+        self.client.on_message = self._on_message
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         if reason_code.is_failure:
             self.log.error("mqtt CONNACK failure: %s", reason_code)
         else:
+            # Subscriptions do not survive a reconnect with a clean session, so
+            # they are re-established on every successful connect.
+            for topic in self._handlers:
+                client.subscribe(topic, qos=1)
             self._connected_event.set()
+
+    def subscribe(self, topic: str, handler) -> None:
+        """Call `handler(payload_bytes)` for every message on `topic`, across reconnects."""
+        self._handlers[topic] = handler
+        if self._connected_event.is_set():
+            self.client.subscribe(topic, qos=1)
+
+    def _on_message(self, client, userdata, message):
+        handler = self._handlers.get(message.topic)
+        if handler is not None:
+            try:
+                handler(message.payload)
+            except Exception:
+                self.log.exception("handler for %s failed", message.topic)
+
+    def publish_state(self, topic: str, payload: str) -> None:
+        """Publish shared simulated-world state: retained, so a late subscriber sees it at once."""
+        self.client.publish(topic, payload, qos=1, retain=True)
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
         self._connected_event.clear()

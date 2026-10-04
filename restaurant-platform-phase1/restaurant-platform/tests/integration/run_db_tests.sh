@@ -2,7 +2,7 @@
 # Runs the integration tests against a real, throwaway TimescaleDB.
 #
 # The database is initialised exactly the way docker-compose.yml initialises
-# it: the five numbered migrations are mounted into /docker-entrypoint-initdb.d
+# it: the six numbered migrations are mounted into /docker-entrypoint-initdb.d
 # and run by the image's own entrypoint, with NARRATOR_PGPASSWORD set for
 # 003's \getenv. So if a migration is broken, the database never comes up and
 # this script fails before a single test runs -- the migrations are tested
@@ -32,13 +32,14 @@ docker run -d --name "$NAME" \
   -v "$PWD/storage/schema/003_phase6.sql:/docker-entrypoint-initdb.d/003_phase6.sql:ro" \
   -v "$PWD/storage/schema/004_player_source_kind.sql:/docker-entrypoint-initdb.d/004_player_source_kind.sql:ro" \
   -v "$PWD/storage/schema/005_ticket_origin.sql:/docker-entrypoint-initdb.d/005_ticket_origin.sql:ro" \
+  -v "$PWD/storage/schema/006_twin_open_tickets.sql:/docker-entrypoint-initdb.d/006_twin_open_tickets.sql:ro" \
   "$IMAGE" >/dev/null
 
 echo "waiting for TimescaleDB to finish running the migrations..."
 for _ in $(seq 1 90); do
-  # The last migration's artefact (column origin, from 005) means all five ran.
+  # The last migration's artefact (the twin_open_tickets table, from 006) means all six ran.
   if docker exec "$NAME" psql -U restaurant_app -d restaurant_platform -tAc \
-      "SELECT 1 FROM information_schema.columns WHERE table_name='ticket_timing_summaries' AND column_name='origin'" 2>/dev/null | grep -q 1; then
+      "SELECT 1 FROM information_schema.tables WHERE table_name='twin_open_tickets'" 2>/dev/null | grep -q 1; then
     break
   fi
   sleep 2

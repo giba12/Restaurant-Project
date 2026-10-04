@@ -78,3 +78,27 @@ def test_the_consumer_covers_exactly_the_raw_event_schemas():
     source = (ROOT / "storage" / "consumer" / "consumer.py").read_text()
     mapped = set(re.findall(r'\("(\w+)", "\1\.schema\.json"\)', source))
     assert mapped == set(RAW_EVENT_SCHEMAS), f"consumer maps {mapped}, schemas define {set(RAW_EVENT_SCHEMAS)}"
+
+
+def test_every_migration_has_an_identical_chart_copy_and_is_registered_everywhere():
+    # The SQL migrations exist twice (storage/schema and the Helm chart's files/) and are
+    # listed in four more places. A stale copy once caused weeks of confusing column errors
+    # (DEF-053), and a migration missing from any one list fails only on the path that list
+    # serves (RSK-018). Each migration must be byte-identical in the chart and named in all
+    # of them: Compose, the chart's ConfigMap and init Job, the integration harness and
+    # the migration test.
+    migrations = sorted((ROOT / "storage" / "schema").glob("[0-9][0-9][0-9]_*.sql"))
+    assert len(migrations) >= 6, "migrations not found"
+    registers = {
+        "docker-compose.yml": (ROOT / "docker-compose.yml").read_text(),
+        "the chart's schema ConfigMap": (ROOT / "k8s" / "timescaledb" / "templates" / "schema-configmap.yaml").read_text(),
+        "the chart's schema-init Job": (ROOT / "k8s" / "timescaledb" / "templates" / "schema-init-job.yaml").read_text(),
+        "tests/integration/run_db_tests.sh": (ROOT / "tests" / "integration" / "run_db_tests.sh").read_text(),
+        "tests/integration/test_migrations_db.py": (ROOT / "tests" / "integration" / "test_migrations_db.py").read_text(),
+    }
+    for migration in migrations:
+        copy = ROOT / "k8s" / "timescaledb" / "files" / migration.name
+        assert copy.exists(), f"{migration.name} has no copy in k8s/timescaledb/files"
+        assert copy.read_bytes() == migration.read_bytes(), f"{migration.name} has drifted from its chart copy"
+        for where, text in registers.items():
+            assert migration.name in text, f"{migration.name} is not registered in {where}"

@@ -167,6 +167,25 @@ def test_an_mqtt_broker_restart_is_survived():
     assert all(state == "RUNNING" for state in states.values()), states
 
 
+def test_connector_tasks_that_failed_at_startup_are_restarted_automatically():
+    # DEF-137, reproduced on purpose. With the MQTT broker stopped its hostname does not
+    # resolve, so Kafka Connect's tasks fail as they start (`UnknownHostException: mosquitto`,
+    # the failure a transient DNS fault caused on two real starts). Kafka Connect never
+    # restarts a failed task, so before the supervisor existed they stayed FAILED after the
+    # broker came back and the pipeline ingested nothing. The supervisor must notice and restart them.
+    pipeline_is_flowing()
+    compose("stop", "mosquitto", timeout=120)
+    compose("restart", "kafka-connect", timeout=240)
+    wait_for(lambda: any(state == "FAILED" for state in stack.connector_states().values()), 300, interval=5,
+             description="a connector task to fail while the broker's name does not resolve (the precondition of this test)")
+
+    compose("start", "mosquitto", timeout=120)
+    wait_for(lambda: all(state == "RUNNING" for state in stack.connector_states().values()), 180, interval=5,
+             description="the supervisor to restart the failed tasks")
+    pipeline_is_flowing()
+    quiesce_and_check_nothing_was_lost_or_duplicated()
+
+
 # ------------------------------------------------------------------ the whole thing is stopped and restarted
 
 def test_stopping_and_restarting_the_whole_stack_preserves_data():

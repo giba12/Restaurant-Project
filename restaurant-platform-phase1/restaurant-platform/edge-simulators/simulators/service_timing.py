@@ -2,7 +2,8 @@ import os
 import random
 import time
 
-from common import world
+from common import scenario as scenario_control
+from common import staffing, world
 from common.ids import new_event_id, now_iso
 from common.runtime import Simulator
 
@@ -11,31 +12,29 @@ STAGES = ["order_fired", "cook_started", "plated", "picked_up_by_server", "deliv
 MAX_OPEN_TICKETS = int(os.environ.get("MAX_OPEN_TICKETS", "8"))
 MAX_STAGE_AGE_SECONDS = int(os.environ.get("MAX_STAGE_AGE_SECONDS", "300"))
 SCENARIO_CONTROL_ENABLED = os.environ.get("SCENARIO_CONTROL_ENABLED", "false").lower() == "true"
-# Removing a station from the assignable pool (see _available_stations)
-# only changes which station NEW tickets land on -- on its own it has no
-# effect on any ticket's own pickup_delay_ms/cook_duration_ms, since a
-# ticket's odds of being picked to advance on any given tick are just
-# 1/len(open_tickets), independent of which station it's at. Two other
-# mechanisms were considered and rejected before this one:
+# Removing a station from the assignable pool (see _available_stations) only
+# changes which station NEW tickets land on -- on its own it has no effect on
+# any ticket's own pickup_delay_ms/cook_duration_ms, since a ticket's odds of
+# being picked to advance on any given tick are just 1/len(open_tickets),
+# independent of which station it's at. Two mechanisms were considered and
+# rejected before the one used here:
 #   - Weighting ticket selection by station doesn't work: once every open
-#     ticket shares the same (reduced) relative weight -- which happens
-#     quickly once pre-scenario tickets at the removed station drain out
-#     -- the selection distribution is uniform again and the effect
-#     self-cancels. It can only ever produce a brief transient, not a
-#     sustained one.
+#     ticket shares the same (reduced) relative weight the selection
+#     distribution is uniform again and the effect self-cancels.
 #   - A real time.sleep() inside next_event() would block the single
-#     simulator thread entirely, freezing every station's event
-#     generation, not just the affected ones -- far too heavy-handed, and
-#     not how a real short-staffed kitchen behaves (other stations keep
-#     moving).
-# Instead: let backlog grow. Raising the effective open-ticket cap during
-# a shortage means more tickets compete for the same fixed tick budget,
-# which genuinely and sustainedly lowers each one's average pick
-# frequency -- exactly what "the same staff now covering a bigger queue"
-# should look like, and it doesn't self-cancel because the elevated cap
-# persists for the scenario's whole duration, not just until some
-# transient population drains.
-STAFFING_SHORTAGE_BACKLOG_MULTIPLIER = float(os.environ.get("STAFFING_SHORTAGE_BACKLOG_MULTIPLIER", "5"))
+#     simulator thread, freezing every station's event generation, not just
+#     the affected ones.
+# What does work is letting the backlog grow: more open tickets competing for
+# the same fixed tick budget genuinely and sustainedly lowers each one's
+# average pick frequency. How large the backlog may grow is set by how many
+# people are working: capacity is inversely proportional to the staffing level
+# (common/staffing.py), so a staffing shortage -- staff clocked out by the
+# staff-shift simulator -- slows the kitchen *because staffing fell*, and the
+# causal engine's `staffing_level` treatment is the true cause in this data.
+# (Until 2026-10-04 a direct x5 multiplier on this cap, applied while a
+# scenario was active, did the slowing without touching staffing at all, so the
+# analysed variable and the injected cause were unrelated; DEF-141.)
+MIN_OPEN_TICKETS = 2
 
 class TicketLifecycle:
     """
@@ -50,8 +49,11 @@ class TicketLifecycle:
     continuous runtime rather than only over a short-lived test run.
     """
 
-    def __init__(self, active_scenario_getter=None):
+    def __init__(self, active_scenario_getter=None, staffing_getter=None):
         self.open_tickets: dict[str, dict] = {}
+        # Callable returning the current staffing level (staff clocked in) or
+        # None while it is not yet known; None means the nominal backlog.
+        self._staffing_getter = staffing_getter
         # Callable returning the currently active scenario dict (or None),
         # injected by main() when SCENARIO_CONTROL_ENABLED is true. Kept as
         # an optional callback rather than a hard dependency so this class
@@ -81,15 +83,12 @@ class TicketLifecycle:
 
     def _effective_max_open_tickets(self) -> int:
         """
-        MAX_OPEN_TICKETS, scaled up by STAFFING_SHORTAGE_BACKLOG_MULTIPLIER
-        while a staffing_shortage scenario is active -- see the module-level
-        comment on that constant for why this (backlog growth), rather than
-        selection weighting or a blocking sleep, is the actual causal link
-        between an injected shortage and an observable timing metric.
+        MAX_OPEN_TICKETS scaled by the staffing level: capacity is inversely
+        proportional to the number of people working the kitchen (see
+        common/staffing.py and the module-level comment above).
         """
-        if self._active_staffing_shortage() is not None:
-            return int(MAX_OPEN_TICKETS * STAFFING_SHORTAGE_BACKLOG_MULTIPLIER)
-        return MAX_OPEN_TICKETS
+        level = self._staffing_getter() if self._staffing_getter is not None else None
+        return max(MIN_OPEN_TICKETS, int(round(MAX_OPEN_TICKETS * staffing.backlog_factor(level))))
 
     def _new_ticket(self) -> dict:
         return {
@@ -167,85 +166,22 @@ class TicketLifecycle:
         return event
 
 
-def _make_scenario_getter():
-    """
-    Only constructed when SCENARIO_CONTROL_ENABLED is true. Runs a
-    background thread consuming 'scenario-control-events' and exposes the
-    single most recent still-active scenario via a plain function, so
-    TicketLifecycle does not need any Kafka-client knowledge itself.
-    Import is deferred into this function so kafka-python is not a hard
-    dependency of this module when scenario control is disabled.
-    """
-    import json
-    import ssl
-    import threading
-    from kafka import KafkaConsumer
-
-    state = {"active": None}
-
-    # Same opt-in TLS pattern as services/phase5_common.py's KAFKA_TLS_KWARGS
-    # (kept local rather than imported -- this package is deliberately
-    # separate from services/, see phase5_common.py's own docstring):
-    # defaults to today's plaintext behavior, {}; a k8s chart switches this
-    # simulator over by setting KAFKA_SECURITY_PROTOCOL=SSL and mounting
-    # Strimzi's CA cert at KAFKA_SSL_CAFILE's path.
-    #
-    # ssl_context, not ssl_cafile: kafka-python 2.0.2's own internal
-    # SSLContext construction fails the handshake against this broker
-    # outright, for reasons that don't trace to the cert, hostname, or
-    # network path -- confirmed live by hand-rolling the same handshake with
-    # plain ssl.create_default_context(), which negotiates TLSv1.3
-    # successfully. ssl_context sidesteps kafka-python's own construction
-    # entirely (see services/phase5_common.py's longer note on this).
-    _security_protocol = os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")
-    _tls_kwargs = (
-        {"security_protocol": _security_protocol,
-         "ssl_context": ssl.create_default_context(
-             cafile=os.environ.get("KAFKA_SSL_CAFILE", "/etc/kafka-tls/ca.crt"))}
-        if _security_protocol != "PLAINTEXT"
-        else {}
-    )
-
-    def _run():
-        consumer = KafkaConsumer(
-            "scenario-control-events",
-            # Dead in practice: k8s/edge-simulators's chart always sets this
-            # explicitly (see services/phase5_common.py's identical note on
-            # why this is :9093, not the removed plaintext :9092, since
-            # 2026-09-25).
-            bootstrap_servers=os.environ.get(
-                "KAFKA_BOOTSTRAP_SERVERS",
-                "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9093",
-            ),
-            api_version=(2, 8, 0),  # required -- automatic negotiation fails against Kafka 4.3.1
-            value_deserializer=lambda v: json.loads(v.decode("utf-8")),
-            group_id="service-timing-scenario-control",
-            **_tls_kwargs,
-        )
-        for msg in consumer:
-            control = msg.value
-            if control.get("target") not in (None, "service-timing", "all"):
-                continue
-            if control.get("action") == "start":
-                state["active"] = control
-            elif control.get("action") == "end":
-                if state["active"] and state["active"].get("scenario_injection_id") == control.get(
-                    "scenario_injection_id"
-                ):
-                    state["active"] = None
-
-    threading.Thread(target=_run, daemon=True).start()
-    return lambda: state["active"]
-
-
 def main():
-    active_scenario_getter = _make_scenario_getter() if SCENARIO_CONTROL_ENABLED else None
-    lifecycle = TicketLifecycle(active_scenario_getter=active_scenario_getter)
+    active_scenario_getter = (
+        scenario_control.make_scenario_getter("service-timing-scenario-control", (None, "service-timing", "all"))
+        if SCENARIO_CONTROL_ENABLED
+        else None
+    )
+    level = staffing.StaffingLevel()
+    lifecycle = TicketLifecycle(active_scenario_getter=active_scenario_getter, staffing_getter=level)
     sim = Simulator(
         sensor_type="service-timing",
         schema_filename="ServiceTimingEvent.schema.json",
         mqtt_topic="sensors/service-timing",
     )
+    # Staffing is shared simulated-world state, published (retained) by the
+    # staff-shift simulator; this one only listens.
+    sim.subscribe(staffing.STAFFING_TOPIC, level.on_message)
     sim.run_forever(lifecycle.next_event)
 
 

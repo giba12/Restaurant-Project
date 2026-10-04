@@ -30,6 +30,37 @@ SERVICE_TIMING_TOPIC = "service-timing-events"
 STAFF_SHIFT_TOPIC = "staff-shift-events"
 
 
+# The same statement as storage/schema/006_twin_open_tickets.sql (a test checks they match):
+# run at start-up so a database created before that migration still has the table.
+ENSURE_OPEN_TICKETS_SQL = """
+CREATE TABLE IF NOT EXISTS twin_open_tickets (
+    ticket_id   TEXT PRIMARY KEY,
+    station_id  TEXT,
+    opened_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_twin_open_tickets_station ON twin_open_tickets (station_id);
+"""
+
+
+def ensure_schema(conn):
+    with conn.cursor() as cur:
+        cur.execute(ENSURE_OPEN_TICKETS_SQL)
+    conn.commit()
+
+
+def _set_station_count(cur, station_id: str):
+    """Make a station's count the number of open tickets it has: derived, never incremented."""
+    cur.execute(
+        """
+        INSERT INTO twin_station_state (station_id, open_ticket_count, updated_at)
+        VALUES (%(station_id)s, (SELECT count(*) FROM twin_open_tickets WHERE station_id = %(station_id)s), now())
+        ON CONFLICT (station_id) DO UPDATE SET
+            open_ticket_count = EXCLUDED.open_ticket_count, updated_at = now()
+        """,
+        {"station_id": station_id},
+    )
+
+
 def handle_service_timing(conn, event: dict):
     stage = event["stage"]
     table_id = event.get("table_id")
@@ -50,15 +81,17 @@ def handle_service_timing(conn, event: dict):
                     {"table_id": table_id, "ts": event["timestamp"], "ticket_id": ticket_id},
                 )
             if station_id:
+                # A set, not a counter: a redelivered order_fired finds the ticket already
+                # there and changes nothing, so at-least-once delivery cannot inflate the count.
                 cur.execute(
                     """
-                    INSERT INTO twin_station_state (station_id, open_ticket_count, updated_at)
-                    VALUES (%(station_id)s, 1, now())
-                    ON CONFLICT (station_id) DO UPDATE SET
-                        open_ticket_count = twin_station_state.open_ticket_count + 1, updated_at = now()
+                    INSERT INTO twin_open_tickets (ticket_id, station_id, opened_at)
+                    VALUES (%(ticket_id)s, %(station_id)s, %(ts)s)
+                    ON CONFLICT (ticket_id) DO NOTHING
                     """,
-                    {"station_id": station_id},
+                    {"ticket_id": ticket_id, "station_id": station_id, "ts": event["timestamp"]},
                 )
+                _set_station_count(cur, station_id)
         elif stage == "delivered":
             if table_id:
                 cur.execute(
@@ -71,16 +104,12 @@ def handle_service_timing(conn, event: dict):
                     """,
                     {"table_id": table_id},
                 )
+            # The station the ticket was opened at, if the twin saw it open; otherwise the event's own.
+            cur.execute("DELETE FROM twin_open_tickets WHERE ticket_id = %(ticket_id)s RETURNING station_id", {"ticket_id": ticket_id})
+            row = cur.fetchone()
+            station_id = (row[0] if row else None) or station_id
             if station_id:
-                cur.execute(
-                    """
-                    INSERT INTO twin_station_state (station_id, open_ticket_count, updated_at)
-                    VALUES (%(station_id)s, 0, now())
-                    ON CONFLICT (station_id) DO UPDATE SET
-                        open_ticket_count = GREATEST(twin_station_state.open_ticket_count - 1, 0), updated_at = now()
-                    """,
-                    {"station_id": station_id},
-                )
+                _set_station_count(cur, station_id)
     conn.commit()
 
 
@@ -149,6 +178,7 @@ def main():
         auto_offset_reset="earliest",
     )
     conn = common.pg_connect()
+    ensure_schema(conn)
 
     log.info("digital-twin started, consuming %s", list(TOPIC_HANDLER.keys()))
     for msg in consumer:

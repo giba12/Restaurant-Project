@@ -7,43 +7,47 @@
 | Version | 1.0 |
 | Date | 2026-10-03, updated 2026-10-04 |
 | Baseline | Commit `4960c62` plus the edge-inference feature (the commit that follows it) |
-| Cycle | The 2026-10-02/03 production-style regime, one complete clean pass on 2026-10-03 (first cycle); a second cycle on 2026-10-03/04 after the edge-inference feature, which was not clean on its first attempt (sections 1, 2 and 6) |
+| Cycle | The 2026-10-02/03 production-style regime, one complete clean pass on 2026-10-03 (first cycle); a second cycle on 2026-10-03/04 after the edge-inference feature, which was not clean on its first attempt; a third on 2026-10-04 that fixed the open findings and re-ran what they touched (sections 1, 2 and 6) |
 | Environment | See `09-test-environment-and-configuration-baseline.md` (one laptop, rootless Podman) |
 
 ## 1. Verdict
 
-**First cycle (2026-10-03).** Every layer of the regime passed, apart from one test that deliberately fails because it records a known, unfixed defect (the digital twin's redelivery double-count). Building the regime found and fixed **two silent-data-loss defects** and several smaller ones, and surfaced **one significant weakness the project had been understating, the refutation gate, which was then repaired the same day** (section 3.4).
+**First cycle (2026-10-03).** Every layer of the regime passed, apart from one test that deliberately fails because it records a known, unfixed defect. Building the regime found and fixed **two silent-data-loss defects** and surfaced **one significant weakness the project had been understating, the refutation gate, which was then repaired the same day** (section 3.4).
 
-**Second cycle (2026-10-03/04), after the edge-inference feature.** On the final code: static 190 passed (3 skipped), unit 232, database integration 108 (1 expected failure), end-to-end 64, acceptance 3, load 4 and resilience 7 all passed. The statistical and security layers were not re-run (the code they test did not change). **It was not a clean first pass.** The heavy layers failed several times, for reasons recorded as DEF-133 to DEF-143: three real defects fixed on the way (the aggregator crashing on a backwards clock step, a per-message schema re-check that cost ingest throughput, and a harness check that could not see failed connector tasks), plus environment flakiness in this Podman set-up. **Three findings matter more than the passes:**
+**Second cycle (2026-10-03/04), after the edge-inference feature.** It was not a clean first pass: the heavy layers failed several times, for reasons recorded as DEF-133 to DEF-143. Three real defects were fixed on the way (the aggregator crashing on a backwards clock step, a per-message schema re-check that cost ingest throughput, a harness check that could not see failed connector tasks), and it surfaced three findings that mattered more than the passes: the injected staffing shortage's causal finding was refuted under the repaired gate (DEF-141, S2), a start-up DNS failure could leave every connector task failed with nothing to restart them (DEF-137), and Kafka Connect took about six minutes to resume after a Kafka restart (DEF-142).
 
-1. **Under the repaired gate, the injected staffing shortage's causal finding is refuted** (effect p = 0.95, DEF-141, S2, open). The platform detects and localises the shortage (4.4x slowdown, 103 anomalies at the loaded stations, none at the removed one) but does not demonstrate a causally valid attribution to staffing, because the scenario never changes the staff-shift events the analysis uses as its treatment.
-2. **Kafka Connect takes about six minutes to resume after a Kafka restart in this environment** (DEF-142, open): that test failed in five of six runs on 2026-10-03/04 and passed once, identically on the code from before the feature.
-3. **A start-up DNS failure can leave every connector task failed, and nothing restarts them** (DEF-137, open; cause proven this cycle, two bad starts in about fourteen).
+**Third cycle (2026-10-04), fixing those findings and re-running what they touch.** All three are addressed, and so are the other open items that could be fixed:
+- **DEF-141, fixed and verified live.** The simulated world now contains the relationship the analysis depends on (staffing drives the kitchen's capacity; the shortage clocks staff out). In two independent acceptance runs the finding for the injected shortage **passes the repaired refutation gate** (effect -2,399 ms per additional staff member, p = 4.8e-6; and -2,098 ms, p = 5.2e-4) and is promoted by the live reviewer. The effect is one the simulation was designed to contain: this shows the pipeline recovers a real effect, not that a real kitchen has this one.
+- **DEF-137, fixed and verified live.** A connector supervisor restarts failed tasks; the failure was reproduced on purpose and the supervisor healed it, and the same test **fails with the supervisor stopped**.
+- **DEF-142, mitigated, not verified live.** The same supervisor restarts a connector left unassigned, but the stall did not recur in the one run since, so that handling is verified by unit tests only.
+- **DEF-107** (the twin double-counting a redelivered order) and **DEF-056** (stalled tickets blinding the anomaly detector) are fixed and tested; the integration layer now has no expected failures. **DEF-128** (no coverage measure) is closed by a measurement (section 3.6).
+
+On the final code, every layer was re-run and passed: static 191 (3 skipped), unit 275, database integration 116, end-to-end 65, acceptance 4, resilience 7 (plus the new supervisor test, run separately), load 4, statistical 14, security 11.
 
 | | |
 |---|---|
-| Requirements | 92 identified: 68 verified by automated test, 6 by inspection, 8 live or manual only, 8 partial, 1 not verified, **1 not met** |
-| Open defects | 12 (one S2, four S3 and seven informational) |
+| Requirements | 96 identified: 73 verified by automated test, 6 by inspection, 8 live or manual only, 8 partial, 1 not verified, **0 not met** |
+| Open defects | 6, none above informational (DEF-015, DEF-091, DEF-093, DEF-123, DEF-131, DEF-143) |
 | Recommendation | **Ready to show, with caveats; not "released"** (`10-release-readiness-and-known-issues.md`) |
 
-**The limits that matter most:** one machine and one container engine; the new CI workflows have never run on GitHub; the heavy layers are flaky in this environment (the resilience layer needed six runs to produce one clean pass), so their stability is unmeasured; there is no independent reviewer.
+**The limits that matter most:** one machine and one container engine; the new CI workflows have never run on GitHub; the heavy layers are flaky in this environment (the resilience layer needed six runs in the second cycle to produce one clean pass), so their stability is unmeasured; the staffing effect and the edge sensors are designs of the simulation, so passing shows the pipeline works, not that the real world behaves so; there is no independent reviewer.
 
 ## 2. Results by layer
 
 | # | Layer | Result | Time | Last run | Notes |
 |---|---|---|---|---|---|
-| 1 | Static | **190 passed, 3 skipped** | about 45 s | 2026-10-04 | The 3 skips are documented exceptions (two operator-managed charts; the nginx image); lint ran |
-| 2 | Unit | **232 passed** | seconds per suite | 2026-10-04 | edge node and trainer 46, detector 19, aggregator and origin 33, causal engine 16, narrator 35, dashboard API 21, alert relay 5, game bridge 50, schema compatibility 7 |
-| 3 | Database integration | **108 passed, 1 expected-fail** | 104 s | 2026-10-04 | The expected-fail is the twin's redelivery double-count (DEF-107) |
-| 4 | Statistical | 14 passed | about 6 min | 2026-10-03 | **Not re-run** in the second cycle; the engine's analysis code did not change (only the plate-waste query's SQL) |
-| 5 | End-to-end | **64 passed, 3 skipped** | 11 min 50 s | 2026-10-03/04 | The 3 skips are the slow acceptance tests; includes two new edge-inference tests |
-| 5 | Acceptance | **3 passed** | 12 min 36 s | 2026-10-04 | Passed, but the finding it checks was **refuted** (section 3.1, DEF-141) |
-| 6 | Resilience | **7 passed** (final run), 42 min 53 s | 2026-10-04 | Six runs in the second cycle: five aborted or failed (DEF-137, DEF-142, DEF-143), one clean; see section 6 |
-| 7 | Load | **4 passed** | 8 min 33 s | 2026-10-04 | Needed two fixes first (DEF-138, DEF-139); section 3.3 |
-| 8 | Security | 10 passed | 25 s | 2026-10-03 | **Not re-run**; no dependency changed except the trainer's new pins (not yet audited) |
+| 1 | Static | **191 passed, 3 skipped** | about 45 s | 2026-10-04 | The 3 skips are documented exceptions (two operator-managed charts; the nginx image); lint ran |
+| 2 | Unit | **275 passed** | seconds per suite | 2026-10-04 | edge node, world coupling and trainer 63, detector 25, aggregator and origin 33, causal engine 16, narrator 35, dashboard API 21, alert relay 5, game bridge 50, schema compatibility 7, connector supervisor 20 |
+| 3 | Database integration | **116 passed, no expected-fail** | 98 s | 2026-10-04 | The twin's redelivery double-count (DEF-107) is fixed, so the one expected-fail is gone |
+| 4 | Statistical | **14 passed** | 5 min 36 s | 2026-10-04 | Re-run on the final code: unchanged |
+| 5 | End-to-end | **65 passed, 4 skipped** | 8 min 27 s | 2026-10-04 | The 4 skips are the slow acceptance tests; includes the supervisor service and two edge-inference tests |
+| 5 | Acceptance | **4 passed** (two runs) | 12 min 34 s | 2026-10-04 | The finding for the injected shortage now **passes refutation** (section 3.1, DEF-141); a first run failed one new check because it measured staffing too late (DEF-145) |
+| 6 | Resilience | **7 passed** (full run, 40 min 54 s) and **1 passed** (the supervisor test, 9 min) | 2026-10-04 | The supervisor test fails with the supervisor stopped (5 min 29 s). Earlier in the cycle the layer needed six runs for one clean pass (DEF-137, DEF-142, DEF-143) |
+| 7 | Load | **4 passed** | 10 min | 2026-10-04 | Burst 35 events/s (45 in an earlier run), p95 latency 0.95 s, dashboard API p95 602 ms; the causal engine's one-off import +112 MB, every other service at most +1.5 MB |
+| 8 | Security | **11 passed** | 27 s | 2026-10-04 | One case per requirements file, now including the edge trainer's pins; no known vulnerabilities |
 | - | Godot client smoke test | Not re-run | - | 2026-09-30 (CI) | About 80 checks; passed on GitHub on 2026-09-30 |
 
-**Totals:** 353 distinct test names across the Python suites, plus the GDScript smoke test. The first cycle ran layers 5-7 as one pass of `bash tests/run_stack_tests.sh full`; in the second cycle each heavy layer was run separately, some of them several times (section 6).
+**Totals:** 396 distinct test names across the Python suites, plus the GDScript smoke test.
 
 ## 3. Measured results
 
@@ -51,14 +55,14 @@
 
 A staffing shortage was injected at `station-grill` for four minutes after a baseline.
 
-| Measure | First cycle (2026-10-03) | Second cycle (2026-10-04) |
-|---|---|---|
-| Mean pickup delay at the loaded stations | 5,141 ms before, 16,134 ms during: **3.1x** | 5,011 ms before, 22,066 ms during: **4.4x** |
-| Anomalies flagged at the loaded stations | **142** | **103** |
-| Anomalies flagged at the removed station | **1** | **0** |
-| A finding for the scenario | Stored with the scenario's id, in milliseconds; promoted by the live reviewer because its refutation passed | Stored with the scenario's id, in milliseconds; **refutation failed** (effect +169 ms per person, p = 0.95, placebo p = 0.98), so the reviewer correctly did **not** promote it |
+| Measure | First cycle (2026-10-03) | After the fix, run 1 (2026-10-04) | After the fix, run 2 (2026-10-04) |
+|---|---|---|---|
+| Staff clocked in | not measured | 9 at the start, 5 sampled after the controller returned (too late; the roster was refilling) | 9 at the start, **2** in the middle |
+| Mean pickup delay at the loaded stations | 5,141 ms to 16,134 ms: **3.1x** | 6,378 ms to 22,920 ms: **3.6x** | 6,497 ms to 19,097 ms: **2.9x** |
+| Anomalies at the loaded stations / at the removed station | **142 / 1** | **96 / 4** | **104 / 1** |
+| The finding for the scenario | Passed refutation, under the **original** gate that passed most noise | Passes refutation: effect **-2,399 ms** per additional staff member, p = 4.8e-6, placebo p = 0.94; promoted | Passes refutation: effect **-2,098 ms**, p = 5.2e-4, placebo p = 0.96; promoted |
 
-**Read the last row carefully.** The first-cycle verdict was reached under the original refutation gate, which passed 78% to 87% of pure-noise findings (DEF-106). Once the gate was repaired, the same kind of finding for this scenario is refuted, because the injected shortage works by growing the timing simulator's backlog and never changes the staff-shift events from which `staffing_level` is computed: the treatment the engine analyses does not move with the injected cause (DEF-141). The acceptance test passes in both cases because its assertion is that a finding is promoted if and only if its refutation passed. One run observed the refuted verdict; the mechanism, not that p-value, is the claim.
+Between the first cycle and these runs the repaired gate **refuted** this finding (effect +169 ms, p = 0.95, DEF-141), because the simulated world contained no staffing effect: the shortage slowed the kitchen directly and never changed the staff-shift events the analysis uses. The world now encodes the relationship, with staffing driving the kitchen's capacity and the shortage clocking staff out, and the analysis window includes the baseline so there is contrast. The sign is right (more staff, shorter delay) and the finding is promoted by the running reviewer. The two p-values differ by two orders of magnitude, both far below the 0.01 threshold; the margin has been measured twice. The effect is a designed property of the simulation, so this shows the pipeline recovers an effect that is truly there, not that a real kitchen has one.
 
 ### 3.2 Reliability (resilience)
 
@@ -70,9 +74,10 @@ The invariant checked after every fault: **every message written to Kafka is sto
 | `SIGKILL` of the storage consumer under traffic | Restarted by the platform; invariant held |
 | `SIGKILL` of the aggregator | Restarted; new summaries resumed |
 | Database stopped for 25 s and restarted | Storage, aggregation, twin and dashboard all recovered unaided; invariant held |
-| Kafka restarted | First cycle: connectors returned to `RUNNING`; invariant held. **Second cycle: the pipeline took about six minutes to resume and the test failed in five of six runs, identically on the code from before the edge feature (DEF-142)** |
+| Kafka restarted | First cycle: connectors returned to `RUNNING`; invariant held. Second cycle: the pipeline took about six minutes to resume and the test failed in five of six runs, identically on the code from before the edge feature (DEF-142). Third cycle: passed (twice), with the supervisor taking no action either time, so the stall did not recur |
 | MQTT broker restarted | Simulators and connectors reconnected |
 | Whole stack stopped and started | No rows or Kafka messages lost |
+| MQTT broker stopped while Kafka Connect restarts (new, DEF-137) | All four connector tasks fail as they start; the supervisor restarts them and they stay running once the broker is back; the same test fails with the supervisor stopped |
 
 ### 3.3 Performance (load)
 
@@ -105,21 +110,40 @@ Measured on the plate-waste node's on-device model (`edge-simulators/MODEL_CARD.
 
 The narrator's database role was attacked directly: it could not read any of the ten other tables, modify or delete findings, create or alter objects, grant itself access or act as a superuser. A classic injection string left the schema intact. No pinned dependency has a known advisory (one did; fixed).
 
+### 3.6 Code coverage (first measurement, 2026-10-04)
+
+Line coverage with `pytest-cov`, per module, **not gated in CI**:
+
+| Source | Unit suites | Notes |
+|---|---|---|
+| Edge model, sensors, staffing | 100% | |
+| Timing, staff-shift and plate-waste simulators | 91%, 83%, 83% | The POS simulator is 0% here (covered only by the schema-compatibility test) |
+| Simulator runtime | 36% | MQTT connection code that needs a broker |
+| Anomaly detector | 86% | |
+| Connector supervisor | 87% | |
+| Alert relay | 74% | |
+| Aggregator | 67% | |
+| Dashboard API | 57% (`comparison.py` 100%) | The routes are exercised by the integration layer |
+| Narrator | 53% | |
+| Causal engine | 44% | The estimation path needs DoWhy and runs in the statistical layer |
+
+The database integration layer alone covers 61% of the 651 statements in the consumer, twin, causal engine, detector, aggregator and dashboard API. A figure per module is not a figure for the project: the React interface and the shell scripts are unmeasured, and the statistical layer's coverage of the causal engine was not included.
+
 ## 4. Requirement coverage
 
 From `03-requirements-traceability-matrix.md`:
 
 | Result | Requirements |
 |---|---|
-| Verified (automated) | 68 |
+| Verified (automated) | 73 |
 | Verified by inspection | 6 |
 | Verified (live or manual only) | 8 |
 | Partially verified | 8 |
 | Not verified | 1 |
-| **Not met** | 1 |
-| **Total** | **92** |
+| **Not met** | 0 |
+| **Total** | **96** |
 
-**Not met:** FR-TWN-03 (twin counts should survive redelivery). FR-CAU-06 (the refutation gate should reject noise) was not met until it was repaired on 2026-10-03 and is now verified. **Not verified:** NFR-POR-03 (the Codespaces devcontainer). FR-ING-03 (the simulator's to-go effect) was closed in the second cycle by a test through the edge node. FR-CAU-03 (a finding carries the scenario's id) is verified, but the finding it checks is refuted (DEF-141), so the *attribution* the phase-5 done-condition is after is not demonstrated. The traceability matrix lists the weakly verified requirements and what would close each.
+**Not met:** none. FR-TWN-03 (twin counts correct under redelivery) was the last, and was fixed on 2026-10-04 (DEF-107); FR-CAU-06 (the gate rejects noise) was fixed on 2026-10-03. **Not verified:** NFR-POR-03 (the Codespaces devcontainer). Four requirements were added on 2026-10-04 and verified at once: FR-ING-07 (staffing is a real driver), FR-ANA-05 (robust control limits), FR-CAU-07 (the scenario's finding passes refutation) and NFR-REL-05 (self-healing connectors). The traceability matrix lists the weakly verified requirements and what would close each.
 
 ## 5. Defects
 
@@ -145,26 +169,30 @@ From `06-defect-log.md` (143 entries: 128 defects, 15 informational):
 | DEF-105 | Six unused imports or variables | S4 | Fixed |
 | DEF-106 | The refutation gate passed 78% to 87% of noise | S2 | **Fixed 2026-10-03**, guarded by four statistical tests |
 | DEF-129 | The placebo permutations were unseeded, so verdicts were not reproducible | S3 | Fixed, regression-tested |
-| DEF-107 | Twin open-ticket count double-counts on redelivery | S3 | **Open** |
+| DEF-107 | Twin open-ticket count double-counts on redelivery | S3 | **Fixed 2026-10-04**, tested |
 
-### Found in the second cycle (edge-inference feature and re-run)
+### Found in the second cycle (edge-inference feature and re-run), and what became of it
 
-| ID | Defect | Severity | Resolution |
+| ID | Defect | Severity | Status now |
 |---|---|---|---|
-| DEF-058 | The aggregator crashed on a negative duration; reproduced under load: the simulator's wall clock stepped backwards (15 to 549 ms, six times in one run) | S3 | Fixed: unknown duration, not a negative one; three tests |
-| DEF-133 | The per-reading out-of-distribution guard missed almost all of a slow sensor fault | S3 | Fixed: rolling drift monitor; subtle faults (fouling 0.2) still missed 40% of the time |
+| DEF-058 | The aggregator crashed on a negative duration (a backwards clock step) | S3 | Fixed, tested |
+| DEF-133 | The per-reading out-of-distribution guard missed a slow sensor fault | S3 | Fixed (rolling drift monitor); subtle faults (fouling 0.2) still missed 40% of the time |
 | DEF-134 | The trainer wrote `NaN` into the model artifact | S4 | Fixed, tested |
 | DEF-136 | The connector-health check could not see a failed task | S3 | Fixed, tested |
 | DEF-138 | The load test counted a one-off library import as a memory leak | S4 | Fixed |
-| DEF-139 | Per-message schema validation cost 30 to 60 ms and capped throughput; the larger schema made it worse | S3 | Fixed, tested: 11 to 12 became 45 events/s |
-| DEF-141 | **The injected shortage's finding is refuted under the repaired gate** | **S2** | **Open**: owner decision |
-| DEF-137 | A start-up DNS failure left every connector task failed; nothing restarts them | S3 | Open; cause proven |
-| DEF-142 | Kafka Connect took about six minutes to resume after a Kafka restart | S3 | Open |
-| DEF-143 | One full stop and start did not resume in time | Info | Open; cause unknown |
+| DEF-139 | Per-message schema validation capped throughput | S3 | Fixed, tested (11 to 12 became 45 events/s) |
+| DEF-141 | The injected shortage's finding was refuted under the repaired gate | **S2** | **Fixed, tested, verified live twice** |
+| DEF-137 | A start-up DNS failure left every connector task failed | S3 | **Fixed, tested, reproduced and verified live** |
+| DEF-142 | Kafka Connect took about six minutes to resume after a Kafka restart | S3 | Mitigated (supervisor); not verified on a live stall |
+| DEF-143 | One full stop and start did not resume in time | Info | Open; not reproduced since |
+| DEF-144 | I deleted three entries from the codebase guide | S4 | Fixed |
+| DEF-145 | My new staffing check measured too late | S4 | Fixed |
 
-### Open now (12)
+Also fixed in the third cycle: **DEF-107** (the twin's double-count on redelivery) and **DEF-056** (stalled tickets blinding the anomaly detector); **DEF-128** (no coverage measurement) is closed by section 3.6.
 
-DEF-141 (**S2**); DEF-107, DEF-056, DEF-137 and DEF-142 (S3); DEF-015, DEF-091, DEF-093, DEF-123, DEF-128, DEF-131 and DEF-143 (informational). **One S2 defect is open (DEF-141).**
+### Open now (6)
+
+DEF-015, DEF-091, DEF-093, DEF-123, DEF-131 and DEF-143, all informational. **No defect above informational is open.**
 
 ## 6. How the cycle went
 
@@ -194,6 +222,11 @@ The regime was not clean on its first runs, and the failures are recorded becaus
 | 2026-10-04 | Comparison on the code from before the edge feature | Kafka restart failed there too; full restart passed | Established that DEF-142 is not a regression |
 | 2026-10-04 | Resilience, aborted start | Stack not ready | A second start-up DNS failure; proven cause (DEF-137) |
 | 2026-10-04 | Resilience, final | **7 of 7 passed** | The first clean pass in the second cycle |
+| 2026-10-04 | Acceptance, after the staffing coupling (run 1) | 3 of 4 passed | The finding **passed refutation** (DEF-141 fixed); my new staffing check measured too late (DEF-145) |
+| 2026-10-04 | End-to-end, with the supervisor | 65 passed, 4 skipped | Clean |
+| 2026-10-04 | Acceptance (run 2) | **4 of 4 passed** | Finding passes again (p = 5.2e-4) |
+| 2026-10-04 | Resilience, full, with the supervisor | **7 of 7 passed** | The Kafka-restart test passed with the supervisor taking no action |
+| 2026-10-04 | Resilience, the new supervisor test | **Passed**; **failed** with the supervisor stopped | DEF-137 reproduced and its fix verified |
 
 ## 7. Effectiveness of the tests themselves (mutation checks)
 
@@ -228,7 +261,8 @@ These checks were ad hoc, not automated or exhaustive.
 - **Podman specifics.** Restart behaviour, socket state and load sensitivity are Podman's; they may differ on Docker.
 - **Warm cache.** All stack runs reused cached image layers, so cold-start time is unmeasured.
 - **Retrospective ratings.** Severity and likelihood scores were assigned after the fact by the assistant that helped build the system.
-- **The heavy layers are not stable here.** The resilience layer needed six runs in the second cycle to produce one clean pass, and its Kafka-restart test failed in five of six runs on both the old and the new code. A single green run is weak evidence in this environment.
+- **The heavy layers are not stable here.** The resilience layer needed six runs in the second cycle to produce one clean pass, and its Kafka-restart test failed in five of six runs on both the old and the new code; it then passed in the next two. A single green run is weak evidence in this environment, and the supervisor's handling of that stall is not shown on a live stall.
+- **Designed effects.** The plate-waste to-go effect, the staffing effect and the edge sensors are all properties the simulation was built to contain. Passing tests show the pipeline recovers what is there; they do not show a real restaurant behaves so.
 - **A figure that moved.** The refutation-gate measurement changed from 87% to 77% between runs because its permutations were unseeded; the repaired gate is seeded and reproducible.
 - **Passing is not proof of meaning.** The narrator's checks are mechanical; the statistical layer proves the estimator on synthetic data, not on a real restaurant.
 

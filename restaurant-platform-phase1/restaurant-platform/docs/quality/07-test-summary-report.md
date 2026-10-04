@@ -27,11 +27,13 @@ On the final code, every layer was re-run and passed: static 191 (3 skipped), un
 
 | | |
 |---|---|
-| Requirements | 96 identified: 73 verified by automated test, 6 by inspection, 8 live or manual only, 8 partial, 1 not verified, **0 not met** |
+| Requirements | 96 identified: 73 verified by automated test, 6 by inspection, 9 live or manual only, 7 partial, 1 not verified, **0 not met** |
 | Open defects | 5, all informational (DEF-015, DEF-091, DEF-093, DEF-123, DEF-131) |
 | Recommendation | **Ready to show, with caveats; not "released"** (`10-release-readiness-and-known-issues.md`) |
 
-**The limits that matter most:** one machine and one container engine; the new CI workflows have never run on GitHub; the heavy layers are flaky in this environment (the resilience layer needed six runs in the second cycle to produce one clean pass), so their stability is unmeasured; the staffing effect and the edge sensors are designs of the simulation, so passing shows the pipeline works, not that the real world behaves so; there is no independent reviewer.
+**Fourth step (2026-10-04): the first GitHub runs.** The commits were pushed once, with permission, and the new workflows ran on GitHub's runners (Docker Engine, Compose v2, a clean cold-cache machine). `tests`: all 13 jobs green on the first run of the new ones. The nightly workflow, triggered by hand: statistical 14 of 14 (64 s), security 11 of 11, and in the stack job acceptance 4 of 4 (9 min), load 4 of 4 (55 s), resilience 8 of 8 (11 min), e2e 63 passed and **2 failed**, both genuine: a harness helper that relied on Compose v1 listing exited containers (DEF-146) and a twin that created a staff row with no status when its history was incomplete (DEF-147). Both are fixed and verified locally (integration 118, e2e 65); **neither fix has been re-run on GitHub** because the push permission was for one push. The whole stack built and started cold in 3 min 22 s on the clean runner.
+
+**The limits that matter most:** one machine and one container engine; the two e2e fixes from the first GitHub run are not yet re-run there; the heavy layers are flaky in this environment (the resilience layer needed six runs in the second cycle to produce one clean pass), so their stability is unmeasured; the staffing effect and the edge sensors are designs of the simulation, so passing shows the pipeline works, not that the real world behaves so; there is no independent reviewer.
 
 ## 2. Results by layer
 
@@ -39,7 +41,7 @@ On the final code, every layer was re-run and passed: static 191 (3 skipped), un
 |---|---|---|---|---|---|
 | 1 | Static | **192 passed, 3 skipped** | about 45 s | 2026-10-04 | The 3 skips are documented exceptions (two operator-managed charts; the nginx image); lint ran |
 | 2 | Unit | **275 passed** | seconds per suite | 2026-10-04 | edge node, world coupling and trainer 63, detector 25, aggregator and origin 33, causal engine 16, narrator 35, dashboard API 21, alert relay 5, game bridge 50, schema compatibility 7, connector supervisor 20 |
-| 3 | Database integration | **116 passed, no expected-fail** | 98 s | 2026-10-04 | The twin's redelivery double-count (DEF-107) is fixed, so the one expected-fail is gone |
+| 3 | Database integration | **118 passed, no expected-fail** | 107 s | 2026-10-04 | The twin's redelivery double-count (DEF-107) is fixed, so the one expected-fail is gone |
 | 4 | Statistical | **14 passed** | 5 min 36 s | 2026-10-04 | Re-run on the final code: unchanged |
 | 5 | End-to-end | **65 passed, 4 skipped** | 8 min 27 s | 2026-10-04 | The 4 skips are the slow acceptance tests; includes the supervisor service and two edge-inference tests |
 | 5 | Acceptance | **4 passed** (two runs) | 12 min 34 s | 2026-10-04 | The finding for the injected shortage now **passes refutation** (section 3.1, DEF-141); a first run failed one new check because it measured staffing too late (DEF-145) |
@@ -138,8 +140,8 @@ From `03-requirements-traceability-matrix.md`:
 |---|---|
 | Verified (automated) | 73 |
 | Verified by inspection | 6 |
-| Verified (live or manual only) | 8 |
-| Partially verified | 8 |
+| Verified (live or manual only) | 9 |
+| Partially verified | 7 |
 | Not verified | 1 |
 | **Not met** | 0 |
 | **Total** | **96** |

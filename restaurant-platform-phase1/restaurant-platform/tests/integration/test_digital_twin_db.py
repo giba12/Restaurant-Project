@@ -149,6 +149,27 @@ def test_the_twins_own_copy_of_the_table_definition_matches_the_migration():
     assert statements(twin.ENSURE_OPEN_TICKETS_SQL) == statements(migration)
 
 
+def test_a_reassignment_for_staff_the_twin_never_saw_clock_in_is_recorded_as_on_shift_not_as_nothing(conn):
+    # Found on GitHub's runner (2026-10-04): the twin held a staff row with no status. Events
+    # published before the MQTT bridge subscribes are lost, and a twin can start mid-stream, so it
+    # can meet a reassignment before (or without) the clock-in. A reassignment means the person is
+    # working; the row must never have an invalid status.
+    twin.handle_staff_shift(conn, factory.staff_shift_event("station_reassign", staff_id="s9", role="line_cook", station_id="station-grill"))
+    status, station, since, role = staff_state(conn, "s9")
+    assert (status, station, role) == ("on_shift", "station-grill", "line_cook")
+    assert since is None, "the start of the shift is unknown, and must not be invented"
+    twin.handle_staff_shift(conn, factory.staff_shift_event("clock_in", staff_id="s9", role="line_cook"))
+    assert staff_state(conn, "s9")[2] is not None, "a later clock-in supplies the start time"
+
+
+def test_a_reassignment_keeps_the_status_of_staff_the_twin_already_knows(conn):
+    twin.handle_staff_shift(conn, factory.staff_shift_event("clock_in", staff_id="s8", role="line_cook"))
+    twin.handle_staff_shift(conn, factory.staff_shift_event("break_start", staff_id="s8", role="line_cook"))
+    twin.handle_staff_shift(conn, factory.staff_shift_event("station_reassign", staff_id="s8", role="line_cook", station_id="station-saute"))
+    status, station, _, _ = staff_state(conn, "s8")
+    assert (status, station) == ("on_break", "station-saute")
+
+
 # ------------------------------------------------------------------ staff
 
 def test_a_staff_member_goes_through_a_whole_shift(conn):

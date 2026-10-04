@@ -6,7 +6,7 @@
 | Project | Restaurant Operations Digital Twin Platform |
 | Version | 1.0 |
 | Date | 2026-10-03 |
-| Status | Drawn from the 145 entries of `06-defect-log.md`; each lesson cites the entries that taught it |
+| Status | Drawn from the 147 entries of `06-defect-log.md`; each lesson cites the entries that taught it |
 
 ## 1. The short version
 
@@ -20,7 +20,7 @@
 
 ## 2. What the data says about how defects were found
 
-From the defect log (145 entries):
+From the defect log (147 entries):
 
 | Found by | Entries | Notes |
 |---|---|---|
@@ -29,7 +29,7 @@ From the defect log (145 entries):
 | The test regime's own runs and observations | 28 | Mostly defects *in the tests* (Part G), found by running them; eight found while building and verifying the edge feature (Part J), two of them in the author's own new work and one a blind spot in the harness |
 | The automated test regime | 7 | Including the statistical finding about the refutation gate (DEF-106) |
 | Chaos testing | 5 | Including the 10-hour silent outage (DEF-090, manual) and both silent-data-loss defects (DEF-100, DEF-101, automated) |
-| The rest | 10 | CI, the audit script, user reports, the done-condition attempt |
+| The rest | 12 | CI, the audit script, user reports, the done-condition attempt |
 
 **Of the 35 serious (S1 and S2) defects, none was found by a unit test.** 22 were found by live operation or deployment, 5 by static review before deployment, 3 by attempting the done condition with a real injected scenario, 3 by chaos testing, 1 by CI and 1 by the statistical test.
 
@@ -99,6 +99,10 @@ The causal engine had a `staffing_level` to pickup-delay analysis from the start
 ### 3.9d Make the failure reproducible before trusting the fix for it
 
 The connector supervisor (DEF-137) was only believed after the failure was reproduced deliberately (stop the broker so its name stops resolving, restart Kafka Connect) and the same test was shown to **fail with the supervisor stopped**. The sister failure (DEF-142, a six-minute stall after a Kafka restart) could not be reproduced on demand, so its fix is recorded as a mitigation verified by unit tests only; a test that passed once, with the supervisor taking no action, is not evidence for it. **A fix is as verified as the failure is reproducible.**
+
+### 3.9g A first run on a new platform finds the platform's assumptions
+
+The nightly workflow had never run anywhere but one laptop. Its first run on GitHub (Docker Engine, Compose v2, a clean cold-cache machine) passed acceptance 4 of 4, load 4 of 4, resilience 8 of 8, statistical 14 of 14 and security 11 of 11, and failed two e2e tests, both genuine: a helper that relied on Compose v1 listing exited containers (DEF-146) and a twin that created a staff row with no status when its history was incomplete (DEF-147). Neither showed in 300 local runs of the same test, because both depend on the environment's speed or version. **Passing tests in one environment is evidence about that environment; run the same tests somewhere different before claiming portability, and expect the first run to find something.**
 
 ### 3.9f Capture the logs of the failure, and read the timestamps
 

@@ -135,8 +135,13 @@ def handle_staff_shift(conn, event: dict):
         if action == "station_reassign":
             cur.execute(
                 """
-                INSERT INTO twin_staff_state (staff_id, role, station_id, updated_at)
-                VALUES (%(staff_id)s, %(role)s, %(station_id)s, now())
+                -- A reassignment means the person is working. If the twin has no record of them
+                -- (their clock-in never reached it: events published before the MQTT bridge
+                -- subscribed are lost, and a twin can start mid-stream) the row is created as
+                -- on_shift with an unknown start time, not with no status at all, which the
+                -- dashboard and the e2e invariant both treat as invalid. An existing row keeps its status.
+                INSERT INTO twin_staff_state (staff_id, role, status, station_id, updated_at)
+                VALUES (%(staff_id)s, %(role)s, 'on_shift', %(station_id)s, now())
                 ON CONFLICT (staff_id) DO UPDATE SET
                     station_id = EXCLUDED.station_id, updated_at = now()
                 """,

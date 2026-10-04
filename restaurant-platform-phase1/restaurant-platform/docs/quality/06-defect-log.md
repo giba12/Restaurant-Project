@@ -28,7 +28,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 
 ## Summary
 
-**145 entries** (130 defects and 15 informational difficulties), recorded between 2026-08 and 2026-10-03.
+**147 entries** (132 defects and 15 informational difficulties), recorded between 2026-08 and 2026-10-03.
 
 ### By severity
 
@@ -36,21 +36,21 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 |---|---|
 | S1 Critical | 6 |
 | S2 High | 30 |
-| S3 Medium | 45 |
-| S4 Low | 49 |
+| S3 Medium | 46 |
+| S4 Low | 50 |
 | Info | 15 |
-| **Total** | **145** |
+| **Total** | **147** |
 
 ### By status
 
 | Status | Count |
 |---|---|
-| Fixed+tested | 41 |
-| Fixed | 75 |
+| Fixed+tested | 42 |
+| Fixed | 76 |
 | Mitigated | 8 |
 | Clarified | 16 |
 | Open | 5 |
-| **Total** | **145** |
+| **Total** | **147** |
 
 ### By part (project period)
 
@@ -66,7 +66,8 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Part H: Discrepancies found while preparing the quality documents (2026-10-03) | 4 |
 | Part I: Found and fixed while repairing the refutation gate (2026-10-03) | 4 |
 | Part J: Found while building and verifying the edge-inference feature (2026-10-03) | 13 |
-| **Total** | **145** |
+| Part K: Found by the first GitHub runs (2026-10-04) | 2 |
+| **Total** | **147** |
 
 ### By how it was found
 
@@ -78,24 +79,24 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Automated test regime (2026-10-02) | 7 |
 | Chaos test | 5 |
 | Attempting the done condition | 3 |
-| CI or first push | 3 |
+| CI or first push | 5 |
 | User report | 3 |
 | Audit script | 1 |
-| **Total** | **145** |
+| **Total** | **147** |
 
 ### By class
 
 | Class | Count |
 |---|---|
 | Deployment | 22 |
-| Logic | 25 |
+| Logic | 26 |
 | Environment/tooling | 21 |
 | Test defect | 18 |
 | Observability | 9 |
 | Dependency | 6 |
 | Configuration | 6 |
 | Documentation | 7 |
-| Portability | 5 |
+| Portability | 6 |
 | Integration | 4 |
 | Contract | 4 |
 | Security | 4 |
@@ -105,7 +106,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Repository hygiene | 2 |
 | Operator error | 2 |
 | Code quality | 1 |
-| **Total** | **145** |
+| **Total** | **147** |
 
 ### Open items (5)
 
@@ -331,6 +332,14 @@ Found while adding an on-node model to the plate-waste simulator at the owner's 
 | DEF-143 | Environment | session | **One full stop and start of the stack did not resume ingesting within 240 seconds.** `test_stopping_and_restarting_the_whole_stack_preserves_data` failed once, in the first full seven-test resilience run on the final code (timed out waiting for rows to keep arriving), and passed in the next full run on the same code, in two runs of a shorter sequence on it, and in both the full and the shorter sequences on the code from before the edge feature. **Investigated 2026-10-04; probable cause removed, not proven.** A stress harness repeated the full stop and start 10 times on a quiet stack (ingestion resumed in 62 to 68 s every time) and 3 more times straight after a Kafka, MQTT or database disturbance (63 to 64 s); it never stalled, so the failure was **not reproduced**. What the harness did reproduce is DEF-142: a 300 s wait caused by Kafka Connect's default `scheduled.rebalance.max.delay.ms`. The one failure came in a full resilience run in which the Kafka-restart test had just stalled for that reason (DEF-142), so the likeliest explanation is that the same delay recurred around the full restart. That is an inference from timing and mechanism, not a demonstration. The setting is now zero in both deployments, and the full resilience layer, the sequence in which the failure occurred, then passed 8 of 8. Honest limit: one failure in the whole history, none in 13 stress cycles plus 3 full-layer runs since. | Info | Test-regime run or observation | Probable cause removed (see DEF-142); watch the nightly full resilience run. | Mitigated |
 | DEF-144 | Docs | review | **I deleted three entries from `CODEBASE-GUIDE.md`.** When writing the plate-waste node's entry on 2026-10-03 I replaced everything between two headings, and that range also held the entries for `pos_transaction.py`, `service_timing.py` and `staff_shift.py`; the edit was committed. Found a day later while documenting the staffing change. | S4 Low | Review (static or manual) | Restored from the earlier commit, with the timing and staff entries rewritten for the staffing coupling and a new entry for `common/staffing.py` and `common/scenario.py`. Nothing checks the guide covers every file (RSK-019). | Fixed |
 | DEF-145 | Test regime | session | **My new staffing acceptance check measured too late.** `test_the_shortage_lowers_the_staffing_level_the_analysis_uses` sampled staffing at the scenario's `ended` timestamp, taken after the controller's exec returns, by which time the staff simulator had begun refilling the roster: it saw 5 against a cap of 2, and failed although the world was right (the finding itself passed). | S4 Low | Test-regime run or observation | Staffing is now sampled in the middle of the shortage; the second acceptance run measured 9 at the start and 2 in the middle. | Fixed |
+## Part K. Found by the first GitHub runs (2026-10-04)
+
+Found when the new workflows ran on GitHub's runners for the first time (Docker Engine, Compose v2, a clean machine).
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-146 | Portability | first nightly run | **`container_id` broke on Compose v2.** The harness found a service's container with `compose ps -q`, which in Compose v2 lists only running containers, so the exited one-shot `kafka-connect-init` was not found (`IndexError`) and `test_the_one_shot_connector_registration_completed_successfully` failed on GitHub while passing locally under Compose v1. | S4 Low | CI or first push | `ps -a -q` (Compose v1 accepts the flag and lists the same containers), with a clear assertion when nothing is found. Verified locally (e2e 65 passed); **not yet re-run on GitHub**. | Fixed |
+| DEF-147 | Twin | first nightly run | **The twin held a staff row with no status.** A `station_reassign` for staff the twin has no record of inserted a row with a NULL status, which `test_the_digital_twin_mirrors_the_restaurant` (and the dashboard) treat as invalid. On GitHub's slower runner the likeliest cause is the MQTT bridge: Mosquitto does not queue messages for a subscriber that is not there yet, so a simulator's first clock-in can be published before the Connect task subscribes and never reach Kafka. **That cause is inferred, not shown** (the failed database was gone and the artifact holds container logs only); the twin should not invent an invalid state under incomplete history in any case. | S3 Medium | CI or first push | A reassignment for unknown staff now creates the row as `on_shift` with an unknown start time (a reassignment means the person is working); known staff keep their status. Two integration tests. **Not yet re-run on GitHub.** The loss of events published before the bridge subscribes is a property of the design, not addressed. | Fixed+tested |
 
 ## How the defects were found, and what that says about the process
 

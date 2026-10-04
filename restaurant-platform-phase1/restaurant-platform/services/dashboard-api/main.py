@@ -123,6 +123,45 @@ def anomalies_summary():
         return _rows_as_dicts(cur)
 
 
+@app.get("/api/edge/plate-waste")
+def edge_plate_waste(minutes: int = Query(default=60, ge=1, le=10080, description="How far back to look.")):
+    """
+    The plate-waste edge nodes as a fleet: for each node and the exact model it
+    ran, how many estimates it produced, how many it flagged untrustworthy, how
+    often its drift monitor was alarming, how long inference took, and whether
+    it is alarming right now. Ground truth does not exist in the field, so
+    health here means the node's own self-assessment, not accuracy.
+    """
+    with contextlib.closing(common.pg_connect()) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT source_id,
+                   raw_payload #>> '{edge_inference,model_id}'      AS model_id,
+                   raw_payload #>> '{edge_inference,model_version}' AS model_version,
+                   raw_payload #>> '{edge_inference,model_sha256}'  AS model_sha256,
+                   count(*)                                         AS readings,
+                   count(*) FILTER (WHERE (raw_payload #>> '{edge_inference,out_of_distribution}')::boolean) AS out_of_distribution,
+                   count(*) FILTER (WHERE (raw_payload #>> '{edge_inference,drift_suspected}')::boolean)     AS drift_suspected,
+                   (percentile_cont(0.5)  WITHIN GROUP (ORDER BY (raw_payload #>> '{edge_inference,inference_latency_ms}')::float))::float AS latency_ms_p50,
+                   (percentile_cont(0.95) WITHIN GROUP (ORDER BY (raw_payload #>> '{edge_inference,inference_latency_ms}')::float))::float AS latency_ms_p95,
+                   avg(estimated_waste_grams)::float                AS mean_estimated_grams,
+                   max("timestamp")                                 AS last_reading_at,
+                   (array_agg((raw_payload #>> '{edge_inference,drift_suspected}')::boolean ORDER BY "timestamp" DESC))[1] AS drifting_now
+            FROM plate_waste_events
+            WHERE "timestamp" >= now() - make_interval(mins => %(minutes)s)
+              AND raw_payload ? 'edge_inference'
+            GROUP BY source_id, model_id, model_version, model_sha256
+            ORDER BY last_reading_at DESC
+            """,
+            {"minutes": minutes},
+        )
+        nodes = _rows_as_dicts(cur)
+    for node in nodes:
+        node["out_of_distribution_rate"] = round(node["out_of_distribution"] / node["readings"], 4)
+        node["drift_rate"] = round(node["drift_suspected"] / node["readings"], 4)
+    return {"window_minutes": minutes, "nodes": nodes}
+
+
 def _fetch_event_rows(since: datetime, source_id: str | None) -> list[tuple]:
     """Player and crew stage events since `since` (the player's own, if source_id is given)."""
     with contextlib.closing(common.pg_connect()) as conn, conn.cursor() as cur:

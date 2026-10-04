@@ -26,7 +26,7 @@
     },
     "schema_version": {
       "type": "string",
-      "description": "Semantic version of this schema, e.g. '1.0.0'. Consumers must reject unknown major versions."
+      "description": "Semantic version of this schema, e.g. '1.0.0'. Consumers must reject unknown major versions. 1.1.0 added the optional edge_inference object; events without it remain valid 1.0.0 events."
     },
     "source_id": {
       "type": "string",
@@ -79,6 +79,43 @@
     "image_ref": {
       "type": ["string", "null"],
       "description": "Optional MinIO object key for a reference image. Null when no imaging stand-in is used."
+    },
+    "edge_inference": {
+      "type": "object",
+      "description": "Present (schema 1.1.0 and later) when estimated_waste_grams was produced by a model running on the node itself, from raw sensor channels, instead of being reported by a vendor system. Describes that model and the node's own assessment of whether to trust the estimate. Absent for sources that do no on-node inference.",
+      "required": ["model_id", "model_version", "model_sha256", "inference_latency_ms", "ood_score", "out_of_distribution"],
+      "properties": {
+        "model_id": { "type": "string" },
+        "model_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "model_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 over everything that determines the model's behaviour (weights, input statistics, guard calibration). Lets any stored estimate be tied to the exact model that produced it."
+        },
+        "inference_latency_ms": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Wall-clock time the node spent computing this estimate."
+        },
+        "ood_score": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Mahalanobis distance of this reading's sensor channels from the model's training data. Large means the inputs look unlike anything the model was trained on."
+        },
+        "out_of_distribution": {
+          "type": "boolean",
+          "description": "True when ood_score exceeds the threshold calibrated on held-out data. Estimates flagged true are excluded from causal analysis."
+        },
+        "drift_score": {
+          "type": ["number", "null"],
+          "description": "Rolling mean of squared ood_score over the node's last window of readings. Null until the window has filled (for example just after a restart)."
+        },
+        "drift_suspected": {
+          "type": "boolean",
+          "description": "True when drift_score exceeds its calibrated threshold: a sustained shift in the sensor inputs even though no single reading is anomalous (for example a fouled lens). False while drift_score is null."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

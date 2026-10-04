@@ -187,7 +187,7 @@ The game touches version 1 in exactly four places, all intentional: the shared c
 - **Purpose:** The reader's map of how this project knows it works.
 
 ### `docs/quality/` (added 2026-10-03)
-- **What it does:** A complete quality-document set, written retrospectively from the project's own records: a requirements specification (85 identified requirements), master test plan, requirements traceability matrix, SQA plan, risk register (30 risks), defect and difficulty log (132 entries, including failures of the test regime itself), test summary report, lessons learned, environment and configuration baseline, and a release-readiness assessment with known issues. `README.md` indexes them and holds a glossary.
+- **What it does:** A complete quality-document set, written retrospectively from the project's own records: a requirements specification (92 identified requirements), master test plan, requirements traceability matrix, SQA plan, risk register (34 risks), defect and difficulty log (143 entries, including failures of the test regime itself), test summary report, lessons learned, environment and configuration baseline, and a release-readiness assessment with known issues. `README.md` indexes them and holds a glossary.
 - **Why it works this way:** The project began from a design brief and a technical log, not formal requirements, so these documents state the requirements, show which test proves each, and list every failure honestly (including the open ones). They claim no compliance with IEEE or ISO standards. Their registers are checked by `tests/static/test_quality_docs.py`: ids must be unique and real, every requirement must be traced, every test cited must exist, and every summary total must match its rows.
 - **Connects to:** `TESTING.md` (the per-test catalogue), `restaurant-platform-implementation-status.md` (the original problem log whose items are cross-referenced in the defect log's Source column).
 - **Purpose:** The evidence trail a reviewer can read to judge how the project was verified, what failed, and what is still open.
@@ -264,9 +264,10 @@ The game touches version 1 in exactly four places, all intentional: the shared c
 Seven JSON Schema (draft 2020-12) files. Four describe events that leave a producer; three describe records the platform derives itself. All use `"additionalProperties": false`, so a producer that adds an unlisted field is rejected instead of silently widening the contract.
 
 ### `schemas/PlateWasteEvent.schema.json`
-- **What it does:** Defines one bussed-plate observation: waste grams, the menu items on the plate, an optional table, and a `confounder_flags` object (`to_go_container_used`, `declared_dietary_restriction`, `portion_size_variant`).
+- **What it does:** Defines one bussed-plate observation: waste grams, the menu items on the plate, an optional table, and a `confounder_flags` object (`to_go_container_used`, `declared_dietary_restriction`, `portion_size_variant`). Schema 1.1.0 adds an optional `edge_inference` object, present when the estimate was computed by a model on the node itself: model id, version, a SHA-256 over everything that determines the model's behaviour, inference latency, an out-of-distribution distance and flag, and a drift score and flag.
 - **Why it works this way:** The confounders are captured on the event itself so the causal engine does not have to infer them. That is the whole reason the original "waste means dissatisfaction" idea was replaced by causal inference: portion size, doggy-bag intent and dietary restriction all confound it.
-- **Connects to:** produced by `simulators/plate_waste.py`; validated by `common/runtime.py` and `storage/consumer/consumer.py`; stored in `plate_waste_events`; queried by `causal_engine.py`.
+The `edge_inference` block was added as an additive optional field, with no database migration: `plate_waste_events.raw_payload` (JSONB) already keeps the whole event, and the two consumers of the block (the causal-engine filter and the dashboard's edge view) read it by JSON path. The trade-off is that those paths are not indexed.
+- **Connects to:** produced by `simulators/plate_waste.py`; validated by `common/runtime.py` and `storage/consumer/consumer.py`; stored in `plate_waste_events`; queried by `causal_engine.py`; summarised by `dashboard-api`'s `/api/edge/plate-waste`.
 - **Purpose:** The contract for the plate-waste stream.
 
 ### `schemas/POSTransactionEvent.schema.json`
@@ -353,36 +354,61 @@ One image runs all four sensors; an environment variable picks which. Every simu
 - **Purpose:** Package markers, so `from common import world` and `simulators.plate_waste` resolve.
 
 ### `edge-simulators/simulators/plate_waste.py`
-- **What it does:** Generates plate-waste events. Waste is drawn from a normal distribution around 120 g, then multiplied by 0.25 when a to-go container is used (15% of plates). A dietary restriction is declared 10% of the time.
-- **Why it works this way:** The confounder relationship is encoded in the data on purpose. If waste were independent of the flags, the causal engine would have nothing real to detect. This is why a later analysis finds roughly a 90 g reduction from to-go containers.
-- **Connects to:** `common/runtime.py`, `common/world.py`; MQTT topic `sensors/plate-waste`.
-- **Purpose:** Source of the plate-waste stream and the ground truth for the waste finding.
+- **What it does:** The plate-waste node. The simulator still draws the true waste (normal around 120 g, times 0.25 when a to-go container is used on 15% of plates; a dietary restriction on 10%), but the node never sees it. It reads four simulated sensor channels for the plate (`edge_ai/sensor.py`), runs the on-node model (`edge_ai/model.py`) to estimate the grams, feeds the reading's out-of-distribution distance to a rolling drift monitor, and publishes the estimate together with an `edge_inference` block (model id, version and hash, latency, distance, drift score, and the two flags). `last_true_grams` keeps the truth simulator-side so tests can score the node; it is never published. `EDGE_LENS_FOULING` (0 to 1) injects a sensor fault.
+- **Why it works this way:** The confounder relationship is still encoded in the true waste on purpose, so the causal engine has something real to find in estimates that now come from a model. The model is loaded in `main()` before the event loop, because `Simulator.run_forever` logs and continues past errors raised while generating an event; a model that failed its integrity check inside the generator would be retried forever instead of stopping the pod.
+- **Connects to:** `common/runtime.py`, `common/world.py`, `edge_ai/`; MQTT topic `sensors/plate-waste`; `schemas/PlateWasteEvent.schema.json` (schema 1.1.0).
+- **Purpose:** Source of the plate-waste stream, the ground truth for the waste finding, and the project's edge-intelligence node.
 
-### `edge-simulators/simulators/pos_transaction.py`
-- **What it does:** Builds a sale of one to five line items with quantities, a 3% chance each line is voided, an 8% chance of a 10 to 20% discount, and a randomly chosen server and payment method. The total is computed consistently from the non-voided lines.
-- **Why it works this way:** The total is derived from the lines so the event is internally consistent, which the schema cannot enforce itself.
-- **Connects to:** `common/`; topic `sensors/pos-transaction`.
-- **Purpose:** Source of the POS stream.
+### `edge-simulators/edge_ai/__init__.py`
+- **What it does:** Empty. Makes `edge_ai` a package.
+- **Purpose:** Package marker.
 
-### `edge-simulators/simulators/service_timing.py`
-- **What it does:** Simulates kitchen tickets moving through the five stages. `TicketLifecycle` keeps open tickets in memory, picks one at random to advance (or starts a new one), and computes `elapsed_since_previous_stage_ms` from real time. Tickets are capped and forced forward when stale. When `SCENARIO_CONTROL_ENABLED` is true it also runs a background thread consuming `scenario-control-events`.
-- **Why it works this way:** The long comment at the top explains the design of the staffing-shortage perturbation. Removing a station only changes where new tickets land and does not slow any existing ticket. Weighting selection cancels itself out, and a real sleep would freeze the whole simulator. So an active shortage instead raises the open-ticket cap fivefold: the backlog grows, each ticket waits longer for its turn, and pickup delay rises for real. That mechanism was confirmed empirically (roughly 31 s baseline to 105 s during).
-- **Connects to:** `services/scenario-injection-controller` (via Kafka); `common/`; `kafka-python` with `api_version` pinned, loaded lazily so the module does not need Kafka when scenario control is off.
-- **Purpose:** The producer behind the anomaly detector and digital twin, and the vehicle for the injected-scenario test.
+### `edge-simulators/edge_ai/sensor.py`
+- **What it does:** The node's simulated sensing hardware: a load cell, a camera area channel, a depth channel and an ambient-light reading. `true_waste_grams` is the ground truth the simulator holds back; `read_sensors` turns it into four noisy readings; `lens_fouling` is the one fault knob. One plate in four carries 15 to 60 g of cutlery or napkin on the scale, so the scale alone is often wrong; the camera area saturates; dim light makes both camera channels noisier.
+- **Why it works this way:** The same module generates the simulator's readings and the trainer's data, so the two cannot drift apart. The channels are designed so that no single one is enough and fusing them genuinely helps, which is what makes a model worth running on the node. They are a stand-in, not measurements of real hardware.
+- **Connects to:** `simulators/plate_waste.py`, `training/train_plate_waste_model.py`, `test_edge_ai.py`.
+- **Purpose:** The raw signal the on-node model works from.
 
-### `edge-simulators/simulators/staff_shift.py`
-- **What it does:** `ShiftState` tracks who is clocked in so the sequence is plausible (no clock-out without a clock-in, no reassignment for someone off shift), then emits clock-in, clock-out, break and reassign events.
-- **Why it works this way:** Plausible sequences matter because the causal engine's `staffing_level` counts staff clocked in. State is in memory and resets on restart, which is accepted for a simulator.
-- **Connects to:** `common/`; topic `sensors/staff-shift`; consumed by the digital twin and the causal engine.
-- **Purpose:** Source of the staffing stream.
+### `edge-simulators/edge_ai/model.py`
+- **What it does:** The whole inference path of a small edge model, needing numpy only: standardise the four channels, a 4-16-8-1 network with int8 weights (dequantised once at load, float32 arithmetic), and a Mahalanobis distance from the training data. `EdgeModel` refuses to load an artifact whose SHA-256 over its behavioural fields does not match the hash it declares. `DriftMonitor` keeps a rolling mean of the squared distance over a window and alarms above a calibrated threshold. The size and latency budgets are constants here, enforced by tests.
+- **Why it works this way:** Two guards because measurement showed one is not enough: the per-reading flag catches gross outliers but, at lens fouling 0.4 where error is already five times worse, flags under 1% of readings; a rolling mean catches that. The hash makes any estimate traceable to the exact model and makes a corrupted or hand-edited artifact fail at startup instead of emitting plausible numbers.
+- **Connects to:** `edge_ai/plate_waste_edge_model.json`, `simulators/plate_waste.py`, `training/train_plate_waste_model.py`.
+- **Purpose:** The on-device model and its guards.
+
+### `edge-simulators/edge_ai/plate_waste_edge_model.json`
+- **What it does:** The trained model as data: int8 weights with per-layer scales, biases, the input statistics, the guard calibration, a `weights_sha256` over everything that determines behaviour, and a `card` of measured figures (accuracy, int8 versus float32, the guards' false-alarm rates and their response to a fouling lens). About 3.4 KB.
+- **Why it works this way:** Committed, so the artifact and its hash are the source of truth; retraining can differ in the last bits between scikit-learn versions. The card sits inside the file so the numbers cannot be separated from the model they describe, and `test_the_committed_card_matches_what_the_committed_artifact_does` keeps it honest.
+- **Connects to:** `edge_ai/model.py`, which loads it; the Dockerfile copies it into the image.
+- **Purpose:** The deployed model.
+
+### `edge-simulators/MODEL_CARD.md`
+- **What it does:** Plain-language model card generated from the artifact's own card: what the model is for, what it is and is not, accuracy, budgets, the two guards and the measured weakness of the per-reading one, how the platform uses the node's self-assessment, known limitations and how to retrain.
+- **Why it works this way:** It states the limits as plainly as the results: the sensors are a simulation designed by the author, nothing here is embedded firmware, and the drift monitor misses about 40% of subtle (fouling 0.2) onsets. Kept outside `edge_ai/` so it is not copied into the image.
+- **Purpose:** The honest description of the edge feature.
+
+### `edge-simulators/training/train_plate_waste_model.py`
+- **What it does:** The offline trainer (scikit-learn, not on the node). Draws training data from `edge_ai/sensor.py`, fits a 16-8 MLP, quantises the weights to int8, calibrates both guards on data the model never saw (99.9th percentile of clean readings), measures accuracy and the guards' response to a fouling lens through the deployed code path, and writes the artifact. Refuses to write NaN or infinity.
+- **Why it works this way:** All randomness is seeded. Everything the model card claims is measured here, through `EdgeModel` and `DriftMonitor`, not through a separate re-implementation.
+- **Connects to:** `edge_ai/`, `training/requirements.txt`; output `edge_ai/plate_waste_edge_model.json`.
+- **Purpose:** Reproducible training and calibration.
+
+### `edge-simulators/training/requirements.txt`
+- **What it does:** Pins `scikit-learn` and `numpy` for the trainer.
+- **Why it works this way:** Exact pins, like every requirements file here, and separate from the node's requirements because the node must not carry scikit-learn.
+- **Purpose:** Trainer dependencies.
+
+### `edge-simulators/test_edge_ai.py`, `edge-simulators/training/test_training.py`
+- **What they do:** The tests of the edge feature: tamper-evidence, size, latency and memory budgets, accuracy against the scale alone and against fresh data, int8 cost, the to-go confounder surviving, a no-leak check, both guards (quiet on clean data, firing on faults, with the per-reading guard's miss pinned), the drift monitor's arithmetic, the event schema and its strictness, and startup refusal of a corrupt model; and, in the trainer's test, that retraining reproduces the model's quality. Each is described in `TESTING.md`.
+- **Why it works this way:** Every threshold is set from a measurement written beside it. The tests were checked for teeth by breaking the node six ways and confirming a specific test went red each time.
+- **Purpose:** Verification of the edge-intelligence feature.
 
 ### `edge-simulators/requirements.txt`
-- **What it does:** Pins `paho-mqtt`, `jsonschema`, `numpy` and `kafka-python==2.0.2`.
+- **What it does:** Pins `paho-mqtt`, `jsonschema`, `numpy` (the one deliberate range, `>=1.26`, which the node's model now also relies on) and `kafka-python`.
 - **Why it works this way:** `kafka-python` is only used by the service-timing scenario thread but is listed because all four simulators share one image. A comment points at the version-negotiation issue.
 - **Purpose:** Python dependencies for the image.
 
 ### `edge-simulators/Dockerfile`
-- **What it does:** Builds on `python:3.11-slim`, installs requirements, copies `schemas/`, `common/`, `simulators/` and `entrypoint.py`, runs as UID 1001 and starts `entrypoint.py`.
+- **What it does:** Builds on `python:3.11-slim`, installs requirements, copies `schemas/`, `common/`, `edge_ai/` (the model and its code, not the trainer), `simulators/` and `entrypoint.py`, runs as UID 1001 and starts `entrypoint.py`.
 - **Why it works this way:** It builds from the repository root so the canonical `schemas/` are copied directly rather than duplicated. Python 3.11 is required because `kafka-python` 2.0.2 breaks on 3.12. `--network=host` is documented because rootless Podman builds under WSL2 do not reliably resolve DNS for `pip`. Because schemas are baked in, a schema change needs an image rebuild.
 - **Connects to:** `schemas/`, `edge-simulators/`; deployed by `k8s/edge-simulators` and the four `edge-sim-*` compose services.
 - **Purpose:** The simulator container image.
@@ -560,6 +586,7 @@ All Python services follow the same skeleton: read configuration from environmen
   - "Insufficient data" is a warning and a skip, not a crash.
   - `staffing_level` is a coarse proxy (staff clocked in and not out, counted at pickup time) and is flagged as unvalidated in the code. It counts staff across the whole restaurant, not per station, despite an older comment saying otherwise.
   - **Interactive sessions are quarantined from the analysis** (2026-09-21): the staffing query keeps only tickets whose `origin` is not `interactive` and ignores staff events with `source_kind = 'player'`; the plate-waste query ignores player-sourced rows. Otherwise a player clocking in would raise the staffing count for every ticket, and game tickets (about twice as fast by median) would be pooled with simulated ones, so the estimate would partly measure who was playing. On real data the query returns 1,042 rows instead of 1,168, and the largest staffing count drops from 11 to 10.
+  - **Estimates the edge node distrusted are excluded** (2026-10-03): the plate-waste query also drops rows whose stored `edge_inference` block says `out_of_distribution` or `drift_suspected`, by JSON path on `raw_payload`. Both clauses `COALESCE` to false, so events from sources that do no on-node inference (no block at all) are kept rather than lost to a NULL comparison. This is where the node's own self-assessment changes what the platform concludes.
   - **Its database read now ends its transaction** (`_load_data` commits): the long-lived connection used to sit idle inside a transaction for hours after each read, which blocked every schema migration.
   - **Pipeline-health metrics, added 2026-10-01:** `common.start_metrics_server(8000)` at the top of both `run_from_anomaly_stream()` and `run_reviewer()` -- the two long-running entry points; `run_for_scenario()` (the one-shot CLI path) doesn't start one, since the process exits before anything could scrape it. Five Counters shared across both entry points since they're always separate processes/pods: `causal_engine_anomalies_processed_total`, `causal_engine_findings_emitted_total`, `causal_engine_anomalies_skipped_total{reason}` (`no_treatment_map_entry` from `process_anomaly` itself, `insufficient_data` from the `ValueError` handler in `run_from_anomaly_stream`), `causal_engine_refutation_result_total{passed}` (the one genuinely new *quality* signal, not just throughput -- this project's own differentiator is real causal inference with refutation testing, and until now nothing exposed what fraction of findings actually pass it), and `causal_engine_findings_marked_ready_total` (incremented in `run_reviewer()` only). Verified the same way as the detector's: direct import with `kafka`/`psycopg2` stubbed, calling `_build_finding` with a synthetic spec/result and reading the counters back via `generate_latest()`.
 - **Connects to:** Kafka (`anomaly-events` in; `causal-findings-events` and `narration-ready-events` out); `plate_waste_events`, `staff_shift_events`, `ticket_timing_summaries` (read); `causal_findings` (write); `CausalFinding.schema.json`; DoWhy, pandas, statsmodels; scraped by `k8s/observability`'s `pipeline-health` job.
@@ -617,7 +644,7 @@ All Python services follow the same skeleton: read configuration from environmen
 - **Purpose:** The narrator's image.
 
 ### `services/dashboard-api/main.py`
-- **What it does:** A FastAPI service with read-only endpoints: `/api/health`, `/api/twin/tables|staff|stations`, `/api/findings/narrated?limit=` (narrations joined with their finding's numbers), `/api/anomalies/summary`, and `/api/comparison`. The last takes optional `source_id` (one player's events, e.g. `game-ana`), `since` (ISO 8601 start of the interactive window) and `hours` (how far back the simulated reference reaches, default 24). It fetches raw rows in two small functions (player and crew stage events; completed interactive and simulated ticket summaries) and hands them to `comparison.py`. The response has `same_clock` (player against crew), `vs_simulated` (per timing metric), a `scope` echo and explanatory `notes`. **Every route except `/api/health` requires `X-API-Key`** (2026-09-23): `require_api_key`, passed to `FastAPI(dependencies=[...])` so a new route needs no per-route opt-in, checks the header against `API_KEY` with `secrets.compare_digest` (constant-time, so response timing cannot leak a partial match) and fails with 500 -- not a silent pass -- if `API_KEY` itself is unset, so a deployment that forgot to configure it is not indistinguishable from "auth disabled".
+- **What it does:** A FastAPI service with read-only endpoints: `/api/health`, `/api/twin/tables|staff|stations`, `/api/findings/narrated?limit=` (narrations joined with their finding's numbers), `/api/anomalies/summary`, `/api/edge/plate-waste?minutes=` (the edge fleet view: per node and model, the readings, how many the node distrusted, drift rate, p50 and p95 inference latency, and whether it is drifting now, read from the `edge_inference` block in `raw_payload`) and `/api/comparison`. The last takes optional `source_id` (one player's events, e.g. `game-ana`), `since` (ISO 8601 start of the interactive window) and `hours` (how far back the simulated reference reaches, default 24). It fetches raw rows in two small functions (player and crew stage events; completed interactive and simulated ticket summaries) and hands them to `comparison.py`. The response has `same_clock` (player against crew), `vs_simulated` (per timing metric), a `scope` echo and explanatory `notes`. **Every route except `/api/health` requires `X-API-Key`** (2026-09-23): `require_api_key`, passed to `FastAPI(dependencies=[...])` so a new route needs no per-route opt-in, checks the header against `API_KEY` with `secrets.compare_digest` (constant-time, so response timing cannot leak a partial match) and fails with 500 -- not a silent pass -- if `API_KEY` itself is unset, so a deployment that forgot to configure it is not indistinguishable from "auth disabled".
 - **Why it works this way:** It only ever `SELECT`s and uses the ordinary application role, because there is no "must not see raw data" rule for a dashboard as there is for the narrator. CORS is open for a local demo (a Vite dev server on a different port; a browser hitting `dashboard-web`'s own origin never triggers CORS, since nginx proxies `/api/` same-origin). Each request opens its own connection, which is fine at demo scale. `API_KEY` has no chart default the way a database password's placeholder does -- there is no meaningful "obviously non-functional" value for a secret whose only job is being unguessable, so `k8s/dashboard`'s Secret is existingSecret-only (created by `k8s/harden/harden-live-cluster.sh`) and Compose falls back to the same `changeme-local-dev-only` convention its other dev credentials use.
 - **Connects to:** `twin_*`, `anomaly_events`, `causal_findings`, `narrated_findings`; called by `dashboard-web` through nginx (which supplies `X-API-Key`) and by the game's findings panel (which supplies its own).
 - **Purpose:** The read side of the platform for any user interface.

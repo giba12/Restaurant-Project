@@ -24,6 +24,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY schemas/ /app/schemas/
 
 COPY edge-simulators/common/ /app/common/
+COPY edge-simulators/edge_ai/ /app/edge_ai/
 COPY edge-simulators/simulators/ /app/simulators/
 COPY edge-simulators/entrypoint.py /app/entrypoint.py
 

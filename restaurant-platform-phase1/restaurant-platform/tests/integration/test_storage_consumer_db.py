@@ -48,6 +48,20 @@ def test_plate_waste_confounders_are_stored_not_silently_null(conn):
     assert float(grams) == pytest.approx(event["estimated_waste_grams"])
 
 
+def test_the_edge_inference_block_is_stored_whole_and_queryable(conn):
+    # No migration was added for this feature on purpose: raw_payload (JSONB)
+    # already keeps the whole event. That only holds if the block survives
+    # storage intact and can be queried by path, which the causal-engine filter
+    # and the dashboard's edge view both rely on.
+    event = factory.plate_waste_event()
+    store(conn, "plate-waste-events", event)
+    stored, version = rows(conn, "SELECT raw_payload -> 'edge_inference', schema_version FROM plate_waste_events")[0]
+    assert stored == event["edge_inference"]
+    assert version == "1.1.0"
+    sha = scalar(conn, "SELECT raw_payload #>> '{edge_inference,model_sha256}' FROM plate_waste_events")
+    assert sha == event["edge_inference"]["model_sha256"]
+
+
 def test_every_simulator_event_type_is_stored_with_no_unexpected_nulls(conn):
     events = factory.simulator_events_of_every_kind()
     store(conn, "plate-waste-events", events["plate_waste"])
@@ -215,6 +229,60 @@ def kafka_message(offset, event, topic="staff-shift-events"):
 @pytest.fixture()
 def schemas():
     return consumer.load_schemas()
+
+
+# --------------------------------------------------------------- schema validation is compiled once
+
+def test_validation_costs_microseconds_a_message_not_tens_of_milliseconds(schemas):
+    # `jsonschema.validate` re-checks the whole schema on every call (measured
+    # 30 to 60 ms), which capped ingest throughput; the consumer now compiles
+    # each schema once. 300 validations took about 20 ms compiled and would take
+    # 9 s or more the old way, so a one-second bound is wide on a loaded
+    # machine and still fails the old behaviour decisively.
+    import time
+
+    event = factory.plate_waste_event()
+    consumer._validate_event("plate-waste-events", event, schemas["plate-waste-events"])  # compile once
+    started = time.perf_counter()
+    for _ in range(300):
+        consumer._validate_event("plate-waste-events", event, schemas["plate-waste-events"])
+    assert time.perf_counter() - started < 1.0
+
+
+def test_the_validator_is_built_once_per_schema_and_rebuilt_when_the_schema_object_changes(schemas):
+    import copy
+
+    consumer._validators.clear()
+    event = factory.plate_waste_event()
+    schema = schemas["plate-waste-events"]
+    consumer._validate_event("plate-waste-events", event, schema)
+    first = consumer._validators["plate-waste-events"][1]
+    consumer._validate_event("plate-waste-events", event, schema)
+    assert consumer._validators["plate-waste-events"][1] is first, "rebuilt although the schema object had not changed"
+
+    stricter = copy.deepcopy(schema)
+    stricter["properties"]["estimated_waste_grams"]["maximum"] = -1
+    with pytest.raises(jsonschema_error()):
+        consumer._validate_event("plate-waste-events", event, stricter)  # a different object: must not reuse the stale validator
+    assert consumer._validators["plate-waste-events"][0] is stricter
+
+
+def test_validation_still_rejects_what_the_schema_rejects_and_names_the_problem(schemas):
+    event = factory.plate_waste_event()
+    event["estimated_waste_grams"] = -5
+    with pytest.raises(jsonschema_error()) as excinfo:
+        consumer._validate_event("plate-waste-events", event, schemas["plate-waste-events"])
+    assert "-5" in excinfo.value.message
+    event = factory.plate_waste_event()
+    event["edge_inference"]["model_sha256"] = "not-a-hash"
+    with pytest.raises(jsonschema_error()):
+        consumer._validate_event("plate-waste-events", event, schemas["plate-waste-events"])
+
+
+def jsonschema_error():
+    import jsonschema
+
+    return jsonschema.ValidationError
 
 
 def test_a_stored_message_is_committed(conn, schemas):

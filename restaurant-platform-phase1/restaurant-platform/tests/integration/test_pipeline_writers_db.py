@@ -114,6 +114,27 @@ def test_the_waste_query_excludes_human_player_sessions(conn):
     assert len(run_query(conn, "estimated_waste_grams")) == 1
 
 
+def test_the_waste_query_excludes_estimates_the_edge_node_flagged_as_untrustworthy(conn):
+    # Four events: a normal edge estimate, one the node flagged out-of-distribution,
+    # one produced while its drift monitor was alarming, and one from a source with
+    # no on-node inference at all (no edge_inference key; must be kept, not lost
+    # to a NULL comparison). Only the first and last may reach the analysis.
+    cur = conn.cursor()
+    normal = factory.plate_waste_event(timestamp="2026-10-01T12:00:00Z")
+    out_of_distribution = factory.plate_waste_event(timestamp="2026-10-01T12:00:01Z")
+    drifting = factory.plate_waste_event(timestamp="2026-10-01T12:00:02Z")
+    vendor = factory.plate_waste_event(timestamp="2026-10-01T12:00:03Z")
+    normal["edge_inference"].update(out_of_distribution=False, drift_suspected=False)
+    out_of_distribution["edge_inference"]["out_of_distribution"] = True
+    drifting["edge_inference"].update(out_of_distribution=False, drift_suspected=True)
+    del vendor["edge_inference"]
+    for event in (normal, out_of_distribution, drifting, vendor):
+        consumer.insert_plate_waste(cur, event)
+    conn.commit()
+    kept = {round(float(row[1]), 1) for row in run_query(conn, "estimated_waste_grams")}
+    assert kept == {normal["estimated_waste_grams"], vendor["estimated_waste_grams"]}
+
+
 def test_the_waste_query_respects_the_time_window(conn):
     cur = conn.cursor()
     consumer.insert_plate_waste(cur, factory.plate_waste_event(timestamp="2026-10-01T12:00:00Z"))

@@ -28,29 +28,29 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 
 ## Summary
 
-**132 entries** (119 defects and 13 informational difficulties), recorded between 2026-08 and 2026-10-03.
+**143 entries** (128 defects and 15 informational difficulties), recorded between 2026-08 and 2026-10-03.
 
 ### By severity
 
 | Severity | Count |
 |---|---|
 | S1 Critical | 6 |
-| S2 High | 29 |
-| S3 Medium | 40 |
-| S4 Low | 44 |
-| Info | 13 |
-| **Total** | **132** |
+| S2 High | 30 |
+| S3 Medium | 45 |
+| S4 Low | 47 |
+| Info | 15 |
+| **Total** | **143** |
 
 ### By status
 
 | Status | Count |
 |---|---|
-| Fixed+tested | 31 |
-| Fixed | 71 |
+| Fixed+tested | 36 |
+| Fixed | 73 |
 | Mitigated | 7 |
-| Clarified | 14 |
-| Open | 9 |
-| **Total** | **132** |
+| Clarified | 15 |
+| Open | 12 |
+| **Total** | **143** |
 
 ### By part (project period)
 
@@ -65,35 +65,36 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Part G: Failures and difficulties of the test regime itself and its environment (2026-10-02 to 2026-10-03) | 16 |
 | Part H: Discrepancies found while preparing the quality documents (2026-10-03) | 4 |
 | Part I: Found and fixed while repairing the refutation gate (2026-10-03) | 4 |
-| **Total** | **132** |
+| Part J: Found while building and verifying the edge-inference feature (2026-10-03) | 11 |
+| **Total** | **143** |
 
 ### By how it was found
 
 | Found by | Count |
 |---|---|
 | Live operation, deployment or manual run | 74 |
-| Review (static or manual) | 19 |
-| Test-regime run or observation | 17 |
+| Review (static or manual) | 20 |
+| Test-regime run or observation | 27 |
 | Automated test regime (2026-10-02) | 7 |
 | Chaos test | 5 |
 | Attempting the done condition | 3 |
 | CI or first push | 3 |
 | User report | 3 |
 | Audit script | 1 |
-| **Total** | **132** |
+| **Total** | **143** |
 
 ### By class
 
 | Class | Count |
 |---|---|
 | Deployment | 22 |
-| Logic | 21 |
-| Environment/tooling | 17 |
-| Test defect | 15 |
+| Logic | 25 |
+| Environment/tooling | 21 |
+| Test defect | 17 |
 | Observability | 9 |
 | Dependency | 6 |
 | Configuration | 6 |
-| Documentation | 5 |
+| Documentation | 6 |
 | Portability | 5 |
 | Integration | 4 |
 | Contract | 4 |
@@ -104,21 +105,24 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Repository hygiene | 2 |
 | Operator error | 2 |
 | Code quality | 1 |
-| **Total** | **132** |
+| **Total** | **143** |
 
-### Open items (9)
+### Open items (12)
 
 | ID | Summary | Severity |
 |---|---|---|
 | DEF-015 | A "connection burst" hypothesis about Mosquitto restarts was raised and never confirmed or refuted. | Info |
 | DEF-056 | The anomaly detector is nearly blind to a 3x slowdown on simulated data: a few tickets stalled for up to ~79 minutes inflate its standard deviation to... | S3 Medium |
-| DEF-058 | The aggregator restarted once on a `cook_duration_ms` computed negative (a timestamp-ordering edge case). `_duration_ms` still permits negative values... | S3 Medium |
 | DEF-091 | Whether `PodCrashLooping` had notified continuously during those 10 hours could not be established afterwards; Kubernetes' restart backoff may have pu... | Info |
 | DEF-093 | `strimzi-cluster-operator` sat at 90% of its memory limit during the investigation. | Info |
 | DEF-107 | The digital twin's per-station `open_ticket_count` is incremented rather than derived, so a Kafka redelivery of `order_fired` inflates it. | S3 Medium |
 | DEF-123 | Two Compose providers coexist on the development machine (a v1 `docker-compose` via the Podman shim, and the user's own Compose plugin, v5.5.1), so a... | Info |
 | DEF-128 | No line-coverage measurement exists. Test counts and the requirements traceability matrix stand in for it, which measures requirement coverage rather... | Info |
 | DEF-131 | The gate certifies statistical significance, not causation: it cannot detect an omitted confounder or a mis-specified treatment (for example the staff... | Info |
+| DEF-137 | On one start of the Compose stack, transient DNS failures made all four Kafka Connect source tasks fail while their connectors stayed `RUNNING`, so nothing was ingested; nothing restarts failed tasks on the Compose path. | S3 Medium |
+| DEF-141 | Under the repaired gate the finding for the injected staffing shortage is refuted (p = 0.95): the shortage never moves the staffing signal the analysis uses. | S2 High |
+| DEF-142 | After a Kafka restart under Podman, Kafka Connect took about six minutes to resume ingesting (longer than the test's 240 s); identical on the code from before the edge feature. | S3 Medium |
+| DEF-143 | One full stop and start of the stack did not resume ingesting within 240 s; passed in every other run. Cause unknown. | Info |
 
 ## Part A. Phases 1-3 (before 2026-09-10): recovered lessons
 
@@ -204,7 +208,7 @@ From the implementation-status table rows and problem-log narrative. Original it
 | DEF-055 | Version 2 | Sec. 4 row (Godot client) | A prompt with a worked style example looked better on 5 samples and then made the model parrot the definitions back in real runs. | Info | Live verification | Reverted; recorded so it is not retried. | Clarified |
 | DEF-056 | Version 2 | Sec. 4 quarantine row; guide 11.8 | The anomaly detector is nearly blind to a 3x slowdown on simulated data: a few tickets stalled for up to ~79 minutes inflate its standard deviation to ~110 s on a 31 s mean. Pre-existing; quarantine neither causes nor fixes it. | S3 Medium | Live verification | Recorded as a known limitation; not fixed. (The acceptance test does detect its injected slowdown, 142 anomalies, under different pacing, so this limitation concerns stalled-ticket outliers on the production defaults, which no test currently exercises.) | Open |
 | DEF-057 | Version 2 | Sec. 4 quarantine row | Applying migration `005` hung on the causal engine's 42-minute idle read transaction (`ALTER TABLE` waits for a lock, and every insert behind it queued), stalling the aggregator. | S2 High | Live operation | The engine now commits after each read; the k3s realign script stops every database client first. | Fixed |
-| DEF-058 | Version 2 | Sec. 7 item 3 | The aggregator restarted once on a `cook_duration_ms` computed negative (a timestamp-ordering edge case). `_duration_ms` still permits negative values. | S3 Medium | Live operation | Not reproduced and not fixed; noted. A bounded-duration check would close it. | Open |
+| DEF-058 | Version 2 | Sec. 7 item 3 | The aggregator restarted once on a `cook_duration_ms` computed negative (a timestamp-ordering edge case). `_duration_ms` still permitted negative values. **Reproduced 2026-10-03:** three crashes in one 11-minute load run. Root cause: producers stamp events with their own wall clock, and the simulator's clock stepped backwards six times in that run (15 to 549 ms, visible in its own log, one two seconds before a crash); a backwards step between two stages made a duration negative, which failed the published schema's minimum of 0, which this service treats as fatal, so the pod restarted and dropped every ticket in flight. | S3 Medium | Live operation; reproduced by the load layer | Fixed 2026-10-03: `_duration_ms` returns `None` for a negative interval (the schema allows null) and logs a warning. Guarded by three tests, verified to fail on the old code. | Fixed+tested |
 | DEF-059 | Version 2 | Sec. 4 roles row | A global open-ticket cap let one backed-up station starve a cook who arrived at another. | S3 Medium | Live test | Cap is now per staffed station. | Fixed+tested |
 | DEF-060 | Version 2 | Sec. 4 expo row | A line cook could be assigned `station-expo`, and any schema station could receive a ticket. | S3 Medium | Live test | Validate against a `PLAYABLE_STATIONS` list. | Fixed+tested |
 | DEF-061 | Version 2 | Sec. 4 guest-expiry row | A guest who never paid held their table forever; nothing evicted them. | S3 Medium | Code review | Eviction after delivery plus `MAX_GUEST_AGE_SECONDS`; leaving frees the guest. | Fixed+tested |
@@ -314,6 +318,24 @@ Found while investigating DEF-106 at the owner's request to stabilise the gate.
 | DEF-130 | Test regime | DEF-106 follow-up | DoWhy's reported placebo p-value tests whether *zero* lies inside the placebo estimates; it never compares the *real* estimate to them, so it cannot say whether a finding is distinguishable from noise. Across 120+ measurements it never rejected anything (all above 0.68), noise or genuine. | Info | Source review and measurement | Kept as a sanity check on the estimator, with the regression p-value as the real discriminator. | Clarified |
 | DEF-131 | Test regime | DEF-106 follow-up | The gate certifies statistical significance, not causation: it cannot detect an omitted confounder or a mis-specified treatment (for example the staffing-level proxy used in the pickup-delay analysis is not a validated causal variable). | Info | Analysis | Recorded as a limitation; the engine controls only for the confounders it is told about. | Open |
 | DEF-132 | Test regime | DEF-106 follow-up | **The causal engine's INFO logs vanished after its first estimate.** `import dowhy` resets the root logger to WARNING, and the engine imports DoWhy lazily on its first estimate, so every later INFO line ("Emitted CausalFinding ...", and now the gate's p-values) was silently dropped; it also hid the earlier unreproducible verdicts. Found while trying to display the repaired gate's p-values in the live stack and finding the line missing, after ruling out transport (output lost through `compose exec`) with two experiments. | S3 Medium | Investigation | The engine's own logger now has an explicit INFO level. `test_the_engines_own_info_logs_survive_importing_dowhy` reproduces the real import order in a fresh interpreter and was shown to fail without the fix. | Fixed+tested |
+
+## Part J. Found while building and verifying the edge-inference feature (2026-10-03)
+
+Found while adding an on-node model to the plate-waste simulator at the owner's request, and while re-running the heavy test layers against it.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-133 | Edge feature | build | **The first design of the node's out-of-distribution guard would have missed almost all of the fault it was meant to catch.** A per-reading distance threshold calibrated to flag 0.1% of clean readings flagged only 0.84% of readings at lens fouling 0.4 (where the estimates were already 4.7 times worse than clean) and 5% at 0.6 (6.7 times worse): each reading under a fouled lens stays individually plausible. Found by measuring the guard's response to the injected fault before claiming anything about it. | S3 Medium | Test-regime run or observation | Added a rolling drift monitor (mean squared distance over 50 readings, threshold at the 99.9th percentile of clean windows). Measured: 0.11% of clean time in alarm; fouling of 0.3 and above caught in every one of 200 trials (median delay 48 readings at 0.3, 26 at 0.4); **fouling of 0.2 is still missed in about 40% of onsets within 300 readings** (RSK-032). The per-reading weakness is pinned by `test_the_per_reading_guard_misses_a_slow_fault_which_is_why_the_drift_monitor_exists`; detection by `test_the_drift_monitor_catches_a_fouling_lens`. | Fixed+tested |
+| DEF-134 | Edge feature | build | **The trainer wrote an invalid model artifact.** The first drift calibration took a quantile over rolling scores that included the warm-up readings (which have no score yet), so the threshold came out NaN and the JSON writer emitted a bare `NaN`. The run reported success; the problem was seen only by reading its printed output. | S4 Low | Test-regime run or observation | Rolling scores now include only full windows; the trainer serialises with `allow_nan=False` so it fails instead of writing invalid JSON; `test_a_retrained_model_loads_and_is_internally_consistent` asserts a retrained artifact is finite and passes the loader. | Fixed+tested |
+| DEF-135 | Test regime | session | The static layer's lint test skips silently when `ruff` is not on the PATH. One run, made with the virtual environment's `bin` directory off the PATH, reported 4 skips instead of the usual 3 and no lint result. It was noticed only because the skip count changed, then the lint was run explicitly (all checks passed). | Info | Test-regime run or observation | Clarified: the skip reason is printed and CI installs ruff, but a skip is not a pass; read skip counts, not just the pass line. | Clarified |
+| DEF-136 | Test regime | session | **The connector-health check could not see a failed task.** `connector_states()` returned each connector's own state, and Kafka Connect keeps reporting a connector `RUNNING` while its task is `FAILED`; the task is what moves the data. This is the failure recorded twice before (DEF-008, DEF-035), yet the test written to guard it would have passed with every task dead. Found when a resilience run began with all four tasks `FAILED` under four `RUNNING` connectors and nothing ingested: the conservation baseline failed, but the connector-health test had not. | S3 Medium | Test-regime run or observation | The helper now reports a connector `RUNNING` only if it and every task are; a failed task wins, and a connector with no task is `NO_TASKS`. Guarded by `test_a_failed_task_under_a_running_connector_is_reported_failed` and three companions. | Fixed+tested |
+| DEF-137 | Environment | session | **On one start of the Compose stack all four connector tasks failed and nothing recovered them.** The consumers logged `DNS lookup failed for kafka:9092` for about 30 seconds at start-up (rootless Podman, aardvark-dns, WSL2) and every Kafka Connect task failed with "Failed to create and start Camel context"; the connectors stayed `RUNNING`, tables stayed empty for 10 minutes, and the resilience baseline failed. Not seen on most starts that day. **Recurred and the cause was then proven:** a second start the same day (03:17 UTC) failed the readiness wait, and the Connect log shows `MqttException (0) - java.net.UnknownHostException: mosquitto` in the source task, so a transient failure to resolve the `mosquitto` host at task start killed ingestion. That is two bad starts in about fourteen stack starts that day. Nothing in the Compose path restarts a failed task (`kafka-connect-init` registers the connectors once). | S3 Medium | Test-regime run or observation | Not fixed. The harness now reports it honestly (DEF-136). A retry of failed tasks (`POST /connectors/<name>/restart?includeTasks=true&onlyFailed=true`) from the init container or a watchdog would close it. | Open |
+| DEF-138 | Test regime | session | **The load test's memory bound treated a one-off library import as a leak.** The causal engine imports DoWhy, statsmodels and scipy lazily, on its first estimate: a measured +153 MB step. Whether that step fell inside the burst's measurement window depended on when the first anomaly happened to arrive, so the test passed or failed on timing alone (it failed on 2026-10-03 with "causal-engine grew 153 MB"; the log shows the first estimate at 23:59:00, inside the window). | S4 Low | Test-regime run or observation | The causal engine is allowed the one-off import (100 MB + 160 MB); every other service keeps the 100 MB bound. | Fixed |
+| DEF-139 | Edge feature | build | **Schema validation cost 30 to 60 ms per message in the storage consumer, capping ingest throughput, and the edge feature made it worse.** `jsonschema.validate()` re-checks the whole schema and builds a new validator on every call, and the consumer called it per message. Adding the `edge_inference` object to the plate-waste schema raised that call from about 32 to 45 ms to about 60 ms (measured while the machine was loaded), a cost of roughly 17 ms a message that matches the load layer's fall from 14.6 to 18 events/s (earlier runs) to 11 to 12 (two runs with the new schema). The attribution is to the validation call, measured directly; the full pipeline was not run A/B on the old code. | S3 Medium | Test-regime run or observation | The consumer compiles one validator per schema on first use (keyed by topic, compared by identity so a different schema object is never validated with a stale validator). Guarded by three tests; the performance test fails on the old behaviour. | Fixed+tested |
+| DEF-140 | Test regime | review | `TESTING.md` still said the burst test required "no less than 20 events/s". The floor was lowered to 10 on 2026-10-03 (DEF-117) after the measurement, and the catalogue, which is meant to be machine-checked for the existence of tests but not for the thresholds they state, was not updated. | S4 Low | Review (static or manual) | Corrected to 10, with the reason; the same row now states the causal engine's memory allowance. | Fixed |
+| DEF-141 | Phase 5 | acceptance run | **Under the repaired gate, the finding for the injected staffing shortage is refuted, so the Phase 5 done-condition is not met in a causally valid way.** The acceptance run on 2026-10-03/04 measured a 4.4x pickup-delay slowdown and 103 anomalies at the loaded stations (0 at the removed one), but the engine's finding for the scenario (`staffing_level` to `pickup_delay_ms`) had an effect of +169 ms per person with p = 0.95 (placebo p = 0.98) and was refuted, so the reviewer correctly did not promote it. **The cause is in the simulation, not in the gate or the engine:** the shortage is a control message that makes the service-timing simulator grow its backlog; it never changes the staff-shift events from which `staffing_level` is computed, so the treatment the engine analyses does not move with the injected cause. The earlier "met" verdict (and the 74-second figure in the README) came from the original gate, which passed 78% to 87% of pure-noise findings (DEF-106); the acceptance test had been relaxed to accept either verdict (promoted if and only if refutation passed), so it kept passing. One run; the p-value is not claimed to be stable, but the mechanism is. | S2 High | Test-regime run or observation | Open. Owner decision, two options: couple the scenario to the staff-shift stream (the removed station's staff clock out or are reassigned, so staffing genuinely falls), or define the treatment from the scenario record instead of a proxy (see DEF-131). Neither was done. The README now states the limit. | Open |
+| DEF-142 | Environment | session | **After a Kafka restart, Kafka Connect took about six minutes to resume ingesting, longer than the resilience test's 240-second budget, so `test_a_kafka_restart_is_survived` failed.** Across 2026-10-03/04 it failed in five of six runs (two on the code from before the edge feature, three on the code after it) and passed once, on the final code; a like-for-like three-test sequence gave the same outcome on both versions (19.6 and 19.5 minutes), so it is not a regression. Under Podman the restarted broker came back on a new address (10.89.1.7 to 10.89.1.27); the Connect worker's log shows 193 connection attempts to the old one before it recovered at its next rebalance, five minutes later, with its tasks committing again at 01:46:53. The cause is inferred from that log, not proven. The platform did recover without intervention. It also passed in the earlier clean pass that morning, so the recovery time varies from run to run, and the test is unreliable in this environment. **Not verified:** whether MQTT messages published while Connect could not produce were lost, because the conservation check compares Kafka with the database and cannot see a message that never reached Kafka. | S3 Medium | Test-regime run or observation | Not fixed. The test's 240-second budget was not widened, because a six-minute stall is a result and not noise. Candidate remedies: configure the Connect JVM's DNS cache and the clients' reconnect behaviour, give Kafka a fixed address in Compose, or restart Connect when the broker restarts. | Open |
+| DEF-143 | Environment | session | **One full stop and start of the stack did not resume ingesting within 240 seconds.** `test_stopping_and_restarting_the_whole_stack_preserves_data` failed once, in the first full seven-test resilience run on the final code (timed out waiting for rows to keep arriving), and passed in the next full run on the same code, in two runs of a shorter sequence on it, and in both the full and the shorter sequences on the code from before the edge feature. Cause unknown; the same family as DEF-137 and DEF-142 (start-up and reconnection after a restart on this Podman set-up) is the likeliest explanation, but it was not shown, and with one failure in four runs of the new code against none in three of the old one, an effect of the edge feature is not ruled out either. | Info | Test-regime run or observation | Not diagnosed. Repeat the full resilience layer several times before trusting either outcome (RSK-025). | Open |
 
 ## How the defects were found, and what that says about the process
 

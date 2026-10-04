@@ -50,7 +50,7 @@ def test_health_is_open_so_a_plain_uptime_check_works(client):
     assert client.get("/api/health").json() == {"status": "ok"}
 
 
-@pytest.mark.parametrize("path", ["/api/twin/tables", "/api/twin/staff", "/api/twin/stations", "/api/findings/narrated", "/api/anomalies/summary", "/api/comparison"])
+@pytest.mark.parametrize("path", ["/api/twin/tables", "/api/twin/staff", "/api/twin/stations", "/api/findings/narrated", "/api/anomalies/summary", "/api/comparison", "/api/edge/plate-waste"])
 def test_every_data_route_rejects_a_missing_or_wrong_key(client, path):
     assert client.get(path).status_code == 401
     assert client.get(path, headers={"X-API-Key": "wrong"}).status_code == 401
@@ -121,3 +121,53 @@ def test_sustained_use_does_not_leak_database_connections(conn, client):
     for _ in range(150):
         assert client.get("/api/twin/tables", headers=KEY).status_code == 200
     assert open_connections() <= baseline + 5, "connections are accumulating across requests"
+
+
+# ------------------------------------------------------------------ the edge fleet view
+
+def _edge_event(conn, minutes_ago=1, **edge):
+    import datetime
+    stamp = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    event = factory.plate_waste_event(timestamp=stamp)
+    event["edge_inference"].update(edge)
+    import consumer
+    consumer.insert_plate_waste(conn.cursor(), event)
+    conn.commit()
+    return event
+
+
+def test_the_edge_route_reports_each_nodes_health_from_its_own_flags(conn, client):
+    for latency in (0.1, 0.1, 0.1, 0.1):
+        _edge_event(conn, minutes_ago=30, out_of_distribution=False, drift_suspected=False, inference_latency_ms=latency)
+    _edge_event(conn, minutes_ago=20, out_of_distribution=True, drift_suspected=False, inference_latency_ms=0.1)
+    _edge_event(conn, minutes_ago=2, out_of_distribution=False, drift_suspected=True, inference_latency_ms=0.9)
+    body = client.get("/api/edge/plate-waste?minutes=60", headers=KEY).json()
+    assert body["window_minutes"] == 60
+    (node,) = body["nodes"]
+    assert node["readings"] == 6
+    assert node["out_of_distribution"] == 1 and node["out_of_distribution_rate"] == pytest.approx(1 / 6, abs=1e-4)
+    assert node["drift_suspected"] == 1 and node["drift_rate"] == pytest.approx(1 / 6, abs=1e-4)
+    assert node["drifting_now"] is True, "the most recent reading was the drifting one"
+    assert node["latency_ms_p50"] == pytest.approx(0.1) and node["latency_ms_p95"] > 0.1
+    assert len(node["model_sha256"]) == 64 and node["model_id"] and node["model_version"]
+
+
+def test_the_edge_route_ignores_events_with_no_on_node_inference_and_respects_the_window(conn, client):
+    import consumer
+    vendor = factory.plate_waste_event()
+    del vendor["edge_inference"]
+    vendor["timestamp"] = _edge_event(conn)["timestamp"]
+    consumer.insert_plate_waste(conn.cursor(), vendor)
+    _edge_event(conn, minutes_ago=600)  # ten hours old: outside a 60-minute window
+    conn.commit()
+    body = client.get("/api/edge/plate-waste?minutes=60", headers=KEY).json()
+    assert [node["readings"] for node in body["nodes"]] == [1]
+
+
+def test_the_edge_route_with_no_edge_data_is_an_empty_fleet_not_an_error(client):
+    assert client.get("/api/edge/plate-waste", headers=KEY).json() == {"window_minutes": 60, "nodes": []}
+
+
+@pytest.mark.parametrize("minutes", ["0", "-5", "10081", "abc"])
+def test_the_edge_route_rejects_a_nonsensical_window(client, minutes):
+    assert client.get(f"/api/edge/plate-waste?minutes={minutes}", headers=KEY).status_code == 422

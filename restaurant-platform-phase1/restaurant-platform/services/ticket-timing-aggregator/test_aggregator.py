@@ -165,3 +165,47 @@ def test_duration_arithmetic_handles_formats_and_offsets(start, end, expected):
 @pytest.mark.parametrize("start,end", [(None, "2026-10-01T12:00:00Z"), ("2026-10-01T12:00:00Z", None), ("garbage", "2026-10-01T12:00:00Z")])
 def test_duration_arithmetic_returns_none_instead_of_raising(start, end):
     assert aggregator._duration_ms(start, end) is None
+
+
+# ------------------------------------------------------------------ a clock that steps backwards
+
+def at_ms(seconds, millis):
+    return f"2026-10-01T12:{seconds // 60:02d}:{seconds % 60:02d}.{millis:03d}Z"
+
+
+def test_a_clock_that_steps_backwards_gives_an_unknown_duration_not_a_negative_one():
+    # Producers stamp events with their own wall clock. Wall clocks step
+    # backwards (NTP, or WSL2 resynchronising a busy host: the simulator's own
+    # log showed six steps of 15-549 ms in one 11-minute load run), and real
+    # edge devices are never perfectly synchronised. A negative duration is
+    # impossible, so the honest value is "unknown".
+    assert aggregator._duration_ms(at_ms(10, 100), at_ms(10, 16)) is None
+    assert aggregator._duration_ms(at_ms(10, 100), at_ms(10, 100)) == 0  # simultaneous is fine
+    assert aggregator._duration_ms(at_ms(10, 100), at_ms(10, 101)) == 1
+
+
+def test_a_backwards_step_between_two_stages_does_not_make_the_summary_invalid():
+    # Before the fix this produced time_to_cook_start_ms = -84, which failed the
+    # published schema's minimum of 0; the aggregator treats its own schema
+    # failure as fatal, so it crashed, restarted, and lost every ticket in flight.
+    state = aggregator.TicketState()
+    state.apply(event("t1", "order_fired", 0, timestamp=at_ms(10, 100)))
+    summary = state.apply(event("t1", "cook_started", 0, timestamp=at_ms(10, 16)))  # 84 ms before the order
+    jsonschema.validate(summary, SUMMARY_SCHEMA)
+    assert summary["time_to_cook_start_ms"] is None
+
+    # The rest of the ticket carries on normally.
+    for stage, millis in (("plated", 40), ("picked_up_by_server", 50), ("delivered", 60)):
+        summary = state.apply(event("t1", stage, 0, timestamp=at_ms(11, millis)))
+        jsonschema.validate(summary, SUMMARY_SCHEMA)
+    assert summary["is_complete"] is True
+    assert summary["cook_duration_ms"] == 1_024  # plated 11.040 minus cook_started 10.016
+    assert summary["total_ticket_duration_ms"] == 960  # delivered 11.060 minus order 10.100
+
+
+def test_a_backwards_step_in_one_ticket_does_not_affect_another():
+    state = aggregator.TicketState()
+    state.apply(event("bad", "order_fired", 0, timestamp=at_ms(10, 500)))
+    state.apply(event("good", "order_fired", 10))
+    assert state.apply(event("bad", "cook_started", 0, timestamp=at_ms(10, 100)))["time_to_cook_start_ms"] is None
+    assert state.apply(event("good", "cook_started", 70))["time_to_cook_start_ms"] == 60_000

@@ -6,7 +6,7 @@
 | Project | Restaurant Operations Digital Twin Platform |
 | Version | 1.0 |
 | Date | 2026-10-03 |
-| Status | Drawn from the 132 entries of `06-defect-log.md`; each lesson cites the entries that taught it |
+| Status | Drawn from the 143 entries of `06-defect-log.md`; each lesson cites the entries that taught it |
 
 ## 1. The short version
 
@@ -20,13 +20,13 @@
 
 ## 2. What the data says about how defects were found
 
-From the defect log (132 entries):
+From the defect log (143 entries):
 
 | Found by | Entries | Notes |
 |---|---|---|
 | Live operation, deployment or a manual run | 74 | The overwhelming majority of all entries |
-| Review, static or manual | 19 | Five serious defects found before Phase 5 was ever deployed; four documentation discrepancies found while preparing these documents; two observations from investigating the refutation gate |
-| The test regime's own runs and observations | 17 | Mostly defects *in the tests* (Part G), found by running them |
+| Review, static or manual | 20 | Five serious defects found before Phase 5 was ever deployed; four documentation discrepancies found while preparing these documents; two observations from investigating the refutation gate; one stale threshold in the test catalogue |
+| The test regime's own runs and observations | 27 | Mostly defects *in the tests* (Part G), found by running them; eight found while building and verifying the edge feature (Part J), two of them in the author's own new work and one a blind spot in the harness |
 | The automated test regime | 7 | Including the statistical finding about the refutation gate (DEF-106) |
 | Chaos testing | 5 | Including the 10-hour silent outage (DEF-090, manual) and both silent-data-loss defects (DEF-100, DEF-101, automated) |
 | The rest | 10 | CI, the audit script, user reports, the done-condition attempt |
@@ -87,6 +87,10 @@ Two defects were deliberately left unfixed at first because fixing them changes 
 ### 3.9a Measure before you repair
 
 The refutation gate was fixed only after an experiment: four candidate rules were evaluated on 60 pure-noise datasets and four genuine effect sizes, inside the production image. The result chose the rule and the threshold (0 of 60 noise datasets pass at 0.01; 0.05 would pass 4; genuine effects down to -5 g pass), and it also showed something a guess would have missed: DoWhy's own placebo p-value never rejected anything, noise or genuine, so it could not have been the discriminator (DEF-130). Two earlier "measurements" of the broken gate had also disagreed (87%, then 77%) because the permutations were unseeded (DEF-129), a warning to seed anything random before trusting a figure drawn from it. Trying to *show* the repaired gate's verdict on the live stack then exposed an unrelated defect: importing DoWhy silently switched off the engine's own INFO logging (DEF-132). Two cheap experiments ruled out output being lost in transport before the cause was sought in the code. Whatever you build to make a decision auditable has to be checked end to end, down to whether its log line reaches a human.
+
+### 3.9b Measure what a guard misses, not just what it falsely flags
+
+The edge node's per-reading out-of-distribution guard was calibrated the standard way: flag about 0.1% of clean readings. That is a statement about false alarms. Injecting the fault it exists to catch (a fouling lens) showed the other side: at fouling 0.4, where the estimates were already 4.7 times worse than clean, it flagged 0.84% of readings. Every reading stays individually plausible while the population drifts, so a per-reading threshold cannot see it (DEF-133). The remedy was a second guard over a window, and the measurement of *that* guard found its own limit: fouling of 0.2 is missed in about 40% of onsets. **A detector has two error rates; calibrate on the clean side, but publish the detection rate against the fault you built it for, and keep the weakness as a test so nobody forgets it.**
 
 ### 3.10 Measure thresholds, do not guess them
 

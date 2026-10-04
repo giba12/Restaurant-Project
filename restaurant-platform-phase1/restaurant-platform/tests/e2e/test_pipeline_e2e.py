@@ -54,6 +54,38 @@ def test_every_sensor_type_reaches_the_database(table):
     wait_for(lambda: sql_int(f"SELECT count(*) FROM {table}") >= 5, 240, description=f"5 rows in {table}")
 
 
+def test_the_edge_nodes_model_and_inference_reach_the_database_intact():
+    # The plate-waste node runs a model on the node itself. What the database
+    # holds must name the exact model that is committed in the repository (the
+    # image was built from it), and the node's own trust flags must be present.
+    # simulator (model inference) -> MQTT -> Kafka Connect -> Kafka -> consumer -> TimescaleDB
+    from helpers import ROOT
+
+    committed = json.load(open(ROOT / "edge-simulators" / "edge_ai" / "plate_waste_edge_model.json"))["weights_sha256"]
+    wait_for(lambda: sql_int("SELECT count(*) FROM plate_waste_events WHERE raw_payload ? 'edge_inference'") >= 5, 240,
+             description="5 plate-waste events carrying edge_inference")
+    assert sql_int("SELECT count(*) FROM plate_waste_events WHERE raw_payload ? 'edge_inference' "
+                   f"AND raw_payload #>> '{{edge_inference,model_sha256}}' <> '{committed}'") == 0, \
+        "stored estimates name a model other than the one committed in the repository"
+    assert sql_int("SELECT count(*) FROM plate_waste_events WHERE raw_payload ? 'edge_inference' AND schema_version <> '1.1.0'") == 0
+    assert sql_int("SELECT count(*) FROM plate_waste_events WHERE raw_payload ? 'edge_inference' "
+                   "AND (raw_payload #>> '{edge_inference,inference_latency_ms}')::float > 5") == 0, "inference exceeded its latency budget on the stack"
+
+
+def test_the_dashboard_api_reports_the_edge_node_as_a_fleet():
+    from helpers import ROOT
+
+    committed = json.load(open(ROOT / "edge-simulators" / "edge_ai" / "plate_waste_edge_model.json"))["weights_sha256"]
+    wait_for(lambda: sql_int("SELECT count(*) FROM plate_waste_events WHERE raw_payload ? 'edge_inference'") >= 5, 240,
+             description="edge events")
+    status, body = stack.http_get("/api/edge/plate-waste?minutes=60")
+    assert status == 200
+    nodes = json.loads(body)["nodes"]
+    assert nodes and nodes[0]["readings"] >= 5
+    assert nodes[0]["model_sha256"] == committed
+    assert nodes[0]["out_of_distribution_rate"] < 0.05, "a clean simulated node should rarely distrust its own readings"
+
+
 def test_ticket_timings_are_aggregated_into_complete_summaries():
     wait_for(lambda: sql_int("SELECT count(*) FROM ticket_timing_summaries WHERE is_complete") >= 10, 300,
              description="10 complete ticket summaries")

@@ -179,6 +179,20 @@ All data is simulated; there is no production deployment or real user. The syste
 | FR-GAM-05 | The Godot client shall work end to end against a live bridge. | S | Status log, 2026-09-20 | T |
 | FR-GAM-06 | The bridge's authentication shall fail closed. | M | Status log, 2026-09-23 | T |
 
+### 4.10 Edge intelligence (EDG)
+
+Added 2026-10-03 at the owner's request: the plate-waste node estimates waste on the node itself, with a small model, and says how far to trust the estimate. The sensors are a simulation designed by the author, so none of these requirements says anything about real hardware.
+
+| ID | Requirement | Pri | Source | Method |
+|---|---|---|---|---|
+| FR-EDG-01 | The plate-waste node shall estimate waste in grams on the node, from raw simulated sensor channels, using a model with int8-stored weights, and shall publish only the estimate and its own assessment of it; the estimate shall be markedly more accurate than the best single channel. | S | Owner request, 2026-10-03 | T |
+| FR-EDG-02 | Every on-node estimate shall carry the model's id, version and a SHA-256 over everything that determines its behaviour; the node shall refuse to run a model that does not match its declared hash, and shall stop at startup rather than run on. | S | Owner request, 2026-10-03 | T |
+| FR-EDG-03 | The on-node model shall fit stated budgets: an artifact of at most 16 KB, a p99 inference latency of at most 5 ms, and under 1 MB of allocations to load. | S | Owner request, 2026-10-03 | T |
+| FR-EDG-04 | The node shall flag individual readings far from the model's training data and shall raise a drift alarm on a sustained shift in its sensor inputs; both thresholds shall be calibrated on held-out clean data and their false-alarm rate measured. | S | Owner request, 2026-10-03 | T |
+| FR-EDG-05 | Estimates the node flagged out-of-distribution, or produced while its drift alarm was on, shall be excluded from causal analysis; events from sources with no on-node inference shall still be analysed. | S | Owner request, 2026-10-03 | T |
+| FR-EDG-06 | The platform shall expose the edge nodes as a fleet through its API: for each node and model, the readings, how many the node distrusted, the drift rate, inference latency, and whether it is drifting now. | C | Owner request, 2026-10-03 | T |
+| FR-EDG-07 | The model shall be reproducible: a seeded trainer, a model card of measured figures stored with the artifact and checked against fresh data, and a test that retraining reproduces the model's quality. | S | Owner request, 2026-10-03 | T |
+
 ## 5. Non-functional requirements
 
 ### 5.1 Security (SEC)
@@ -288,3 +302,4 @@ Computer-vision plate-waste detection (a solved, commercial problem; MinIO exist
 | 2026-09-24 to 28 | TLS added across Kafka, Mosquitto, Connect, dashboard and bridge (NFR-SEC-04) |
 | 2026-10-01 | Pipeline-health metrics (FR-OBS-01); Codespaces option (NFR-POR-03) |
 | 2026-10-02/03 | Reliability, performance and security requirements made explicit and measured (NFR-REL, NFR-PER, NFR-SEC-05) |
+| 2026-10-03 | Edge intelligence added: the plate-waste node infers on the node, with integrity, budget, drift and fleet-view requirements (FR-EDG-01 to 07) |

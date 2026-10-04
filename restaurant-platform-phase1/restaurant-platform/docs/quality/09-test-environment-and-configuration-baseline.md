@@ -69,7 +69,7 @@ Installed in a virtual environment at `~/.cache/rp-test-venv` (the exact install
 | Ollama | `docker.io/ollama/ollama:latest` (about 5.2 GB; **unpinned by design**), model `qwen2.5:0.5b-instruct` on Compose, `qwen2.5:3b-instruct` on k3s |
 | Application images | `python:3.11-slim`, non-root user 1001; `node:22-slim` and `nginx:1.27-alpine` for the dashboard |
 | MinIO | `cgr.dev/chainguard/minio`, pinned by digest (k3s only) |
-| Python dependencies | Exact pins in each service's `requirements.txt` (one range, `numpy>=1.26` in the simulators) |
+| Python dependencies | Exact pins in each service's `requirements.txt` (one range, `numpy>=1.26` in the simulators, which the edge node's model now also relies on); the offline trainer's own pins (`scikit-learn==1.5.1`, `numpy==1.26.4`) are in `edge-simulators/training/requirements.txt` and have not been through the dependency audit |
 | Schemas | `schemas/*.schema.json`, JSON Schema 2020-12 |
 | Migrations | `storage/schema/001`-`005`, idempotent |
 

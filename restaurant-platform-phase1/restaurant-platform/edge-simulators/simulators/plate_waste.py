@@ -1,56 +1,118 @@
+"""
+The plate-waste node.
+
+This node does not report a weight it was handed. It carries (simulated)
+sensing hardware, reads four raw channels from it per plate, and runs a small
+model on the node itself to estimate the waste in grams; only that estimate,
+and the node's own assessment of how far to trust it, leave the node. See
+edge_ai/ for the sensors, the model and the guards.
+
+The simulator draws the true waste (so the confounder structure the causal
+engine is meant to find is unchanged: a to-go box cuts what is left to a
+quarter), but never gives it to the node. `last_true_grams` keeps it on the
+simulator side so tests can score the node's estimates; it is never published.
+"""
+import os
 import random
 
 from common import world
 from common.ids import new_event_id, now_iso
 from common.runtime import Simulator
+from edge_ai import sensor
+from edge_ai.model import DEFAULT_MODEL_PATH, EdgeModel
 
 PORTION_VARIANTS = ["standard", "standard", "standard", "half", "large", "unknown"]
 
+# 1.1.0: events carry edge_inference. See schemas/PlateWasteEvent.schema.json.
+SCHEMA_VERSION = "1.1.0"
+
+# The one fault knob: 0 is a clean lens, 1 a badly fouled one. Set it to see
+# the node's drift monitor react; leave it at 0 in normal operation.
+LENS_FOULING = float(os.environ.get("EDGE_LENS_FOULING", "0"))
+
+
+class PlateWasteNode:
+    def __init__(self, model: EdgeModel, lens_fouling: float = 0.0, rng=random):
+        self.model = model
+        self.lens_fouling = lens_fouling
+        self.rng = rng
+        self.drift_monitor = model.new_drift_monitor()
+        self.last_true_grams = None  # simulator-side ground truth; never published
+
+    def next_event(self) -> dict:
+        rng = self.rng
+        n_items = rng.randint(1, 3)
+        plate_item_ids = rng.sample(world.MENU_ITEM_IDS, k=n_items)
+
+        to_go = rng.random() < 0.15
+        dietary = rng.random() < 0.10
+
+        true_grams = sensor.true_waste_grams(rng, to_go)
+        self.last_true_grams = true_grams
+        reading = sensor.read_sensors(true_grams, rng, self.lens_fouling)
+
+        # From here on the node uses only its sensor channels.
+        inference = self.model.infer(sensor.feature_vector(reading))
+        drift_score, drift_suspected = self.drift_monitor.update(inference.ood_score)
+
+        return {
+            "event_id": new_event_id(),
+            "event_type": "PlateWasteEvent",
+            "schema_version": SCHEMA_VERSION,
+            "source_id": "sim-plate-cam-01",
+            "source_kind": "simulated",
+            "timestamp": now_iso(),
+            "restaurant_id": world.RESTAURANT_ID,
+            "station_id": "station-bussing-01",
+            "table_id": rng.choice(world.TABLES) if rng.random() < 0.7 else None,
+            "estimated_waste_grams": inference.grams,
+            "plate_item_ids": plate_item_ids,
+            "confounder_flags": {
+                "to_go_container_used": to_go,
+                "declared_dietary_restriction": dietary,
+                "portion_size_variant": rng.choice(PORTION_VARIANTS),
+            },
+            "image_ref": None,
+            "edge_inference": {
+                "model_id": self.model.model_id,
+                "model_version": self.model.model_version,
+                "model_sha256": self.model.sha256,
+                "inference_latency_ms": inference.latency_ms,
+                "ood_score": inference.ood_score,
+                "out_of_distribution": inference.out_of_distribution,
+                "drift_score": drift_score,
+                "drift_suspected": drift_suspected,
+            },
+        }
+
+
+_default_node = None
+
 
 def generate_event() -> dict:
-    n_items = random.randint(1, 3)
-    plate_item_ids = random.sample(world.MENU_ITEM_IDS, k=n_items)
-
-    to_go = random.random() < 0.15
-    dietary = random.random() < 0.10
-
-    # A to-go box strongly suppresses observed waste; this is exactly the
-    # kind of confound the causal engine (Phase 5) is meant to control for,
-    # so the simulator must actually encode the relationship rather than
-    # generating waste_grams independently of confounder_flags.
-    base_waste = random.gauss(mu=120, sigma=45)
-    if to_go:
-        base_waste *= 0.25
-    waste_grams = max(0.0, round(base_waste, 1))
-
-    return {
-        "event_id": new_event_id(),
-        "event_type": "PlateWasteEvent",
-        "schema_version": world.SCHEMA_VERSION,
-        "source_id": "sim-plate-cam-01",
-        "source_kind": "simulated",
-        "timestamp": now_iso(),
-        "restaurant_id": world.RESTAURANT_ID,
-        "station_id": "station-bussing-01",
-        "table_id": random.choice(world.TABLES) if random.random() < 0.7 else None,
-        "estimated_waste_grams": waste_grams,
-        "plate_item_ids": plate_item_ids,
-        "confounder_flags": {
-            "to_go_container_used": to_go,
-            "declared_dietary_restriction": dietary,
-            "portion_size_variant": random.choice(PORTION_VARIANTS),
-        },
-        "image_ref": None,
-    }
+    """One event from a process-wide node (what the producer/schema compatibility test calls)."""
+    global _default_node
+    if _default_node is None:
+        _default_node = PlateWasteNode(EdgeModel.from_file(DEFAULT_MODEL_PATH), LENS_FOULING)
+    return _default_node.next_event()
 
 
 def main():
+    # Loaded here, before the event loop, on purpose: Simulator.run_forever logs
+    # and continues past errors raised while generating an event, so a model
+    # that fails its integrity check inside generate_event would be retried
+    # forever instead of stopping the pod where someone can see it.
+    node = PlateWasteNode(EdgeModel.from_file(os.environ.get("EDGE_MODEL_PATH", DEFAULT_MODEL_PATH)), LENS_FOULING)
     sim = Simulator(
         sensor_type="plate-waste",
         schema_filename="PlateWasteEvent.schema.json",
         mqtt_topic="sensors/plate-waste",
     )
-    sim.run_forever(generate_event)
+    sim.log.info(
+        "plate-waste node: model %s v%s sha256=%s, drift window %d, lens_fouling=%.2f",
+        node.model.model_id, node.model.model_version, node.model.sha256[:12], node.model.drift_window, LENS_FOULING,
+    )
+    sim.run_forever(node.next_event)
 
 
 if __name__ == "__main__":

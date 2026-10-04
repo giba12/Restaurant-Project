@@ -86,12 +86,12 @@ To assure that the system's code, configuration, data contracts and documents me
 
 | Metric | Value |
 |---|---|
-| Entries in the defect log | 132 (119 defects, 13 informational) |
-| By severity | S1 Critical 6; S2 High 29; S3 Medium 40; S4 Low 44; Info 13 |
-| By status | Fixed and guarded by a test 31; fixed 71; mitigated 7; clarified 14; open 9 |
-| Distinct tests | 302, plus the GDScript smoke test (about 80 checks) |
-| Requirements | 85: 61 verified by automated test, 6 by inspection, 8 live or manual only, 7 partial, 2 not verified, 1 not met |
-| Latest complete test cycle | 2026-10-03: every stack layer passed |
+| Entries in the defect log | 143 (128 defects, 15 informational) |
+| By severity | S1 Critical 6; S2 High 30; S3 Medium 45; S4 Low 47; Info 15 |
+| By status | Fixed and guarded by a test 36; fixed 73; mitigated 7; clarified 15; open 12 |
+| Distinct tests | 353, plus the GDScript smoke test (about 80 checks) |
+| Requirements | 92: 68 verified by automated test, 6 by inspection, 8 live or manual only, 8 partial, 1 not verified, 1 not met |
+| Latest complete test cycle | 2026-10-04: every layer re-run passed on the final code, after repeated failed attempts at the heavy layers (flaky in this environment); the injected scenario's finding is refuted (DEF-141) |
 | Line or branch code coverage | **Not measured** |
 | Mean time to detect a silent failure | Not tracked; observed range: minutes (found by test) to 12 days (the silent MQTT bridge failure, DEF-035) |
 

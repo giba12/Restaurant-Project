@@ -79,7 +79,18 @@ def _duration_ms(start_iso, end_iso):
         end = datetime.datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
     except ValueError:
         return None
-    return int((end - start).total_seconds() * 1000)
+    millis = int((end - start).total_seconds() * 1000)
+    if millis < 0:
+        # Never a negative duration. Producers stamp events with their own wall
+        # clocks, which step backwards (NTP; WSL2 resynchronising a busy host)
+        # and are never perfectly synchronised across real edge devices. A
+        # negative interval is impossible, so the honest value is "unknown":
+        # the schema allows null here, and returning the negative number made
+        # the summary fail its own schema, which this service treats as fatal,
+        # so one clock step crashed the pod and dropped every ticket in flight.
+        log.warning("event timestamps went backwards by %d ms (%s then %s); duration left unknown", -millis, start_iso, end_iso)
+        return None
+    return millis
 
 
 class TicketState:

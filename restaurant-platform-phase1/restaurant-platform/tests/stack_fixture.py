@@ -29,9 +29,35 @@ def http_get(path, timeout=10):
         return response.status, response.read()
 
 
+def summarise_connectors(payload: dict) -> dict:
+    """
+    Connector name -> "RUNNING" only if the connector and every one of its
+    tasks are running; otherwise the first state that is not (a FAILED task
+    wins over a RUNNING connector, and a connector with no task yet is
+    "NO_TASKS").
+
+    The connector's own state is not enough. Kafka Connect keeps reporting a
+    connector RUNNING while its task is FAILED, and the task is what moves the
+    data (problem log items 8 and 35). It happened again on 2026-10-03: a
+    start-up DNS failure left all four tasks FAILED under four RUNNING
+    connectors, and nothing was ingested, which a check of the connector
+    state alone would have called healthy.
+    """
+    summary = {}
+    for name, info in payload.items():
+        status = info["status"]
+        tasks = status.get("tasks", [])
+        states = [status["connector"]["state"]] + [task["state"] for task in tasks]
+        if not tasks:
+            summary[name] = "NO_TASKS"
+        else:
+            summary[name] = next((state for state in states if state != "RUNNING"), "RUNNING")
+    return summary
+
+
 def connector_states():
     out = compose("exec", "-T", "kafka-connect", "wget", "-qO-", "http://localhost:8083/connectors?expand=status", timeout=30).stdout
-    return {name: info["status"]["connector"]["state"] for name, info in json.loads(out).items()}
+    return summarise_connectors(json.loads(out))
 
 
 def healthy(service):

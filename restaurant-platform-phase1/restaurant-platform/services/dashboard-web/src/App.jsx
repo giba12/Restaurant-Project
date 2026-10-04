@@ -109,6 +109,51 @@ function AnomaliesPanel() {
   );
 }
 
+// The plate-waste node runs a small model on the node itself and reports how far
+// to trust each estimate. There is no ground truth in the field, so this panel
+// shows the node's own self-assessment, not accuracy: how often it distrusted
+// its inputs, and whether its drift monitor is alarming right now.
+function EdgePanel() {
+  const { data, error } = useApi("/edge/plate-waste?minutes=60", 8000);
+  const nodes = data?.nodes || [];
+  const pct = (x) => `${(x * 100).toFixed(1)}%`;
+  return (
+    <section className="panel wide">
+      <h2>Edge nodes (plate waste)</h2>
+      {error && <p className="error">{error}</p>}
+      {data && nodes.length === 0 && (
+        <p className="muted">No edge estimates in the last {data.window_minutes} minutes.</p>
+      )}
+      {nodes.length > 0 && (
+        <>
+          <p className="muted">
+            Each node estimates waste on the node itself and flags readings it does not trust.
+            Estimates flagged out-of-distribution, or made while a node is drifting, are left out of causal analysis.
+          </p>
+          <table>
+            <thead>
+              <tr><th>Node</th><th>Model</th><th>Readings</th><th>Distrusted</th><th>Drift alarm</th><th>Inference p95</th><th>Now</th></tr>
+            </thead>
+            <tbody>
+              {nodes.map((n) => (
+                <tr key={`${n.source_id}-${n.model_sha256}`}>
+                  <td>{n.source_id}</td>
+                  <td title={n.model_sha256}>{n.model_id} v{n.model_version} · {n.model_sha256.slice(0, 8)}</td>
+                  <td>{n.readings}</td>
+                  <td>{pct(n.out_of_distribution_rate)}</td>
+                  <td>{pct(n.drift_rate)} of readings</td>
+                  <td>{n.latency_ms_p95 == null ? "–" : `${n.latency_ms_p95.toFixed(2)} ms`}</td>
+                  <td>{n.drifting_now ? "drifting" : "ok"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </section>
+  );
+}
+
 const METRIC_LABELS = {
   time_to_cook_start_ms: "Time to cook start",
   cook_duration_ms: "Cook time",
@@ -215,6 +260,7 @@ export default function App() {
         <StationsPanel />
         <StaffPanel />
         <AnomaliesPanel />
+        <EdgePanel />
         <ComparisonPanel />
         <NarratedFindingsFeed />
       </main>

@@ -117,6 +117,12 @@ TREATMENT_MAP = {
             WHERE "timestamp" BETWEEN %(window_start)s AND %(window_end)s
               AND to_go_container_used IS NOT NULL
               AND source_kind <> 'player'  -- human-driven sessions are quarantined from analysis
+              -- Estimates the node itself did not trust: a single reading far from
+              -- its training data, or a sustained drift in its sensor inputs (a
+              -- fouled lens). Events from sources that do no on-node inference
+              -- carry no edge_inference and are kept.
+              AND NOT COALESCE((raw_payload #>> '{edge_inference,out_of_distribution}')::boolean, false)
+              AND NOT COALESCE((raw_payload #>> '{edge_inference,drift_suspected}')::boolean, false)
         """,
         "effect_unit": "grams",
     },

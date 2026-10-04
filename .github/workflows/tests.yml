@@ -67,6 +67,10 @@ jobs:
             dir: restaurant-platform-phase1/restaurant-platform/services/alert-relay
             install: pip install pytest
             run: python -m pytest test_alert_relay.py -v
+          - name: edge-ai
+            dir: restaurant-platform-phase1/restaurant-platform/edge-simulators
+            install: pip install numpy jsonschema pytest scikit-learn==1.5.1
+            run: python -m pytest test_edge_ai.py training/test_training.py -v
           - name: schema-compatibility
             dir: restaurant-platform-phase1/restaurant-platform/schemas
             install: pip install jsonschema pandas pytest numpy prometheus-client==0.26.0

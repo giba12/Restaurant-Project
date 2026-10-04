@@ -31,8 +31,21 @@ BURST_EVENTS = 3000
 # once per message, on a single thread; batching would raise it. 10 events/s is
 # still ~14x the stack's real default traffic (~0.7 events/s), so there is ample
 # headroom at this project's scale -- the floor exists to catch a collapse.
+# Re-measured 2026-10-03: 11 to 12 events/s while every message paid a 30-60 ms
+# schema re-check (DEF-139), then 45 events/s (3,000 events in 66 s) once the
+# consumer compiled each schema once. One measurement is not enough to raise
+# the floor; the validation cost is guarded directly by
+# test_validation_costs_microseconds_a_message_not_tens_of_milliseconds.
 MIN_INGEST_EVENTS_PER_SECOND = 10
 MAX_MEMORY_GROWTH_MB = 100
+# A step that appears once is not a leak. The causal engine imports DoWhy,
+# statsmodels and scipy lazily, on its first estimate, which is a measured
+# +153 MB step (2026-10-03) that lands inside this test's window whenever the
+# first anomaly happens to arrive during it, and not otherwise. Counting that
+# as growth made the test pass or fail on timing alone. The engine is allowed
+# that one-off import on top of the general bound; every other service is held
+# to the general bound.
+MEMORY_ALLOWANCE_MB = {"causal-engine": MAX_MEMORY_GROWTH_MB + 160}
 PYTHON_SERVICES = ["storage-consumer", "ticket-timing-aggregator", "anomaly-detector", "causal-engine",
                    "finding-reviewer", "digital-twin", "dashboard-api"]
 
@@ -109,7 +122,8 @@ def test_a_burst_of_events_is_absorbed_and_fully_stored():
         assert restart_count(service) == restarts_before[service], f"{service} crashed under load"
         growth = memory_mb(service) - memory_before[service]
         print(f"  memory growth {service:28s} {growth:+7.1f} MB")
-        assert growth < MAX_MEMORY_GROWTH_MB, f"{service} grew {growth:.0f} MB under a {BURST_EVENTS}-event burst"
+        allowed = MEMORY_ALLOWANCE_MB.get(service, MAX_MEMORY_GROWTH_MB)
+        assert growth < allowed, f"{service} grew {growth:.0f} MB under a {BURST_EVENTS}-event burst (allowed {allowed})"
 
 
 def test_the_backlog_drains_completely_after_a_burst():

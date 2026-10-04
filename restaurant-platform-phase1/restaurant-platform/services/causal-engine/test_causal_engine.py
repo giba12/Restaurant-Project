@@ -57,6 +57,16 @@ def test_human_driven_sessions_are_excluded_from_every_analysis_query():
     assert "source_kind <> 'player'" in causal_engine.TREATMENT_MAP["pickup_delay_ms"]["query"]
 
 
+def test_waste_estimates_the_edge_node_distrusted_are_excluded_from_analysis():
+    # The node's own out-of-distribution and drift flags decide which of its
+    # estimates reach the causal engine; the integration test proves the SQL
+    # does it against a real database, this one stops the clauses being dropped.
+    query = causal_engine.TREATMENT_MAP["estimated_waste_grams"]["query"]
+    assert "edge_inference,out_of_distribution" in query
+    assert "edge_inference,drift_suspected" in query
+    assert query.count("COALESCE") >= 2, "events without edge_inference must be kept, not dropped as NULL"
+
+
 # ------------------------------------------------------------ building findings
 
 @pytest.mark.parametrize("refutation", [True, False, None])

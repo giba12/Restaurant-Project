@@ -79,13 +79,13 @@ A complete run on 2026-10-03/04 on a developer laptop (WSL2, rootless Podman, 15
 
 | Layer | Result | Notes |
 |---|---|---|
-| 1 · Static | 191 passed, 3 skipped | the 3 skips are documented exceptions (two operator-managed charts, one nginx image) |
+| 1 · Static | 192 passed, 3 skipped | the 3 skips are documented exceptions (two operator-managed charts, one nginx image) |
 | 2 · Unit | 275 passed | edge node, world coupling and trainer 63, detector 25, aggregator and origin 33, causal engine 16, narrator 35, dashboard API 21, alert relay 5, game bridge 50, schema compatibility 7, connector supervisor 20 |
 | 3 · Database integration | 116 passed | no expected-failures left (the twin's redelivery double-count, DEF-107, was fixed on 2026-10-04) |
 | 4 · Statistical | 14 passed (including the slow gate tests) | 0 of 30 noise findings pass the gate; 10 of 10 genuine effects pass |
 | 5 · End-to-end | 65 passed in 8 min | includes the connector supervisor service |
 | 5 · Acceptance | 4 passed in 13 min | below; **the finding it checks now passes refutation** (it was refuted between 2026-10-03 and 2026-10-04, DEF-141) |
-| 6 · Resilience | 7 passed in 41 min (final run), plus the supervisor test in 9 min | every fault left Kafka and the database in exact agreement; **but the layer was flaky in the second cycle: one clean pass in six runs, and the Kafka-restart test failed in five of six, on the old code too** |
+| 6 · Resilience | 8 passed in 49 min (final run, on the fixed Connect configuration) | every fault left Kafka and the database in exact agreement; **but the layer was flaky in the second cycle: one clean pass in six runs, and the Kafka-restart test failed in five of six, on the old code too** |
 | 7 · Load | 4 passed in 10 min | below |
 | 8 · Security | 11 passed | one case per requirements file; no known vulnerabilities |
 
@@ -178,6 +178,7 @@ Every test in the repository, grouped by layer. For each: **what it is** (its ki
 | `test_schemas_reject_unknown_fields` (per schema) | **Static check.** `additionalProperties: false` everywhere. | A typo'd field name should fail loudly at the producer. | Otherwise it silently becomes a NULL, which is exactly how the confounder bug hid. |
 | `test_every_raw_schema_declares_source_kind_with_the_base_values` (per raw schema) | **Static check.** `source_kind` exists, defaults to `simulated`, and always allows `vendor_integration`. | The simulated-to-real swap promise depends on this one field. | It is the architectural seam the whole "swap in a real vendor" claim rests on. |
 | `test_the_chart_copies_of_schemas_are_identical_to_the_source_of_truth` | **Static check.** The three schema copies packaged into a Kubernetes ConfigMap are byte-identical to `schemas/`. | A stale copy was a real bug (problem log item 40). | Two copies of a contract will drift unless something checks them. |
+| `test_the_single_connect_worker_does_not_wait_five_minutes_for_a_departed_worker` | **Static test (DEF-142, DEF-143).** Both the Compose worker properties and the Kubernetes `KafkaConnect` resource set `scheduled.rebalance.max.delay.ms` to at most 60 seconds. | Its default is five minutes; after a broker restart a single worker sat with every connector unassigned for exactly 300 s (rejoin 19:19:50, next rebalance 19:24:50 in its log). | The root-cause setting cannot be dropped silently. The behaviour itself is checked by the Kafka-restart resilience test. |
 | `test_every_migration_has_an_identical_chart_copy_and_is_registered_everywhere` | **Static test.** Every `storage/schema/NNN_*.sql` has a byte-identical copy in `k8s/timescaledb/files/` and is named in Compose, the chart's ConfigMap and init Job, the integration harness and the migration test. | A stale SQL copy caused weeks of confusing column errors (DEF-053), and a migration missing from one list fails only on the path that list serves (RSK-018, which listed the SQL copies as unchecked). | Adding a migration without registering it everywhere now fails the build. |
 | `test_the_consumer_covers_exactly_the_raw_event_schemas` | **Static check.** The storage consumer's topic table maps to exactly the four raw schemas. | A fifth event type added to schemas but not the consumer would be silently ignored. | Completeness of the pipeline's front door. |
 

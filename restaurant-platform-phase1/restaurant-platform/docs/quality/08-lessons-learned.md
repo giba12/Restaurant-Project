@@ -100,6 +100,10 @@ The causal engine had a `staffing_level` to pickup-delay analysis from the start
 
 The connector supervisor (DEF-137) was only believed after the failure was reproduced deliberately (stop the broker so its name stops resolving, restart Kafka Connect) and the same test was shown to **fail with the supervisor stopped**. The sister failure (DEF-142, a six-minute stall after a Kafka restart) could not be reproduced on demand, so its fix is recorded as a mitigation verified by unit tests only; a test that passed once, with the supervisor taking no action, is not evidence for it. **A fix is as verified as the failure is reproducible.**
 
+### 3.9f Capture the logs of the failure, and read the timestamps
+
+DEF-142 was explained at first as a stale broker address, because 193 connection attempts to the old address were in the log. That was a symptom. The cause appeared only when a stress harness reproduced the stall with the logs saved: the worker rejoined its group, and then nothing happened for **exactly 300 seconds** (19:19:50 to 19:24:50, and 18:59:34 to 19:04:34 in a second capture). A round number in the gap between two log lines is a timeout, and Kafka Connect's `scheduled.rebalance.max.delay.ms` defaults to 300000. The fix was one line in two files. DEF-143, a one-off failure whose logs had been overwritten by the next test, could not be reproduced at all (13 stress cycles); it is recorded as probably the same delay, not proven. **Save the evidence of a failure before the next run overwrites it, build a harness that repeats the operation and times it, and treat a suspiciously round duration as the answer.**
+
 ### 3.9e Replacing a range deletes what is in it
 
 While writing one entry in the codebase guide I replaced everything between two headings, and silently deleted three other entries (DEF-144). The edit was committed. Nothing checked that the guide covers every file. **When an edit replaces a span, read what was in the span; and where a document claims to be complete, a test should say so.**

@@ -19,7 +19,8 @@
 **Third cycle (2026-10-04), fixing those findings and re-running what they touch.** All three are addressed, and so are the other open items that could be fixed:
 - **DEF-141, fixed and verified live.** The simulated world now contains the relationship the analysis depends on (staffing drives the kitchen's capacity; the shortage clocks staff out). In two independent acceptance runs the finding for the injected shortage **passes the repaired refutation gate** (effect -2,399 ms per additional staff member, p = 4.8e-6; and -2,098 ms, p = 5.2e-4) and is promoted by the live reviewer. The effect is one the simulation was designed to contain: this shows the pipeline recovers a real effect, not that a real kitchen has this one.
 - **DEF-137, fixed and verified live.** A connector supervisor restarts failed tasks; the failure was reproduced on purpose and the supervisor healed it, and the same test **fails with the supervisor stopped**.
-- **DEF-142, mitigated, not verified live.** The same supervisor restarts a connector left unassigned, but the stall did not recur in the one run since, so that handling is verified by unit tests only.
+- **DEF-142, root cause found and fixed.** Captured logs show a wait of exactly 300 s: Kafka Connect's default `scheduled.rebalance.max.delay.ms`. Set to zero (Compose and Kubernetes); eight consecutive Kafka restarts then resumed in 64 to 101 s (before: 376 to 378 s), and the full resilience layer passed 8 of 8.
+- **DEF-143, probable cause removed.** Not reproduced in 13 stress cycles; the most likely cause is the same 300 s delay recurring around the full restart. An inference, not a demonstration.
 - **DEF-107** (the twin double-counting a redelivered order) and **DEF-056** (stalled tickets blinding the anomaly detector) are fixed and tested; the integration layer now has no expected failures. **DEF-128** (no coverage measure) is closed by a measurement (section 3.6).
 
 On the final code, every layer was re-run and passed: static 191 (3 skipped), unit 275, database integration 116, end-to-end 65, acceptance 4, resilience 7 (plus the new supervisor test, run separately), load 4, statistical 14, security 11.
@@ -27,7 +28,7 @@ On the final code, every layer was re-run and passed: static 191 (3 skipped), un
 | | |
 |---|---|
 | Requirements | 96 identified: 73 verified by automated test, 6 by inspection, 8 live or manual only, 8 partial, 1 not verified, **0 not met** |
-| Open defects | 6, none above informational (DEF-015, DEF-091, DEF-093, DEF-123, DEF-131, DEF-143) |
+| Open defects | 5, all informational (DEF-015, DEF-091, DEF-093, DEF-123, DEF-131) |
 | Recommendation | **Ready to show, with caveats; not "released"** (`10-release-readiness-and-known-issues.md`) |
 
 **The limits that matter most:** one machine and one container engine; the new CI workflows have never run on GitHub; the heavy layers are flaky in this environment (the resilience layer needed six runs in the second cycle to produce one clean pass), so their stability is unmeasured; the staffing effect and the edge sensors are designs of the simulation, so passing shows the pipeline works, not that the real world behaves so; there is no independent reviewer.
@@ -36,13 +37,13 @@ On the final code, every layer was re-run and passed: static 191 (3 skipped), un
 
 | # | Layer | Result | Time | Last run | Notes |
 |---|---|---|---|---|---|
-| 1 | Static | **191 passed, 3 skipped** | about 45 s | 2026-10-04 | The 3 skips are documented exceptions (two operator-managed charts; the nginx image); lint ran |
+| 1 | Static | **192 passed, 3 skipped** | about 45 s | 2026-10-04 | The 3 skips are documented exceptions (two operator-managed charts; the nginx image); lint ran |
 | 2 | Unit | **275 passed** | seconds per suite | 2026-10-04 | edge node, world coupling and trainer 63, detector 25, aggregator and origin 33, causal engine 16, narrator 35, dashboard API 21, alert relay 5, game bridge 50, schema compatibility 7, connector supervisor 20 |
 | 3 | Database integration | **116 passed, no expected-fail** | 98 s | 2026-10-04 | The twin's redelivery double-count (DEF-107) is fixed, so the one expected-fail is gone |
 | 4 | Statistical | **14 passed** | 5 min 36 s | 2026-10-04 | Re-run on the final code: unchanged |
 | 5 | End-to-end | **65 passed, 4 skipped** | 8 min 27 s | 2026-10-04 | The 4 skips are the slow acceptance tests; includes the supervisor service and two edge-inference tests |
 | 5 | Acceptance | **4 passed** (two runs) | 12 min 34 s | 2026-10-04 | The finding for the injected shortage now **passes refutation** (section 3.1, DEF-141); a first run failed one new check because it measured staffing too late (DEF-145) |
-| 6 | Resilience | **7 passed** (full run, 40 min 54 s) and **1 passed** (the supervisor test, 9 min) | 2026-10-04 | The supervisor test fails with the supervisor stopped (5 min 29 s). Earlier in the cycle the layer needed six runs for one clean pass (DEF-137, DEF-142, DEF-143) |
+| 6 | Resilience | **8 passed** (full run on the fixed Connect configuration, 48 min 44 s) | 2026-10-04 | Includes the supervisor test, which fails with the supervisor stopped. Earlier in the cycle the layer needed six runs for one clean pass (DEF-137, DEF-142, DEF-143) |
 | 7 | Load | **4 passed** | 10 min | 2026-10-04 | Burst 35 events/s (45 in an earlier run), p95 latency 0.95 s, dashboard API p95 602 ms; the causal engine's one-off import +112 MB, every other service at most +1.5 MB |
 | 8 | Security | **11 passed** | 27 s | 2026-10-04 | One case per requirements file, now including the edge trainer's pins; no known vulnerabilities |
 | - | Godot client smoke test | Not re-run | - | 2026-09-30 (CI) | About 80 checks; passed on GitHub on 2026-09-30 |
@@ -183,16 +184,16 @@ From `06-defect-log.md` (143 entries: 128 defects, 15 informational):
 | DEF-139 | Per-message schema validation capped throughput | S3 | Fixed, tested (11 to 12 became 45 events/s) |
 | DEF-141 | The injected shortage's finding was refuted under the repaired gate | **S2** | **Fixed, tested, verified live twice** |
 | DEF-137 | A start-up DNS failure left every connector task failed | S3 | **Fixed, tested, reproduced and verified live** |
-| DEF-142 | Kafka Connect took about six minutes to resume after a Kafka restart | S3 | Mitigated (supervisor); not verified on a live stall |
-| DEF-143 | One full stop and start did not resume in time | Info | Open; not reproduced since |
+| DEF-142 | Kafka Connect took about six minutes to resume after a Kafka restart | S3 | **Fixed, tested**: the cause was Connect's default five-minute rebalance delay (exactly 300 s in the logs) |
+| DEF-143 | One full stop and start did not resume in time | Info | Mitigated: probable cause (the same delay) removed; not reproduced in 13 stress cycles, so not proven |
 | DEF-144 | I deleted three entries from the codebase guide | S4 | Fixed |
 | DEF-145 | My new staffing check measured too late | S4 | Fixed |
 
 Also fixed in the third cycle: **DEF-107** (the twin's double-count on redelivery) and **DEF-056** (stalled tickets blinding the anomaly detector); **DEF-128** (no coverage measurement) is closed by section 3.6.
 
-### Open now (6)
+### Open now (5)
 
-DEF-015, DEF-091, DEF-093, DEF-123, DEF-131 and DEF-143, all informational. **No defect above informational is open.**
+DEF-015, DEF-091, DEF-093, DEF-123 and DEF-131, all informational. **No defect above informational is open.**
 
 ## 6. How the cycle went
 

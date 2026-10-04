@@ -92,5 +92,8 @@ spec:
     config.storage.replication.factor: 1
     offset.storage.replication.factor: 1
     status.storage.replication.factor: 1
+    # One worker: nobody to wait for. The default (five minutes) leaves its connectors
+    # unassigned for that long after a broker restart (DEF-142, DEF-143).
+    scheduled.rebalance.max.delay.ms: 0
   resources:
     {{- toYaml .Values.resources | nindent 4 }}

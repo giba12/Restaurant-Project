@@ -221,3 +221,21 @@ def test_docker_compose_itself_accepts_the_file():
         ["docker", "compose", "-f", str(COMPOSE_FILE), "config", "-q"], capture_output=True, text=True, cwd=ROOT
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_the_single_connect_worker_does_not_wait_five_minutes_for_a_departed_worker():
+    # Kafka Connect's scheduled.rebalance.max.delay.ms defaults to 300000: the group leader holds
+    # the connectors of a worker that dropped out for five minutes in case it returns. With one
+    # worker, after a broker restart, that left every connector UNASSIGNED for exactly 300 s
+    # (rejoin at 19:19:50, next rebalance at 19:24:50 in the worker's log; DEF-142, DEF-143).
+    # Both deployments must set it to a small value.
+    import re
+
+    compose_props = (ROOT / "docker-compose" / "kafka-connect" / "connect-worker.properties").read_text()
+    match = re.search(r"^scheduled\.rebalance\.max\.delay\.ms=(\d+)\s*$", compose_props, flags=re.M)
+    assert match, "connect-worker.properties does not set scheduled.rebalance.max.delay.ms"
+    assert int(match.group(1)) <= 60_000
+    chart = (ROOT / "k8s" / "kafka-connect-mqtt" / "templates" / "kafka-connect.yaml").read_text()
+    match = re.search(r"^\s+scheduled\.rebalance\.max\.delay\.ms:\s*(\d+)\s*$", chart, flags=re.M)
+    assert match, "the KafkaConnect resource does not set scheduled.rebalance.max.delay.ms"
+    assert int(match.group(1)) <= 60_000

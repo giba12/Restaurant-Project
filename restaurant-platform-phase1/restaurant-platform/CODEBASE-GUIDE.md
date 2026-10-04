@@ -538,6 +538,7 @@ One image runs all four sensors; an environment variable picks which. Every simu
 - **Purpose:** The MQTT-to-Kafka bridge image for the portable path.
 
 ### `docker-compose/kafka-connect/connect-worker.properties`
+- **Added 2026-10-04:** `scheduled.rebalance.max.delay.ms=0`. Kafka Connect's default (five minutes) made the single worker sit with every connector `UNASSIGNED` for exactly 300 s after a broker restart (DEF-142, probably DEF-143); with one worker there is nobody to wait for. The Kubernetes `KafkaConnect` resource sets the same.
 - **What it does:** A distributed-mode Connect worker config: bootstrap `kafka:9092`, group `connect-cluster`, byte-array converters, single-replica internal topics, plugin path `/opt/kafka/plugins`.
 - **Why it works this way:** Replication factors are 1 because there is one broker. Byte-array converters pass the JSON payload through untouched instead of re-encoding it.
 - **Connects to:** the Dockerfile above.

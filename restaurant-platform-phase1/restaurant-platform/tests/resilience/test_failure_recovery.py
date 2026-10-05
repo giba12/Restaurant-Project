@@ -16,12 +16,14 @@ invariant: every message ever written to Kafka is stored exactly once.
 """
 import json
 import os
+import re
 import signal
 import time
+from datetime import datetime, timedelta, timezone
 
 
 import stack_fixture as stack
-from helpers import compose, container_id, inspect, run, sql_int, wait_for
+from helpers import compose, container_id, inspect, run, sql, sql_int, wait_for
 
 SIMULATORS = ["edge-sim-plate-waste", "edge-sim-pos-transaction", "edge-sim-service-timing", "edge-sim-staff-shift"]
 TOPIC_TABLE = {
@@ -31,6 +33,9 @@ TOPIC_TABLE = {
     "staff-shift-events": "staff_shift_events",
 }
 RECOVERY_SECONDS = 240
+SETTLE_SECONDS = 15  # events published in the last moments may legitimately still be on their way
+SHUTDOWN_WINDOW_ALLOWANCE = 2  # measured 0 in six outages at the 0.25 s poll (5 in six at 1 s); see the test below
+PUBLISHED_LINE = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d+ INFO \[[\w-]+\] published \w+ event_id=([0-9a-f-]{36})")
 
 
 def crash(service):
@@ -96,6 +101,64 @@ def quiesce_and_check_nothing_was_lost_or_duplicated():
         compose("start", *SIMULATORS, timeout=120)
 
 
+# ------------------------------------------------------------------ what the sensors sent, against what was stored
+
+def utc_now():
+    return datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def published_by_the_simulators(since):
+    """
+    {event_id: published_at} for every event the simulators logged as published since
+    `since` (a UTC datetime). The simulators log an event only after the MQTT broker has
+    acknowledged it, so this is a record of what the sensors sent that does not depend on
+    anything downstream: the thing "stored once" (Kafka against the database) cannot see.
+    """
+    published = {}
+    for service in SIMULATORS:
+        for line in compose("logs", "--no-color", service, timeout=120).stdout.splitlines():
+            match = PUBLISHED_LINE.search(line)
+            if match:
+                at = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                if at >= since:
+                    published[match.group(2)] = at
+    return published
+
+
+def stored_event_ids(since):
+    stamp = since.strftime("%Y-%m-%d %H:%M:%S+00")
+    ids = set()
+    for table in TOPIC_TABLE.values():
+        ids.update(sql(f"SELECT event_id FROM {table} WHERE ingested_at >= '{stamp}'", timeout=120).split())
+    return ids
+
+
+def events_sent_but_never_stored(since):
+    settled_before = datetime.now(timezone.utc) - timedelta(seconds=SETTLE_SECONDS)
+    sent = {i for i, at in published_by_the_simulators(since).items() if at <= settled_before}
+    return sent - stored_event_ids(since), len(sent)
+
+
+def assert_every_published_event_was_stored(since, allowed_missing=0, timeout=180):
+    """
+    Every event the simulators logged as published since `since` (settled ones: the last few
+    seconds may still be on their way) must be in the database. `allowed_missing` is for the one
+    loss that cannot be closed: see test_sensor_events_are_not_lost_while_the_kafka_connect_bridge_is_down.
+    """
+    outcome = {}
+
+    def settled():
+        missing, sent = events_sent_but_never_stored(since)
+        outcome.update(missing=len(missing), sent=sent)
+        return sent > 0 and len(missing) <= allowed_missing
+
+    try:
+        wait_for(settled, timeout, interval=10, description="every event the simulators published to be stored")
+    except AssertionError:
+        raise AssertionError(f"{outcome.get('missing')} of the {outcome.get('sent')} events the simulators published since "
+                             f"{since:%H:%M:%S} UTC never reached the database (allowed: {allowed_missing})") from None
+
+
 # ------------------------------------------------------------------ the invariant itself
 
 def test_baseline_every_message_is_stored_exactly_once_with_nothing_going_wrong():
@@ -149,22 +212,47 @@ def test_a_database_outage_is_survived_by_every_service_that_uses_it():
 
 def test_a_kafka_restart_is_survived():
     pipeline_is_flowing()
+    since = utc_now()
     compose("restart", "kafka", timeout=180)
     wait_for(lambda: stack.healthy("kafka"), 240, description="kafka to be healthy again")
     wait_for(lambda: all(state == "RUNNING" for state in stack.connector_states().values()), 240, interval=5,
              description="the MQTT connectors to be RUNNING again")
     pipeline_is_flowing()
     quiesce_and_check_nothing_was_lost_or_duplicated()
+    assert_every_published_event_was_stored(since)
 
 
 def test_an_mqtt_broker_restart_is_survived():
     # The sensor-facing edge: if simulators or the connectors cannot reconnect,
     # data silently stops (this is the shape of problem log item 44).
     pipeline_is_flowing()
+    since = utc_now()
     compose("restart", "mosquitto", timeout=120)
     pipeline_is_flowing()
     states = stack.connector_states()
     assert all(state == "RUNNING" for state in states.values()), states
+    assert_every_published_event_was_stored(since)
+
+
+def test_sensor_events_are_not_lost_while_the_kafka_connect_bridge_is_down():
+    # The MQTT broker keeps nothing for a subscriber that is not connected, so what the
+    # sensors published while Kafka Connect was down or restarting never reached Kafka. Nothing
+    # noticed: "stored once" compares Kafka with the database, not the sensors with Kafka.
+    # Measured before the fix: 470 of 1,266 events across one 45 s outage and its recovery.
+    # The ledger here is the simulators' own log of what they published; they now hold events
+    # while their connector is not running (DEF-148).
+    #
+    # A small loss is allowed for (measured: none in six outages): when Connect shuts down its REST API stops answering
+    # slightly before its MQTT consumers stop, so an event published in that sub-second window
+    # is still lost.
+    pipeline_is_flowing()
+    since = utc_now()
+    compose("stop", "kafka-connect", timeout=120)
+    time.sleep(45)  # long enough for every simulator to publish several events into the outage
+    compose("start", "kafka-connect", timeout=240)
+    wait_for(lambda: all(state == "RUNNING" for state in stack.connector_states().values()), 300, interval=5,
+             description="the connectors to be RUNNING again")
+    assert_every_published_event_was_stored(since, allowed_missing=SHUTDOWN_WINDOW_ALLOWANCE)
 
 
 def test_connector_tasks_that_failed_at_startup_are_restarted_automatically():
@@ -196,6 +284,10 @@ def test_stopping_and_restarting_the_whole_stack_preserves_data():
     offsets_before = {t: stack.end_offset(t) for t in TOPIC_TABLE}
 
     compose("down", timeout=300)  # containers and network go; named volumes stay
+    # The simulators' logs go with their containers, so the ledger starts here: everything the
+    # new simulators publish from their first moment, including the seconds before Kafka Connect
+    # has subscribed, which used to be lost.
+    since = utc_now()
     compose("up", "-d", "--no-build", *STACK_SERVICES, timeout=600)
     stack.wait_until_ready.cache_clear()
     stack.wait_until_ready()
@@ -204,3 +296,4 @@ def test_stopping_and_restarting_the_whole_stack_preserves_data():
     for topic, offset in offsets_before.items():
         assert stack.end_offset(topic) >= offset, f"{topic} lost messages across a stop/start"
     pipeline_is_flowing()
+    assert_every_published_event_was_stored(since)

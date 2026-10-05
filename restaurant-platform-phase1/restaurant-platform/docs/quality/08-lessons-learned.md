@@ -20,7 +20,7 @@
 
 ## 2. What the data says about how defects were found
 
-From the defect log (147 entries):
+From the defect log (150 entries):
 
 | Found by | Entries | Notes |
 |---|---|---|
@@ -99,6 +99,10 @@ The causal engine had a `staffing_level` to pickup-delay analysis from the start
 ### 3.9d Make the failure reproducible before trusting the fix for it
 
 The connector supervisor (DEF-137) was only believed after the failure was reproduced deliberately (stop the broker so its name stops resolving, restart Kafka Connect) and the same test was shown to **fail with the supervisor stopped**. The sister failure (DEF-142, a six-minute stall after a Kafka restart) could not be reproduced on demand, so its fix is recorded as a mitigation verified by unit tests only; a test that passed once, with the supervisor taking no action, is not evidence for it. **A fix is as verified as the failure is reproducible.**
+
+### 3.9h A check that compares two stages cannot see loss before the first
+
+"Every message in Kafka is stored exactly once" passed after every fault, and was true, while 37% of what the sensors published during one Connect outage (and the first 30 s of every start) never reached Kafka at all (DEF-148). The invariant compared Kafka with the database; the loss was upstream of Kafka. It surfaced only because a pasted container log showed the simulators publishing for 30 s before the bridge had subscribed. The fix was easy to get nearly right and hard to get right: the textbook answer (a persistent MQTT session) deadlocked the connector (DEF-150); the first gate trusted `RUNNING`, which Connect reports 3 to 7 s before the task has subscribed, and lost every event it sent in that gap; the second polled once a second and lost the events published in the half second between Connect's REST API stopping and the poll noticing. **Each version looked right until a ledger kept at the source (the simulators' own log of what they published) was compared with the database, repeatedly, and the misses were matched to the timestamps in Connect's log.** Measure from the origin of the data, and measure more than once: one clean run of the first version would have shipped it.
 
 ### 3.9g A first run on a new platform finds the platform's assumptions
 

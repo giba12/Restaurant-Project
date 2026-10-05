@@ -1,0 +1,25 @@
+{{- if .Values.ingestGate.enabled }}
+# Lets the simulators read the Kafka Connect REST API (the ingest gate; see
+# values.yaml). Strimzi's own policy for Connect admits only Connect pods and the
+# cluster operator on 8083; NetworkPolicies are additive, so this adds one source
+# without touching that one. Read-only in practice: the gate only does GETs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: connect-api-from-edge-simulators
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml .Values.ingestGate.connectPodLabels | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              component: edge-simulator
+      ports:
+        - port: 8083
+          protocol: TCP
+{{- end }}

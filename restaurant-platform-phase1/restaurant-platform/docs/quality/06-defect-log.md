@@ -28,29 +28,29 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 
 ## Summary
 
-**147 entries** (132 defects and 15 informational difficulties), recorded between 2026-08 and 2026-10-03.
+**150 entries** (134 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-05.
 
 ### By severity
 
 | Severity | Count |
 |---|---|
-| S1 Critical | 6 |
+| S1 Critical | 7 |
 | S2 High | 30 |
-| S3 Medium | 46 |
+| S3 Medium | 47 |
 | S4 Low | 50 |
-| Info | 15 |
-| **Total** | **147** |
+| Info | 16 |
+| **Total** | **150** |
 
 ### By status
 
 | Status | Count |
 |---|---|
-| Fixed+tested | 42 |
+| Fixed+tested | 44 |
 | Fixed | 76 |
 | Mitigated | 8 |
-| Clarified | 16 |
+| Clarified | 17 |
 | Open | 5 |
-| **Total** | **147** |
+| **Total** | **150** |
 
 ### By part (project period)
 
@@ -67,7 +67,8 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Part I: Found and fixed while repairing the refutation gate (2026-10-03) | 4 |
 | Part J: Found while building and verifying the edge-inference feature (2026-10-03) | 13 |
 | Part K: Found by the first GitHub runs (2026-10-04) | 2 |
-| **Total** | **147** |
+| Part L: Closing the event-loss gap between sensors and Kafka (2026-10-05) | 3 |
+| **Total** | **150** |
 
 ### By how it was found
 
@@ -75,21 +76,21 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 |---|---|
 | Live operation, deployment or manual run | 74 |
 | Review (static or manual) | 21 |
-| Test-regime run or observation | 28 |
+| Test-regime run or observation | 31 |
 | Automated test regime (2026-10-02) | 7 |
 | Chaos test | 5 |
 | Attempting the done condition | 3 |
 | CI or first push | 5 |
 | User report | 3 |
 | Audit script | 1 |
-| **Total** | **147** |
+| **Total** | **150** |
 
 ### By class
 
 | Class | Count |
 |---|---|
 | Deployment | 22 |
-| Logic | 26 |
+| Logic | 27 |
 | Environment/tooling | 21 |
 | Test defect | 18 |
 | Observability | 9 |
@@ -97,7 +98,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Configuration | 6 |
 | Documentation | 7 |
 | Portability | 6 |
-| Integration | 4 |
+| Integration | 6 |
 | Contract | 4 |
 | Security | 4 |
 | Supply chain | 3 |
@@ -106,7 +107,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Repository hygiene | 2 |
 | Operator error | 2 |
 | Code quality | 1 |
-| **Total** | **147** |
+| **Total** | **150** |
 
 ### Open items (5)
 
@@ -338,8 +339,18 @@ Found when the new workflows ran on GitHub's runners for the first time (Docker 
 
 | ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
 |---|---|---|---|---|---|---|---|
-| DEF-146 | Portability | first nightly run | **`container_id` broke on Compose v2.** The harness found a service's container with `compose ps -q`, which in Compose v2 lists only running containers, so the exited one-shot `kafka-connect-init` was not found (`IndexError`) and `test_the_one_shot_connector_registration_completed_successfully` failed on GitHub while passing locally under Compose v1. | S4 Low | CI or first push | `ps -a -q` (Compose v1 accepts the flag and lists the same containers), with a clear assertion when nothing is found. Verified locally (e2e 65 passed); **not yet re-run on GitHub**. | Fixed |
-| DEF-147 | Twin | first nightly run | **The twin held a staff row with no status.** A `station_reassign` for staff the twin has no record of inserted a row with a NULL status, which `test_the_digital_twin_mirrors_the_restaurant` (and the dashboard) treat as invalid. On GitHub's slower runner the likeliest cause is the MQTT bridge: Mosquitto does not queue messages for a subscriber that is not there yet, so a simulator's first clock-in can be published before the Connect task subscribes and never reach Kafka. **That cause is inferred, not shown** (the failed database was gone and the artifact holds container logs only); the twin should not invent an invalid state under incomplete history in any case. | S3 Medium | CI or first push | A reassignment for unknown staff now creates the row as `on_shift` with an unknown start time (a reassignment means the person is working); known staff keep their status. Two integration tests. **Not yet re-run on GitHub.** The loss of events published before the bridge subscribes is a property of the design, not addressed. | Fixed+tested |
+| DEF-146 | Portability | first nightly run | **`container_id` broke on Compose v2.** The harness found a service's container with `compose ps -q`, which in Compose v2 lists only running containers, so the exited one-shot `kafka-connect-init` was not found (`IndexError`) and `test_the_one_shot_connector_registration_completed_successfully` failed on GitHub while passing locally under Compose v1. | S4 Low | CI or first push | `ps -a -q` (Compose v1 accepts the flag and lists the same containers), with a clear assertion when nothing is found. Verified locally (e2e 65 passed) and **re-run on GitHub the same evening (the nightly workflow with only the end-to-end layer: e2e 65 passed, 4 skipped; the statistical and security jobs passed again)**. | Fixed |
+| DEF-147 | Twin | first nightly run | **The twin held a staff row with no status.** A `station_reassign` for staff the twin has no record of inserted a row with a NULL status, which `test_the_digital_twin_mirrors_the_restaurant` (and the dashboard) treat as invalid. On GitHub's slower runner the likeliest cause is the MQTT bridge: Mosquitto does not queue messages for a subscriber that is not there yet, so a simulator's first clock-in can be published before the Connect task subscribes and never reach Kafka. **That cause is inferred, not shown** (the failed database was gone and the artifact holds container logs only); the twin should not invent an invalid state under incomplete history in any case. | S3 Medium | CI or first push | A reassignment for unknown staff now creates the row as `on_shift` with an unknown start time (a reassignment means the person is working); known staff keep their status. Two integration tests; **the e2e layer passed on GitHub afterwards**. The suspected cause (events published before the MQTT bridge subscribes are lost) is real and measured, and is a separate defect closed by DEF-148. | Fixed+tested |
+
+## Part L. Closing the event-loss gap between sensors and Kafka (2026-10-05)
+
+Found by reading the container log the owner pasted from the nightly workflow's full-restart test, which showed the simulators publishing from 22:28:49 while the Connect clients subscribed to Mosquitto only at 22:29:19. Everything here was measured on the Compose stack with a ledger the existing tests lacked: the simulators' own log of what they published, compared with what reached the database.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-148 | Ingest | log analysis | **Sensor events were silently lost whenever the Kafka Connect bridge was down, restarting or not yet subscribed.** Mosquitto keeps nothing for a subscriber that is not connected and the four Camel MQTT connectors subscribe with clean sessions, so everything published in those windows never reached Kafka: about 30 s on every cold start (the log: published from 22:28:49, subscribed at 22:29:19), and the whole outage otherwise. Nothing noticed, because "stored exactly once" compares Kafka with the database, never the sensors with Kafka. **Measured before the fix: 470 of 1,266 published events (37%) lost across one 45 s Connect outage and its recovery.** The likely cause of DEF-147's missing clock-in is now shown to be real, not inferred. | S1 Critical | Test-regime run or observation | **Store-and-forward in the simulators** (`edge-simulators/common/ingest_gate.py`, `runtime.py`): each holds its events, in a bounded outbox, while its own connector is not running and sends them in order when it is; opt-in through `INGEST_GATE_URL`, set in Compose and in the chart, plus a NetworkPolicy because Strimzi admits only Connect pods to port 8083 (a live simulator pod's first probe was refused). Two things the first version got wrong, both found by measuring: **Connect reports a task `RUNNING` 3 s (Compose) to 7 s (k3s) before it has subscribed** (312 events flushed into that gap were all lost), so the gate waits 20 s after first seeing `RUNNING`; and **polling once a second left a window**: 5 of 2,632 events in six outages, every one published 0.2 to 0.8 s after Connect logged "Stopping REST server" and before the next poll noticed, so the poll is now 0.25 s, with Connect's per-request INFO log turned to WARN in both deployments so that is not a flood (about five lines a second before, none after). **Verified: six outages at the final settings lost 0 of 2,591 events.** 26 unit tests (nine deliberate breakages each turned one red), seven static wiring tests, and the resilience ledger check, now also applied to the Kafka restart, the MQTT restart and the full restart. **Not verified on Kubernetes:** the chart and policy pass a server-side dry run, but the live cluster has not been given them (the realign script now does and checks), so the NetworkPolicy and the Strimzi logging setting have not been seen working there. **Residual:** the gate cannot see the instant Connect dies; a small loss in that window is possible and is allowed for in the test (RSK-035). | Fixed+tested |
+| DEF-149 | Compose | found while testing DEF-148 | **The connector registration script could neither update a connector nor report failure.** `register-connectors.sh` POSTed each connector, which Kafka Connect refuses with 409 for one that exists (it keeps them across restarts), so a changed config file never reached a stack that had run before; and it then printed "already exists or failed" and exited 0 whichever it was, so a registration that genuinely failed (Connect answers 409 or 500 while rebalancing) looked like success. | S3 Medium | Test-regime run or observation | The script `PUT`s each connector's config to `/connectors/<name>/config` (creates or updates), retries, and exits non-zero if it cannot. Six tests run it against a fake `curl` (three deliberate breakages each turned a test red), and an end-to-end test changes a live connector's configuration, registers again and requires the original back. | Fixed+tested |
+| DEF-150 | Ingest | experiment | **A persistent MQTT session, the textbook fix for DEF-148, deadlocks this connector.** With `cleanSession=false` (settable only through `camel.component.paho.cleanSession`, since the Kamelet exposes five keys) Mosquitto hands over the whole backlog the moment the connector connects; Paho cannot complete its subscribe until its callback thread is free, that thread blocks in the first message waiting for the sink route, and the sink route cannot start until the MQTT consumer has finished starting. Each queued message then fails after 30 s (`No consumers available on endpoint: kamelet://ckcRemoveHeader`) and is lost, and the task never finishes starting. Recorded so nobody tries it again expecting it to work. | Info | Test-regime run or observation | None needed; reverted live, and the sensors hold the events instead (DEF-148). | Clarified |
 
 ## How the defects were found, and what that says about the process
 

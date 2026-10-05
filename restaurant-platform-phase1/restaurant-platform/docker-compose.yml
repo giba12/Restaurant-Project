@@ -134,6 +134,10 @@ services:
       MQTT_PORT: "1883"
       SCENARIO_CONTROL_ENABLED: "true"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # Hold events while this sensor's Kafka Connect connector is not running, and send them
+      # when it is (DEF-148). Without it everything published during a Connect outage, and
+      # during the first seconds of every start, was lost.
+      INGEST_GATE_URL: http://kafka-connect:8083
       SENSOR_TYPE: plate-waste
       MQTT_TOPIC: sensors/plate-waste
       SOURCE_ID: sim-plate-cam-01

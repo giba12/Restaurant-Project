@@ -27,13 +27,13 @@ On the final code, every layer was re-run and passed: static 191 (3 skipped), un
 
 | | |
 |---|---|
-| Requirements | 96 identified: 73 verified by automated test, 6 by inspection, 9 live or manual only, 7 partial, 1 not verified, **0 not met** |
+| Requirements | 97 identified: 73 verified by automated test, 6 by inspection, 9 live or manual only, 8 partial, 1 not verified, **0 not met** |
 | Open defects | 5, all informational (DEF-015, DEF-091, DEF-093, DEF-123, DEF-131) |
 | Recommendation | **Ready to show, with caveats; not "released"** (`10-release-readiness-and-known-issues.md`) |
 
-**Fourth step (2026-10-04): the first GitHub runs.** The commits were pushed once, with permission, and the new workflows ran on GitHub's runners (Docker Engine, Compose v2, a clean cold-cache machine). `tests`: all 13 jobs green on the first run of the new ones. The nightly workflow, triggered by hand: statistical 14 of 14 (64 s), security 11 of 11, and in the stack job acceptance 4 of 4 (9 min), load 4 of 4 (55 s), resilience 8 of 8 (11 min), e2e 63 passed and **2 failed**, both genuine: a harness helper that relied on Compose v1 listing exited containers (DEF-146) and a twin that created a staff row with no status when its history was incomplete (DEF-147). Both are fixed and verified locally (integration 118, e2e 65); **neither fix has been re-run on GitHub** because the push permission was for one push. The whole stack built and started cold in 3 min 22 s on the clean runner.
+**Fourth step (2026-10-04): the first GitHub runs.** The commits were pushed once, with permission, and the new workflows ran on GitHub's runners (Docker Engine, Compose v2, a clean cold-cache machine). `tests`: all 13 jobs green on the first run of the new ones. The nightly workflow, triggered by hand: statistical 14 of 14 (64 s), security 11 of 11, and in the stack job acceptance 4 of 4 (9 min), load 4 of 4 (55 s), resilience 8 of 8 (11 min), e2e 63 passed and **2 failed**, both genuine: a harness helper that relied on Compose v1 listing exited containers (DEF-146) and a twin that created a staff row with no status when its history was incomplete (DEF-147). Both are fixed and verified locally (integration 118, e2e 65); both fixes were then **re-run on GitHub the same evening (the nightly workflow with only the end-to-end layer: e2e 65 passed, 4 skipped; the statistical and security jobs passed again)**, after a second push the owner asked for. The whole stack built and started cold in 3 min 22 s on the clean runner.
 
-**The limits that matter most:** one machine and one container engine; the two e2e fixes from the first GitHub run are not yet re-run there; the heavy layers are flaky in this environment (the resilience layer needed six runs in the second cycle to produce one clean pass), so their stability is unmeasured; the staffing effect and the edge sensors are designs of the simulation, so passing shows the pipeline works, not that the real world behaves so; there is no independent reviewer.
+**The limits that matter most:** one machine and one container engine; the two e2e fixes from the first GitHub run were re-run there for the end-to-end layer only; the heavy layers are flaky in this environment (the resilience layer needed six runs in the second cycle to produce one clean pass), so their stability is unmeasured; the staffing effect and the edge sensors are designs of the simulation, so passing shows the pipeline works, not that the real world behaves so; there is no independent reviewer.
 
 ## 2. Results by layer
 
@@ -50,7 +50,7 @@ On the final code, every layer was re-run and passed: static 191 (3 skipped), un
 | 8 | Security | **11 passed** | 27 s | 2026-10-04 | One case per requirements file, now including the edge trainer's pins; no known vulnerabilities |
 | - | Godot client smoke test | Not re-run | - | 2026-09-30 (CI) | About 80 checks; passed on GitHub on 2026-09-30 |
 
-**Totals:** 396 distinct test names across the Python suites, plus the GDScript smoke test.
+**Totals:** 430 distinct test names across the Python suites, plus the GDScript smoke test.
 
 ## 3. Measured results
 
@@ -141,10 +141,10 @@ From `03-requirements-traceability-matrix.md`:
 | Verified (automated) | 73 |
 | Verified by inspection | 6 |
 | Verified (live or manual only) | 9 |
-| Partially verified | 7 |
+| Partially verified | 8 |
 | Not verified | 1 |
 | **Not met** | 0 |
-| **Total** | **96** |
+| **Total** | **97** |
 
 **Not met:** none. FR-TWN-03 (twin counts correct under redelivery) was the last, and was fixed on 2026-10-04 (DEF-107); FR-CAU-06 (the gate rejects noise) was fixed on 2026-10-03. **Not verified:** NFR-POR-03 (the Codespaces devcontainer). Four requirements were added on 2026-10-04 and verified at once: FR-ING-07 (staffing is a real driver), FR-ANA-05 (robust control limits), FR-CAU-07 (the scenario's finding passes refutation) and NFR-REL-05 (self-healing connectors). The traceability matrix lists the weakly verified requirements and what would close each.
 

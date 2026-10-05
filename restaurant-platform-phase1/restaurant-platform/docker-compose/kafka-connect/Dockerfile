@@ -21,6 +21,17 @@ RUN mkdir -p /opt/kafka/plugins/camel-mqtt && \
 
 COPY connect-worker.properties /opt/kafka/config/connect-worker.properties
 
+# Kafka Connect logs every REST request at INFO, under RestServer. The edge simulators ask
+# the REST API about their connector every second (their ingest gate, DEF-148); without this
+# that is about five log lines a second drowning everything worth reading. This raises that
+# one logger to WARN (it also hides RestServer's own start/stop lines). `Loggers:` is the last
+# section of the file, so appending a `Logger:` list puts it in the right place; the build
+# fails if the base image's file is ever laid out differently.
+RUN printf '    Logger:\n      - name: org.apache.kafka.connect.runtime.rest.RestServer\n        level: WARN\n' \
+      >> /opt/kafka/config/connect-log4j2.yaml && \
+    tail -n 12 /opt/kafka/config/connect-log4j2.yaml | grep -q 'Loggers:' && \
+    tail -n 4 /opt/kafka/config/connect-log4j2.yaml | grep -q 'RestServer'
+
 # Root was only needed to install the plugin above. The base image's own
 # unprivileged user runs the worker, matching the k8s variant's USER 1001
 # (found by tests/static/test_dockerfiles.py: this image used to stay root).

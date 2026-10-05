@@ -25,6 +25,18 @@ spec:
       - secretName: restaurant-platform-kafka-cluster-ca-cert
         certificate: ca.crt
   {{- end }}
+  # Kafka Connect logs every REST request at INFO, under RestServer. The edge simulators now
+  # ask the REST API about their connector every second (their ingest gate, DEF-148), and
+  # that alone would be about five log lines a second drowning everything worth reading in
+  # the Connect log. Raising this one logger to WARN removes the request lines and also
+  # RestServer's own start/stop messages; the Herder and task logs are untouched.
+  # Strimzi writes these keys into log4j2.properties as they are (its own default
+  # "logger.reflections.*" entries have the same shape).
+  logging:
+    type: inline
+    loggers:
+      logger.restrequests.name: org.apache.kafka.connect.runtime.rest.RestServer
+      logger.restrequests.level: WARN
   # Explicit -Xmx, not left to the JVM's default cgroup-based auto-sizing
   # (25% of the container's memory limit) -- same reasoning as
   # k8s/kafka-strimzi/templates/kafka-nodepool.yaml's own broker jvmOptions,

@@ -52,6 +52,7 @@ Lists the risks to the project's goals (a credible, runnable portfolio piece who
 | RSK-032 | Analytics validity | **A subtle sensor fault goes unnoticed by the node.** The per-reading guard misses almost all of a slow fault (0.8% of readings flagged at lens fouling 0.4, where error is already five times clean); the drift monitor catches fouling of 0.3 and above in every trial but misses about 40% of onsets at 0.2, where error is 2.7 times clean. | 2 | 2 | 4 (Medium) | Accepted | Rolling drift monitor calibrated on clean data (0.11% of clean time in alarm); estimates under alarm excluded from analysis; the limits are measured and pinned by tests rather than hidden. | Medium for subtle faults. A more sensitive statistic (for example CUSUM) would narrow it. | DEF-133, FR-EDG-04 |
 | RSK-033 | Maintainability | **No path to update the model on a node.** The model is baked into the simulator image, so changing it means rebuilding and redeploying the image; there is no versioned model store, canary or rollback. | 2 | 1 | 2 (Low) | Accepted | Every estimate carries the model hash, so a mixed fleet would at least be visible in the dashboard's edge view; one node exists today. | Low now; it grows with the number of nodes. | FR-EDG-02, FR-EDG-06 |
 | RSK-034 | Analytics validity | **The injected scenario did not move the variable the causal engine analyses.** The staffing shortage grew the timing simulator's backlog through a control message but never changed the staff-shift events from which `staffing_level` is computed, so under the repaired gate the engine's finding for the scenario was refuted (effect p = 0.95). | 1 | 2 | 2 (Low) | Mitigated | Fixed 2026-10-04: staffing now drives the kitchen's capacity and the shortage clocks staff out. The finding passes refutation with a negative effect in two live acceptance runs (p = 4.8e-6 and 5.2e-4), and the acceptance test asserts it. | Low-medium. The relationship is a design of the simulation, so this shows the pipeline recovers an effect that is truly there, not that a real kitchen has one; the p-values have been measured twice. | DEF-141, DEF-131 |
+| RSK-035 | Data integrity | **A few events can still be lost when the Kafka Connect bridge shuts down, and the gate that prevents the rest is a heuristic.** The simulators hold events while their connector is not running, but the gate learns of an outage by polling, and Connect's REST API stops answering about 0.7 s before its MQTT consumers do. With a once-a-second poll 5 of 2,632 events were lost in six outages (every one 0.2 to 0.8 s after shutdown began); at 0.25 s, 0 of 2,591. The gate also waits a fixed 20 s after Connect first reports `RUNNING` (the task took 3 s to finish starting under Compose, 7 s on k3s) because the REST API has no signal for "subscribed"; a much slower host could still send into a bridge that is not ready. Held events live in the simulator's memory (5,000, oldest dropped), so a simulator restarted during an outage loses them. | 2 | 1 | 2 (Low) | Realised, mitigated | The ledger test compares what the simulators published with what was stored, after the Connect outage, the Kafka restart, the MQTT restart and the full restart, and allows at most 2 lost events; a 0.25 s poll; the bounded buffer logs every drop. | Low. Not verified on Kubernetes until the chart is deployed. | DEF-148, DEF-150 |
 
 ## Summary
 
@@ -59,10 +60,10 @@ Lists the risks to the project's goals (a credible, runnable portfolio piece who
 |---|---|
 | High | 4 |
 | Medium | 19 |
-| Low | 11 |
-| **Total** | **34** |
+| Low | 12 |
+| **Total** | **35** |
 
-Of these, 15 are risks that **actually happened** during the project.
+Of these, 16 are risks that **actually happened** during the project.
 
 ### The risks to act on first
 

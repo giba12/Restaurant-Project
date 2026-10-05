@@ -38,6 +38,32 @@ def test_the_one_shot_connector_registration_completed_successfully():
     assert state["Status"] == "exited" and state["ExitCode"] == 0, state
 
 
+def test_registering_the_connectors_again_corrects_one_whose_configuration_has_drifted():
+    # The registration script used to POST, which Kafka Connect refuses for a connector that
+    # already exists, and then exit 0 whichever way it had gone. So a changed config file never
+    # reached a stack that had run before. It now PUTs, which creates or updates.
+    name = "pos-transaction-source-connector"
+    connect = f"http://kafka-connect:8083/connectors/{name}/config"
+
+    def current_config():
+        return json.loads(compose("exec", "-T", "kafka-connect", "wget", "-qO-", connect, timeout=30).stdout)
+
+    original = current_config()
+    drifted = {**original, "camel.kamelet.mqtt-source.clientId": "somebody-elses-client"}
+    # busybox wget cannot PUT; the supervisor's container has Python.
+    compose("exec", "-T", "kafka-connect-supervisor", "python", "-c",
+            "import sys, urllib.request as u; "
+            f"u.urlopen(u.Request('{connect}', data=sys.argv[1].encode(), method='PUT', headers={{'Content-Type': 'application/json'}}))",
+            json.dumps(drifted), timeout=60)
+    assert current_config() != original, "the test could not change the connector's configuration"
+
+    compose("run", "--rm", "-T", "kafka-connect-init", timeout=300)  # exit code 0 or this raises
+
+    assert current_config() == original, "registering again did not restore the connector's configuration"
+    wait_for(lambda: all(state == "RUNNING" for state in stack.connector_states().values()), 120, interval=3,
+             description="the connectors to be RUNNING after the configuration was restored")
+
+
 def test_all_four_mqtt_connectors_are_running():
     # One connector failing was invisible once (problem log item 44): three of
     # four sensor topics silently stopped reaching Kafka.

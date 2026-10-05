@@ -12,7 +12,11 @@
 # images (the edge-AI plate-waste node, staffing as a driver of the simulated
 # kitchen), and the Kafka Connect `scheduled.rebalance.max.delay.ms=0` setting
 # (DEF-142) applied by upgrading the kafka-connect-mqtt release, which makes
-# Strimzi roll the Connect pod.
+# Strimzi roll the Connect pod; and the edge-simulators release, which turns on the
+# ingest gate (the simulators hold events while their Kafka Connect connector is not
+# running, DEF-148) and adds the NetworkPolicy that lets them read the Connect API;
+# the kafka-connect-mqtt upgrade also quiets Connect's REST request log, which that
+# polling would otherwise flood.
 #
 # History. It first repaired a database built before the raw-table
 # corrections; since then it also carries later changes (ticket origin, the
@@ -102,6 +106,9 @@ run helm upgrade --install phase5-schemas k8s/phase5-schemas -n "$NS" --wait
 # chart default added since is picked up (a plain --reuse-values once left a committed fix
 # undeployed for ten hours, DEF-090). Strimzi rolls the Connect pod for the new worker config.
 run helm upgrade kafka-connect-mqtt k8s/kafka-connect-mqtt -n "$NS" --reset-then-reuse-values
+# The simulators' release: INGEST_GATE_URL (DEF-148) and the NetworkPolicy that admits them to
+# the Connect REST API. Strimzi's own policy admits only Connect pods and the operator.
+run helm upgrade edge-simulators k8s/edge-simulators -n "$NS" --reset-then-reuse-values
 
 echo "== 5. import images into k3s"
 for img in storage-consumer finding-narrator dashboard-web ticket-timing-aggregator anomaly-detector causal-engine dashboard-api digital-twin scenario-injection-controller edge-simulator; do
@@ -135,5 +142,11 @@ SELECT (SELECT count(*) FROM twin_open_tickets)          AS twin_open_tickets,
 SQL
   echo "expect every count above to be > 0 and growing (twin_open_tickets can be 0 for a moment). Then: kubectl logs deploy/storage-consumer -n $NS --tail=20"
   kubectl get kafkaconnector -n "$NS" 2>/dev/null || true
+  echo "Connect REST request lines in the last minute (expect 0: the RestServer logger is WARN so the gates' polling does not flood the log):"
+  kubectl logs connect-cluster-connect-0 -n "$NS" --since=60s 2>/dev/null | grep -c '"GET /connectors' || true
+  echo "ingest gate (each line should say 'open' once Connect has been running for the settle period):"
+  for d in edge-sim-plate-waste edge-sim-pos-transaction edge-sim-service-timing edge-sim-staff-shift; do
+    printf '%s: ' "$d"; kubectl logs "deploy/$d" -n "$NS" 2>/dev/null | grep "ingest gate" | tail -1 || echo "no gate line yet"
+  done
 fi
 echo "done"

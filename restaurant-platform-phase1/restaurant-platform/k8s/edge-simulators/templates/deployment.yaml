@@ -45,6 +45,13 @@ spec:
               value: {{ $.Values.kafka.securityProtocol | quote }}
             - name: MQTT_TLS_ENABLED
               value: {{ $.Values.mqtt.tlsEnabled | quote }}
+            {{- if $.Values.ingestGate.enabled }}
+            # Hold events while this sensor's Kafka Connect connector is not running (DEF-148).
+            - name: INGEST_GATE_URL
+              value: {{ $.Values.ingestGate.url | quote }}
+            - name: INGEST_GATE_SETTLE_SECONDS
+              value: {{ $.Values.ingestGate.settleSeconds | quote }}
+            {{- end }}
           volumeMounts:
             - name: kafka-tls
               mountPath: /etc/kafka-tls

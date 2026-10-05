@@ -41,6 +41,26 @@ kafka:
 # that lets scenario-injection-controller perturb this simulator.
 scenarioControlEnabled: true
 
+# Store-and-forward (DEF-148). The MQTT broker keeps nothing for a subscriber that
+# is not connected and the Kafka Connect connectors subscribe with clean sessions,
+# so what a sensor published while its connector was down, restarting or still
+# starting was lost. With the gate on, each simulator asks the Connect REST API
+# whether its own connector (<sensorType>-source-connector) is running and holds
+# its events until it is (common/ingest_gate.py). Strimzi's own NetworkPolicy lets
+# only Connect pods and the operator reach the API, so templates/networkpolicy.yaml
+# adds the simulators.
+ingestGate:
+  enabled: true
+  url: "http://connect-cluster-connect-api.kafka.svc.cluster.local:8083"
+  # Kafka Connect reports a task RUNNING before it has subscribed to MQTT; events sent in
+  # between are lost, so the gate waits this long after first seeing RUNNING. The task took
+  # about 7 s to finish starting on this cluster (3 s under Compose), measured 2026-10-05.
+  settleSeconds: 20
+  # The labels Strimzi puts on the Connect pods (the policy below selects them).
+  connectPodLabels:
+    strimzi.io/cluster: connect-cluster
+    strimzi.io/kind: KafkaConnect
+
 # Memory right-sized 2026-09-29 against real usage (~17-29Mi per simulator,
 # confirmed live across all four).
 resources:

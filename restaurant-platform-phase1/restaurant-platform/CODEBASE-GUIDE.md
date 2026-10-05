@@ -332,6 +332,7 @@ One image runs all four sensors; an environment variable picks which. Every simu
 - **What it does:** Defines the `Simulator` class: load one schema, connect to MQTT with exponential backoff, validate each event against the schema, publish it (QoS 1) and sleep a Poisson-distributed interval.
 - **Why it works this way:**
 - **Added 2026-10-04:** `subscribe` (handlers per topic, re-subscribed on every connect because a clean-session reconnect drops them), `_on_message` (routes by topic; a failing handler is logged, never raised into the network thread) and `publish_state` (retained, QoS 1) so simulators can share simulated-world state.
+- **Added 2026-10-05 (DEF-148), store-and-forward:** `publish` now validates and queues the event in a bounded outbox (`OUTBOX_MAX_EVENTS`, 5,000; the oldest is dropped, loudly, if it fills) and `flush` sends held events oldest first while the ingest gate (`common/ingest_gate.py`) is open; `sleep_poisson_interval` flushes every half second so held events leave as soon as the bridge is back. An event is removed from the outbox as it is handed to the MQTT client, never resent, because paho resends what it accepted and a second copy would break "stored exactly once". With no `INGEST_GATE_URL` the gate is always open and behaviour is as before.
   - A schema violation is fatal (`sys.exit(1)`) because it means the generator has a bug; logging and skipping would hide it and could let bad data reach Kafka.
   - Connection and publish errors are logged and retried because the broker may simply not be up yet, and a crash loop would fix nothing.
   - The interval is floored at 0.5 s so a tiny random draw cannot hammer the broker.
@@ -389,6 +390,17 @@ One image runs all four sensors; an environment variable picks which. Every simu
 - **Why it works this way:** One scenario can now act on the kitchen and the staff together. `kafka-python` is imported inside the function so a simulator without scenario control does not need it.
 - **Connects to:** both simulators; `services/scenario-injection-controller`.
 - **Purpose:** Shared scenario hook.
+
+### `edge-simulators/common/ingest_gate.py`
+- **What it does:** Answers "is the Kafka Connect connector that carries this sensor's events running?" by polling the Connect REST API (`GET /connectors/<sensor>-source-connector/status`, every 0.25 s). The gate is closed until the connector and every task have been `RUNNING` continuously for a settle period (20 s), closes at once at the first look that says otherwise, and counts an unreachable API as closed. `connector_is_running` is the pure decision; `IngestGate.poll_once` takes an injectable fetch and clock.
+- **Why it works this way:** The MQTT broker keeps nothing for a subscriber that is not connected, and the connectors subscribe with clean sessions, so events published while a connector was down, restarting or still starting were lost (37% of one measured outage; about 30 s on every cold start). A persistent MQTT session was tried first and deadlocks this connector's start-up (the backlog arrives before the sink route exists, each message waits 30 s and fails). Connect reports a task `RUNNING` 3 to 7 s before it has subscribed, so the settle period is needed; the sub-second window at Connect's own shutdown cannot be closed from here and is measured in `docs/quality/06-defect-log.md` (DEF-148). Opt-in through `INGEST_GATE_URL`.
+- **Connects to:** `common/runtime.py`; the Connect REST API (`kafka-connect:8083` under Compose, `connect-cluster-connect-api` on Kubernetes, where `k8s/edge-simulators/templates/networkpolicy.yaml` admits the simulators); `test_store_and_forward.py`, `tests/static/test_ingest_gate_wiring.py`, `tests/resilience/test_failure_recovery.py`.
+- **Purpose:** Stops sensors publishing into a bridge that is not there.
+
+### `edge-simulators/test_store_and_forward.py`
+- **What it does:** Tests the gate's decision table, settle clock and failure handling, and the simulator's outbox: events held while the gate is shut and sent in order, once each, when it opens, never queued if invalid, bounded with a loud oldest-first drop, and never resent after a failed acknowledgement. Fake MQTT client, fake Connect API, fake clock.
+- **Why it works this way:** The real behaviour (events surviving a real Connect outage) is checked on the real stack; these pin the logic. Checked for teeth by breaking the code nine ways, each turning a test red (one by hanging).
+- **Purpose:** Verification of the store-and-forward behaviour.
 
 ### `edge-simulators/edge_ai/__init__.py`
 - **What it does:** Empty. Makes `edge_ai` a package.
@@ -545,8 +557,8 @@ One image runs all four sensors; an environment variable picks which. Every simu
 - **Purpose:** Worker configuration.
 
 ### `docker-compose/kafka-connect/register-connectors.sh`
-- **What it does:** A one-shot script that waits for the Connect REST API, then `POST`s each JSON file in `/connectors` to register the connectors.
-- **Why it works this way:** With no Strimzi operator there are no `KafkaConnector` resources, so registration is a plain REST call. A failed or duplicate registration prints a hint rather than failing the stack.
+- **What it does:** A one-shot script that waits for the Connect REST API, then `PUT`s the `config` object of each JSON file in `/connectors` to `/connectors/<name>/config`, retrying, and exits non-zero if a connector cannot be registered.
+- **Why it works this way:** With no Strimzi operator there are no `KafkaConnector` resources, so registration is a plain REST call. `PUT` creates or updates; it used to `POST`, which fails for a connector that already exists (Kafka keeps them across restarts), so a changed file never reached a stack that had run before, and the script then exited 0 whether that was the reason or the registration had genuinely failed (DEF-149). Tested by running it against a fake `curl` (`tests/static/test_register_connectors.py`) and live (`tests/e2e`).
 - **Connects to:** `connectors/*.json`; the `kafka-connect` REST API; run by `kafka-connect-init`.
 - **Purpose:** Compose's stand-in for the operator-managed connectors.
 
@@ -1008,7 +1020,7 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 ### 9.3 Simulators and analytics
 
 #### `k8s/edge-simulators/Chart.yaml`, `values.yaml`, `templates/deployment.yaml`
-- **What they do:** One chart that loops over a `simulators` list in `values.yaml` and renders one Deployment per sensor type (image, `SENSOR_TYPE`, MQTT topic, `SOURCE_ID`, event rate). `scenarioControlEnabled` is applied to all four even though only the service-timing simulator reads it.
+- **What they do:** One chart that loops over a `simulators` list in `values.yaml` and renders one Deployment per sensor type (image, `SENSOR_TYPE`, MQTT topic, `SOURCE_ID`, event rate). `scenarioControlEnabled` is applied to all four even though only the service-timing simulator reads it. Since 2026-10-05 (`ingestGate`, DEF-148) each Deployment also gets `INGEST_GATE_URL` and `INGEST_GATE_SETTLE_SECONDS`, and `templates/networkpolicy.yaml` adds a policy admitting the simulators to port 8083 of the Connect pods, because Strimzi's own policy admits only Connect pods and the operator.
 - **Why they work this way:** A `range` loop turns "one container per sensor type" into four list entries and one template. Event rates (8, 12, 20 and 3 per minute) are the Poisson means.
 - **Purpose:** Deploys the four fake sensors.
 

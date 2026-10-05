@@ -39,6 +39,7 @@ sys.modules.setdefault("paho.mqtt", _paho_mqtt)
 sys.modules.setdefault("paho.mqtt.client", _paho_mqtt_client)
 
 from common import scenario, staffing  # noqa: E402
+from common.ingest_gate import IngestGate  # noqa: E402
 from common.runtime import Simulator  # noqa: E402
 from simulators import service_timing, staff_shift  # noqa: E402
 
@@ -256,6 +257,8 @@ def bare_simulator():
     sim = Simulator.__new__(Simulator)
     sim._handlers = {}
     sim._connected_event = threading.Event()
+    sim._has_connected_before = False
+    sim.gate = IngestGate(None, "test-source-connector")  # no URL: always open, as for a stand-alone simulator
     sim.client = FakeClient()
     sim.log = types.SimpleNamespace(error=lambda *a, **k: None, exception=lambda *a, **k: None)
     return sim

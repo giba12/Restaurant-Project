@@ -56,6 +56,11 @@ ingestGate:
   # between are lost, so the gate waits this long after first seeing RUNNING. The task took
   # about 7 s to finish starting on this cluster (3 s under Compose), measured 2026-10-05.
   settleSeconds: 20
+  # The gate also watches Kafka itself (Connect's REST status lies while Kafka is down), and on this
+  # cluster each look is a full TLS handshake, so it looks once a second here (0.25 s under Compose,
+  # where it is a bare connection). A faster look would shave a little off the few events a Kafka
+  # restart can still cost; it has not been measured on the cluster.
+  kafkaPollSeconds: 1
   # The labels Strimzi puts on the Connect pods (the policy below selects them).
   connectPodLabels:
     strimzi.io/cluster: connect-cluster

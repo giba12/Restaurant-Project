@@ -71,7 +71,7 @@ In order of value:
 - Every service is a single replica; the aggregator, simulators and game bridge keep state in memory, so a restart drops tickets in flight.
 - The Compose path has no Prometheus or Grafana and no MinIO, backup or TLS; Mosquitto allows anonymous clients. It is a local demo.
 - Scenario injection acts on the service-timing and staff-shift simulators (the staffing shortage needs both); scenarios aimed at the plate-waste and POS simulators publish but do nothing.
-- A simulator holds events in memory while its Kafka Connect connector is down (5,000 at most, oldest dropped, logged), so a simulator restarted during an outage loses them, and a small loss at the instant the bridge shuts down is possible (RSK-035).
+- A simulator holds events in memory while its Kafka Connect connector is down (5,000 at most, oldest dropped, logged), so a simulator restarted during an outage loses them, and a small loss around the instant the bridge into Kafka is disturbed is possible: measured 0 to 3 events per Connect, Kafka or Mosquitto restart (RSK-035). The gate's hold times (20, 30 and 45 s) are measured recovery times times about two, not guarantees.
 - On a CPU, the 0.5B model rarely passes verification, so most narrations are the labelled deterministic template (`template-fallback`).
 - Prometheus stores metrics in an `emptyDir`; history resets when its pod restarts.
 - Interactive (game) tickets produce no anomalies or findings of their own, by design.

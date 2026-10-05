@@ -283,3 +283,237 @@ def test_the_gate_is_read_from_the_environment_with_the_connector_named_after_th
 
     monkeypatch.delenv("INGEST_GATE_URL")
     assert runtime.Simulator("staff-shift", "StaffShiftEvent.schema.json", "sensors/staff-shift").gate.is_open()
+
+
+# ------------------------------------------------------------------ the simulator's own MQTT connection
+
+def an_open_gate(clock, hold=30):
+    gate = IngestGate("http://connect:8083", "c", settle_seconds=0, reconnect_hold_seconds=hold,
+                      fetch=lambda url, name: running("RUNNING"), clock=clock)
+    assert gate.poll_once() is True and gate.is_open()
+    return gate
+
+
+def test_losing_the_mqtt_connection_closes_the_gate_at_once():
+    clock = Clock()
+    gate = an_open_gate(clock)
+    gate.broker_lost()
+    assert not gate.is_open()
+
+
+def test_the_first_connection_does_not_hold_but_a_reconnection_holds_while_the_connectors_follow():
+    # After a broker restart this simulator is back within a second, but each connector reconnects
+    # on its own backoff (measured 2, 4, 8 and 17 s) and loses what is sent before it has resubscribed.
+    clock = Clock()
+    gate = an_open_gate(clock, hold=30)
+    gate.broker_back(reconnect=False)
+    assert gate.is_open(), "an ordinary first connection must not delay anything"
+
+    gate.broker_lost()
+    gate.broker_back(reconnect=True)
+    assert not gate.is_open()
+    clock.now += 29.9
+    assert not gate.is_open()
+    clock.now += 0.2
+    assert gate.is_open()
+
+
+def test_the_hold_does_not_open_a_gate_whose_connector_is_not_running():
+    clock = Clock()
+    answers = {"now": running("RUNNING")}
+    gate = IngestGate("http://connect:8083", "c", settle_seconds=0, reconnect_hold_seconds=5,
+                      fetch=lambda url, name: answers["now"], clock=clock)
+    gate.poll_once()
+    gate.broker_lost()
+    gate.broker_back(reconnect=True)
+    answers["now"] = None
+    gate.poll_once()
+    clock.now += 60
+    assert not gate.is_open()
+
+
+def test_a_gate_with_no_url_ignores_the_mqtt_connection_so_a_stand_alone_simulator_is_unchanged():
+    gate = IngestGate(None, "c")
+    gate.broker_lost()
+    assert gate.is_open()
+    gate.broker_back(reconnect=True)
+    assert gate.is_open()
+
+
+def test_the_simulators_connect_and_disconnect_callbacks_drive_the_gate(monkeypatch):
+    monkeypatch.setattr(runtime.mqtt, "Client", FakeClient, raising=False)
+    monkeypatch.setattr(runtime.mqtt, "CallbackAPIVersion", types.SimpleNamespace(VERSION2=2), raising=False)
+    simulator = runtime.Simulator("pos-transaction", "POSTransactionEvent.schema.json", "sensors/pos-transaction")
+    clock = Clock()
+    simulator.gate = an_open_gate(clock, hold=30)
+    ok = types.SimpleNamespace(is_failure=False)
+    client = types.SimpleNamespace(subscribe=lambda *a, **k: None)
+
+    simulator._on_connect(client, None, None, ok)                  # the first connection
+    assert simulator.gate.is_open()
+    simulator._on_disconnect(client, None, None, None, None)       # the broker went away
+    assert not simulator.gate.is_open()
+    simulator._on_connect(client, None, None, ok)                  # and came back
+    assert not simulator.gate.is_open()
+    clock.now += 31
+    assert simulator.gate.is_open()
+
+
+# ------------------------------------------------------------------ Kafka itself
+
+from common.ingest_gate import first_bootstrap_address  # noqa: E402
+
+
+def a_gate_watching_kafka(clock, kafka, hold=45):
+    gate = IngestGate("http://connect:8083", "c", settle_seconds=0, kafka_address=("kafka", 9092), kafka_poll_seconds=1,
+                      kafka_hold_seconds=hold, fetch=lambda url, name: running("RUNNING"), kafka_check=lambda address: kafka["up"],
+                      clock=clock)
+    assert gate.poll_once() is True
+    return gate
+
+
+def test_the_gate_closes_as_soon_as_kafka_cannot_be_reached_even_though_connect_still_says_running():
+    # Connect's status lives in a Kafka topic: with Kafka down REST keeps saying RUNNING while Connect
+    # revokes its tasks and discards what they had buffered.
+    clock, kafka = Clock(), {"up": True}
+    gate = a_gate_watching_kafka(clock, kafka)
+    kafka["up"] = False
+    clock.now += 1
+    assert gate.poll_once() is False and not gate.is_open()
+
+
+def test_the_gate_stays_shut_for_the_recovery_time_after_kafka_returns():
+    # Connect's tasks came back 19 to 24 s after Kafka was up again, and REST does not say so until then.
+    clock, kafka = Clock(), {"up": True}
+    gate = a_gate_watching_kafka(clock, kafka, hold=45)
+    kafka["up"] = False
+    clock.now += 1
+    gate.poll_once()
+    clock.now += 20                       # a twenty second outage
+    gate.poll_once()
+    assert not gate.is_open()
+    kafka["up"] = True
+    clock.now += 1
+    gate.poll_once()
+    assert not gate.is_open(), "reachable again is not recovered"
+    clock.now += 44
+    gate.poll_once()
+    assert not gate.is_open()
+    clock.now += 1.5
+    assert gate.poll_once() is True and gate.is_open()
+
+
+def test_kafka_is_asked_no_more_often_than_its_own_interval():
+    clock = Clock()
+    asked = []
+    gate = IngestGate("http://connect:8083", "c", settle_seconds=0, kafka_address=("kafka", 9092), kafka_poll_seconds=1,
+                      fetch=lambda url, name: running("RUNNING"), kafka_check=lambda address: asked.append(1) or True, clock=clock)
+    for _ in range(8):                    # eight polls in two seconds, as the REST poll runs four times a second
+        gate.poll_once()
+        clock.now += 0.25
+    assert len(asked) == 2
+
+
+def test_a_gate_with_no_kafka_address_does_not_look_at_kafka():
+    clock = Clock()
+    gate = IngestGate("http://connect:8083", "c", settle_seconds=0, fetch=lambda url, name: running("RUNNING"),
+                      kafka_check=lambda address: 1 / 0, clock=clock)
+    assert gate.poll_once() is True
+
+
+@pytest.mark.parametrize("servers, expected", [
+    ("kafka:9092", ("kafka", 9092)),
+    ("restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9093", ("restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local", 9093)),
+    ("a:1,b:2", ("a", 1)),
+    ("", None), (None, None), ("kafka", None), ("kafka:notaport", None),
+])
+def test_the_first_kafka_bootstrap_address_is_read_from_the_environment_value(servers, expected):
+    assert first_bootstrap_address(servers) == expected
+
+
+def test_the_simulator_watches_the_kafka_it_is_configured_with(monkeypatch):
+    monkeypatch.setattr(runtime.mqtt, "Client", FakeClient, raising=False)
+    monkeypatch.setattr(runtime.mqtt, "CallbackAPIVersion", types.SimpleNamespace(VERSION2=2), raising=False)
+    monkeypatch.setenv("INGEST_GATE_URL", "http://kafka-connect:8083")
+    monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+    simulator = runtime.Simulator("pos-transaction", "POSTransactionEvent.schema.json", "sensors/pos-transaction")
+    assert simulator.gate.kafka_address == ("kafka", 9092) and simulator.gate.kafka_hold_seconds == 45
+    assert simulator.gate.reconnect_hold_seconds == 30
+
+
+# ------------------------------------------------------------------ the Kafka reachability check, on real sockets
+
+import shutil  # noqa: E402
+import socket  # noqa: E402
+import ssl  # noqa: E402
+import subprocess  # noqa: E402
+import threading  # noqa: E402
+
+from common.ingest_gate import kafka_is_reachable  # noqa: E402
+
+
+def listening_socket():
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(5)
+    return server
+
+
+def test_a_plaintext_listener_is_reachable_and_a_closed_port_is_not():
+    server = listening_socket()
+    address = server.getsockname()
+    try:
+        assert kafka_is_reachable(address) is True
+    finally:
+        server.close()
+    assert kafka_is_reachable(address) is False
+
+
+@pytest.fixture
+def tls_server(tmp_path):
+    if shutil.which("openssl") is None:
+        pytest.skip("no openssl to make a certificate with")
+    cert, key = tmp_path / "tls.crt", tmp_path / "tls.key"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(cert), "-days", "1",
+                    "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost"], check=True, capture_output=True)
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(str(cert), str(key))
+    server = listening_socket()
+    stop = threading.Event()
+
+    def serve():
+        server.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                continue
+            try:
+                with server_context.wrap_socket(conn, server_side=True):
+                    pass
+            except (ssl.SSLError, OSError):
+                pass
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    yield ("localhost", server.getsockname()[1]), cert
+    stop.set()
+    thread.join(2)
+    server.close()
+
+
+def test_a_tls_listener_is_reachable_through_a_real_handshake(tls_server):
+    address, cert = tls_server
+    assert kafka_is_reachable(address, ssl_context=ssl.create_default_context(cafile=str(cert))) is True
+
+
+def test_a_tls_error_still_means_kafka_is_up_so_a_bad_certificate_cannot_shut_the_gate_for_ever(tls_server):
+    address, _cert = tls_server
+    untrusting = ssl.create_default_context()  # does not trust the server's self-signed certificate
+    assert kafka_is_reachable(address, ssl_context=untrusting) is True
+
+
+def test_a_tls_listener_that_is_down_is_not_reachable(tls_server):
+    address, cert = tls_server
+    context = ssl.create_default_context(cafile=str(cert))
+    assert kafka_is_reachable(("127.0.0.1", 1), ssl_context=context) is False

@@ -51,6 +51,8 @@ spec:
               value: {{ $.Values.ingestGate.url | quote }}
             - name: INGEST_GATE_SETTLE_SECONDS
               value: {{ $.Values.ingestGate.settleSeconds | quote }}
+            - name: INGEST_GATE_KAFKA_POLL_SECONDS
+              value: {{ $.Values.ingestGate.kafkaPollSeconds | quote }}
             {{- end }}
           volumeMounts:
             - name: kafka-tls

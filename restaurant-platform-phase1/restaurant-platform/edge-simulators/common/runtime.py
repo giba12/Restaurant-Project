@@ -19,10 +19,12 @@ simulators:
 """
 
 import collections
+import functools
 import json
 import logging
 import os
 import random
+import ssl
 import sys
 import threading
 import time
@@ -30,12 +32,22 @@ import time
 import jsonschema
 import paho.mqtt.client as mqtt
 
-from common.ingest_gate import IngestGate
+from common.ingest_gate import IngestGate, first_bootstrap_address, kafka_is_reachable
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
+
+
+def _kafka_ssl_context():
+    """The TLS context for the gate's Kafka check: the same CA the simulators' Kafka consumer uses, only if they use TLS."""
+    if os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT").upper() == "PLAINTEXT":
+        return None
+    try:
+        return ssl.create_default_context(cafile=os.environ.get("KAFKA_SSL_CAFILE", "/etc/kafka-tls/ca.crt"))
+    except OSError:
+        return None  # no readable CA: the gate falls back to a plain connection, which still tells up from down
 
 
 # How long events may be held while the bridge is down before the oldest are dropped
@@ -68,6 +80,7 @@ class Simulator:
         self.rate_per_minute = float(os.environ.get("EVENT_RATE_PER_MIN", "6"))
 
         # Store-and-forward: events wait here while this sensor's connector is not running.
+        self._has_connected_before = False
         self._outbox: collections.deque = collections.deque(maxlen=OUTBOX_MAX_EVENTS)
         self._dropped = 0
         self.gate = IngestGate(
@@ -75,6 +88,11 @@ class Simulator:
             os.environ.get("INGEST_GATE_CONNECTOR", f"{sensor_type}-source-connector"),
             poll_seconds=float(os.environ.get("INGEST_GATE_POLL_SECONDS", "0.25")),
             settle_seconds=float(os.environ.get("INGEST_GATE_SETTLE_SECONDS", "20")),
+            reconnect_hold_seconds=float(os.environ.get("INGEST_GATE_RECONNECT_HOLD_SECONDS", "30")),
+            kafka_address=first_bootstrap_address(os.environ.get("INGEST_GATE_KAFKA", os.environ.get("KAFKA_BOOTSTRAP_SERVERS"))),
+            kafka_hold_seconds=float(os.environ.get("INGEST_GATE_KAFKA_HOLD_SECONDS", "45")),
+            kafka_poll_seconds=float(os.environ.get("INGEST_GATE_KAFKA_POLL_SECONDS", "0.25")),
+            kafka_check=functools.partial(kafka_is_reachable, ssl_context=_kafka_ssl_context()),
         )
 
         schema_dir = os.environ.get("SCHEMA_DIR", "/app/schemas")
@@ -113,6 +131,9 @@ class Simulator:
             # they are re-established on every successful connect.
             for topic in self._handlers:
                 client.subscribe(topic, qos=1)
+            # A *re*connection means the broker went away; the connectors will take a while to follow.
+            self.gate.broker_back(reconnect=self._has_connected_before)
+            self._has_connected_before = True
             self._connected_event.set()
 
     def subscribe(self, topic: str, handler) -> None:
@@ -135,6 +156,7 @@ class Simulator:
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
         self._connected_event.clear()
+        self.gate.broker_lost()
 
     def connect(self):
         self.log.info(

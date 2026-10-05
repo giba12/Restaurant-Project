@@ -24,7 +24,7 @@ The three registers (traceability matrix, defect log, risk register) were first 
 | 03 | [Requirements traceability matrix](03-requirements-traceability-matrix.md) | Which test proves each requirement, and is it met? | An auditor |
 | 04 | [SQA plan](04-sqa-plan.md) | What quality practices were in force, and how good are they honestly? | A manager |
 | 05 | [Risk register](05-risk-register.md) | What could go wrong, what already did, what is open? | A manager or maintainer |
-| 06 | [Defect and difficulty log](06-defect-log.md) | Every failure, bug and difficulty (150 entries) | Anyone curious how it really went |
+| 06 | [Defect and difficulty log](06-defect-log.md) | Every failure, bug and difficulty (151 entries) | Anyone curious how it really went |
 | 07 | [Test summary report](07-test-summary-report.md) | What do the latest results say? | Everyone: start here |
 | 08 | [Lessons learned](08-lessons-learned.md) | What does the project teach? | An engineer, an interviewer |
 | 09 | [Environment and configuration baseline](09-test-environment-and-configuration-baseline.md) | Where were the results obtained? | Anyone reproducing them |

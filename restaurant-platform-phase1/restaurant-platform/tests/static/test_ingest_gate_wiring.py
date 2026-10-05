@@ -12,6 +12,7 @@ checks make that kind of slip fail in CI instead of in production.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 from urllib.parse import urlparse
@@ -57,6 +58,24 @@ def test_every_compose_simulator_gates_on_the_connect_rest_api():
         assert url, f"{name} has no INGEST_GATE_URL: it would publish into a bridge that may not be there"
         parsed = urlparse(url)
         assert parsed.hostname == "kafka-connect" and parsed.port == 8083, f"{name}: {url} is not the Connect REST API"
+
+
+def test_every_compose_simulator_has_a_kafka_address_for_its_gate_to_watch():
+    # The gate also watches Kafka (Connect's REST status lies while Kafka is down). It reads the address
+    # from KAFKA_BOOTSTRAP_SERVERS; without one it would silently watch nothing.
+    for name, svc in SIMULATOR_SERVICES.items():
+        assert re.fullmatch(r"[\w.-]+:\d+", svc["environment"].get("KAFKA_BOOTSTRAP_SERVERS", "")), name
+
+
+@pytest.mark.skipif(not have("helm"), reason="helm not installed")
+def test_the_simulator_chart_gives_every_gated_simulator_a_kafka_address_to_watch():
+    result = subprocess.run(["helm", "template", "t", str(ROOT / "k8s" / "edge-simulators"), "-n", "kafka"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    deployments = [d for d in yaml.safe_load_all(result.stdout) if d and d["kind"] == "Deployment"]
+    assert len(deployments) == len(SENSOR_TYPES)
+    for deployment in deployments:
+        env = {e["name"]: e.get("value") for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
+        assert re.fullmatch(r"[\w.-]+:\d+", env.get("KAFKA_BOOTSTRAP_SERVERS", "")), deployment["metadata"]["name"]
 
 
 @pytest.mark.skipif(not have("helm"), reason="helm not installed")

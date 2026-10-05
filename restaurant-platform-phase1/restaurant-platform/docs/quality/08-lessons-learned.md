@@ -20,7 +20,7 @@
 
 ## 2. What the data says about how defects were found
 
-From the defect log (150 entries):
+From the defect log (151 entries):
 
 | Found by | Entries | Notes |
 |---|---|---|
@@ -102,7 +102,7 @@ The connector supervisor (DEF-137) was only believed after the failure was repro
 
 ### 3.9h A check that compares two stages cannot see loss before the first
 
-"Every message in Kafka is stored exactly once" passed after every fault, and was true, while 37% of what the sensors published during one Connect outage (and the first 30 s of every start) never reached Kafka at all (DEF-148). The invariant compared Kafka with the database; the loss was upstream of Kafka. It surfaced only because a pasted container log showed the simulators publishing for 30 s before the bridge had subscribed. The fix was easy to get nearly right and hard to get right: the textbook answer (a persistent MQTT session) deadlocked the connector (DEF-150); the first gate trusted `RUNNING`, which Connect reports 3 to 7 s before the task has subscribed, and lost every event it sent in that gap; the second polled once a second and lost the events published in the half second between Connect's REST API stopping and the poll noticing. **Each version looked right until a ledger kept at the source (the simulators' own log of what they published) was compared with the database, repeatedly, and the misses were matched to the timestamps in Connect's log.** Measure from the origin of the data, and measure more than once: one clean run of the first version would have shipped it.
+"Every message in Kafka is stored exactly once" passed after every fault, and was true, while 37% of what the sensors published during one Connect outage (and the first 30 s of every start) never reached Kafka at all (DEF-148). The invariant compared Kafka with the database; the loss was upstream of Kafka. It surfaced only because a pasted container log showed the simulators publishing for 30 s before the bridge had subscribed. The fix was easy to get nearly right and hard to get right: the textbook answer (a persistent MQTT session) deadlocked the connector (DEF-150); the first gate trusted `RUNNING`, which Connect reports 3 to 7 s before the task has subscribed, and lost every event it sent in that gap; the second polled once a second and lost the events published in the half second between Connect's REST API stopping and the poll noticing. **Each version looked right until a ledger kept at the source (the simulators' own log of what they published) was compared with the database, repeatedly, and the misses were matched to the timestamps in Connect's log.** Measure from the origin of the data, and measure more than once: one clean run of the first version would have shipped it. **And measure every scenario you claim, not just the one you built for:** I applied the ledger check, with no allowance, to the Kafka restart and the MQTT restart tests without having run them, because they "should" hold. GitHub's nightly run said otherwise (DEF-151): 26 of 734 events lost across a Kafka restart, because Connect's status lies while Kafka is down, and a few across a Mosquitto restart, because the connectors reconnect after the simulators. Both were then reproduced with logs and fixed the same way, by letting the simulator check the fact that matters directly instead of trusting a status.
 
 ### 3.9g A first run on a new platform finds the platform's assumptions
 

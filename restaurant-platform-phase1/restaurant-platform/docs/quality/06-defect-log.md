@@ -28,29 +28,29 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 
 ## Summary
 
-**150 entries** (134 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-05.
+**151 entries** (135 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-05.
 
 ### By severity
 
 | Severity | Count |
 |---|---|
-| S1 Critical | 7 |
+| S1 Critical | 8 |
 | S2 High | 30 |
 | S3 Medium | 47 |
 | S4 Low | 50 |
 | Info | 16 |
-| **Total** | **150** |
+| **Total** | **151** |
 
 ### By status
 
 | Status | Count |
 |---|---|
-| Fixed+tested | 44 |
+| Fixed+tested | 45 |
 | Fixed | 76 |
 | Mitigated | 8 |
 | Clarified | 17 |
 | Open | 5 |
-| **Total** | **150** |
+| **Total** | **151** |
 
 ### By part (project period)
 
@@ -67,8 +67,8 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Part I: Found and fixed while repairing the refutation gate (2026-10-03) | 4 |
 | Part J: Found while building and verifying the edge-inference feature (2026-10-03) | 13 |
 | Part K: Found by the first GitHub runs (2026-10-04) | 2 |
-| Part L: Closing the event-loss gap between sensors and Kafka (2026-10-05) | 3 |
-| **Total** | **150** |
+| Part L: Closing the event-loss gap between sensors and Kafka (2026-10-05) | 4 |
+| **Total** | **151** |
 
 ### By how it was found
 
@@ -80,10 +80,10 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Automated test regime (2026-10-02) | 7 |
 | Chaos test | 5 |
 | Attempting the done condition | 3 |
-| CI or first push | 5 |
+| CI or first push | 6 |
 | User report | 3 |
 | Audit script | 1 |
-| **Total** | **150** |
+| **Total** | **151** |
 
 ### By class
 
@@ -98,7 +98,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Configuration | 6 |
 | Documentation | 7 |
 | Portability | 6 |
-| Integration | 6 |
+| Integration | 7 |
 | Contract | 4 |
 | Security | 4 |
 | Supply chain | 3 |
@@ -107,7 +107,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Repository hygiene | 2 |
 | Operator error | 2 |
 | Code quality | 1 |
-| **Total** | **150** |
+| **Total** | **151** |
 
 ### Open items (5)
 
@@ -344,13 +344,15 @@ Found when the new workflows ran on GitHub's runners for the first time (Docker 
 
 ## Part L. Closing the event-loss gap between sensors and Kafka (2026-10-05)
 
-Found by reading the container log the owner pasted from the nightly workflow's full-restart test, which showed the simulators publishing from 22:28:49 while the Connect clients subscribed to Mosquitto only at 22:29:19. Everything here was measured on the Compose stack with a ledger the existing tests lacked: the simulators' own log of what they published, compared with what reached the database.
+DEF-148 to DEF-150 were found by reading the container log the owner pasted from the nightly workflow's full-restart test, which showed the simulators publishing from 22:28:49 while the Connect clients subscribed to Mosquitto only at 22:29:19. Everything here was measured on the Compose stack with a ledger the existing tests lacked: the simulators' own log of what they published, compared with what reached the database.
 
 | ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
 |---|---|---|---|---|---|---|---|
-| DEF-148 | Ingest | log analysis | **Sensor events were silently lost whenever the Kafka Connect bridge was down, restarting or not yet subscribed.** Mosquitto keeps nothing for a subscriber that is not connected and the four Camel MQTT connectors subscribe with clean sessions, so everything published in those windows never reached Kafka: about 30 s on every cold start (the log: published from 22:28:49, subscribed at 22:29:19), and the whole outage otherwise. Nothing noticed, because "stored exactly once" compares Kafka with the database, never the sensors with Kafka. **Measured before the fix: 470 of 1,266 published events (37%) lost across one 45 s Connect outage and its recovery.** The likely cause of DEF-147's missing clock-in is now shown to be real, not inferred. | S1 Critical | Test-regime run or observation | **Store-and-forward in the simulators** (`edge-simulators/common/ingest_gate.py`, `runtime.py`): each holds its events, in a bounded outbox, while its own connector is not running and sends them in order when it is; opt-in through `INGEST_GATE_URL`, set in Compose and in the chart, plus a NetworkPolicy because Strimzi admits only Connect pods to port 8083 (a live simulator pod's first probe was refused). Two things the first version got wrong, both found by measuring: **Connect reports a task `RUNNING` 3 s (Compose) to 7 s (k3s) before it has subscribed** (312 events flushed into that gap were all lost), so the gate waits 20 s after first seeing `RUNNING`; and **polling once a second left a window**: 5 of 2,632 events in six outages, every one published 0.2 to 0.8 s after Connect logged "Stopping REST server" and before the next poll noticed, so the poll is now 0.25 s, with Connect's per-request INFO log turned to WARN in both deployments so that is not a flood (about five lines a second before, none after). **Verified: six outages at the final settings lost 0 of 2,591 events.** 26 unit tests (nine deliberate breakages each turned one red), seven static wiring tests, and the resilience ledger check, now also applied to the Kafka restart, the MQTT restart and the full restart. **Not verified on Kubernetes:** the chart and policy pass a server-side dry run, but the live cluster has not been given them (the realign script now does and checks), so the NetworkPolicy and the Strimzi logging setting have not been seen working there. **Residual:** the gate cannot see the instant Connect dies; a small loss in that window is possible and is allowed for in the test (RSK-035). | Fixed+tested |
+| DEF-148 | Ingest | log analysis | **Sensor events were silently lost whenever the Kafka Connect bridge was down, restarting or not yet subscribed.** Mosquitto keeps nothing for a subscriber that is not connected and the four Camel MQTT connectors subscribe with clean sessions, so everything published in those windows never reached Kafka: about 30 s on every cold start (the log: published from 22:28:49, subscribed at 22:29:19), and the whole outage otherwise. Nothing noticed, because "stored exactly once" compares Kafka with the database, never the sensors with Kafka. **Measured before the fix: 470 of 1,266 published events (37%) lost across one 45 s Connect outage and its recovery.** The likely cause of DEF-147's missing clock-in is now shown to be real, not inferred. | S1 Critical | Test-regime run or observation | **Store-and-forward in the simulators** (`edge-simulators/common/ingest_gate.py`, `runtime.py`): each holds its events, in a bounded outbox, while its own connector is not running and sends them in order when it is; opt-in through `INGEST_GATE_URL`, set in Compose and in the chart, plus a NetworkPolicy because Strimzi admits only Connect pods to port 8083 (a live simulator pod's first probe was refused). Two things the first version got wrong, both found by measuring: **Connect reports a task `RUNNING` 3 s (Compose) to 7 s (k3s) before it has subscribed** (312 events flushed into that gap were all lost), so the gate waits 20 s after first seeing `RUNNING`; and **polling once a second left a window**: 5 of 2,632 events in six outages, every one published 0.2 to 0.8 s after Connect logged "Stopping REST server" and before the next poll noticed, so the poll is now 0.25 s, with Connect's per-request INFO log turned to WARN in both deployments so that is not a flood (about five lines a second before, none after). **Verified: six outages at the final settings lost 0 of 2,591 events.** 26 unit tests (nine deliberate breakages each turned one red), seven static wiring tests, and the resilience ledger check. (The first version of this entry said the check also held across the Kafka restart and the MQTT restart; it did not, and GitHub's nightly run proved it: DEF-151.) **Not verified on Kubernetes:** the chart and policy pass a server-side dry run, but the live cluster has not been given them (the realign script now does and checks), so the NetworkPolicy and the Strimzi logging setting have not been seen working there. **Residual:** the gate cannot see the instant Connect dies; a small loss in that window is possible and is allowed for in the test (RSK-035). | Fixed+tested |
 | DEF-149 | Compose | found while testing DEF-148 | **The connector registration script could neither update a connector nor report failure.** `register-connectors.sh` POSTed each connector, which Kafka Connect refuses with 409 for one that exists (it keeps them across restarts), so a changed config file never reached a stack that had run before; and it then printed "already exists or failed" and exited 0 whichever it was, so a registration that genuinely failed (Connect answers 409 or 500 while rebalancing) looked like success. | S3 Medium | Test-regime run or observation | The script `PUT`s each connector's config to `/connectors/<name>/config` (creates or updates), retries, and exits non-zero if it cannot. Six tests run it against a fake `curl` (three deliberate breakages each turned a test red), and an end-to-end test changes a live connector's configuration, registers again and requires the original back. | Fixed+tested |
 | DEF-150 | Ingest | experiment | **A persistent MQTT session, the textbook fix for DEF-148, deadlocks this connector.** With `cleanSession=false` (settable only through `camel.component.paho.cleanSession`, since the Kamelet exposes five keys) Mosquitto hands over the whole backlog the moment the connector connects; Paho cannot complete its subscribe until its callback thread is free, that thread blocks in the first message waiting for the sink route, and the sink route cannot start until the MQTT consumer has finished starting. Each queued message then fails after 30 s (`No consumers available on endpoint: kamelet://ckcRemoveHeader`) and is lost, and the task never finishes starting. Recorded so nobody tries it again expecting it to work. | Info | Test-regime run or observation | None needed; reverted live, and the sensors hold the events instead (DEF-148). | Clarified |
+| DEF-151 | Ingest | first nightly run of DEF-148's fix | **The gate missed two more ways the bridge stops receiving: a Kafka restart and an MQTT broker restart.** The resilience layer's new ledger check (every event the simulators published must be stored) failed on GitHub's nightly run `37259139700`: **26 of 734 events lost across a Kafka restart and 2 of 624 across a Mosquitto restart**; locally the Kafka restart lost 109 to 166 and the MQTT restart 11, 2 and 2. Causes, each read from Connect's log and source: **(a) Kafka.** Connect's REST status is written to a Kafka topic, so while Kafka is down it keeps saying `RUNNING`; yet three seconds after Connect loses the group coordinator it revokes every task ("to avoid running tasks while not being a member of the group": `coordinatorDiscoveryTimeoutMs` is `heartbeat.interval.ms`, not `scheduled.rebalance.max.delay.ms`, which I first suspected and measured to have no effect) and discards what they had buffered; the tasks return 19 to 24 s after Kafka is up, and REST does not say so until then. **(b) Mosquitto.** After a restart every client is dropped; the simulators are back within a second but each connector reconnects on its own Paho backoff (2, 4, 8 and 17 s measured), and what is sent before it has resubscribed is lost. The DEF-148 text had claimed the ledger check held for these restarts; that was my overreach (they had never been measured). | S1 Critical | CI or first push | **The gate now watches two more facts the simulator can check itself.** Kafka: a connection (a full TLS handshake on Kubernetes, where a dropped connection makes Kafka log a failed authentication) every 0.25 s under Compose, 1 s in the chart; it closes the gate when Kafka stops answering and keeps it shut 45 s after it returns (about twice the longest recovery seen); a TLS *error* counts as "up" so a certificate mistake cannot wedge the gate. The simulator's own MQTT connection: the gate closes when it drops and stays shut 30 s after a *re*connection. **Measured: Kafka restart 2, 3 and 1 events lost (5, 2 and 5 with a once-a-second check); MQTT restart 0, 0 and 0; Connect crash 2 of 546 (3 of 571 before).** The few that remain were published about a second before Kafka's listener closed, and the resilience tests allow them explicitly (Kafka restart 4, MQTT restart 2, Connect outage 2). **Tried and rejected, with numbers:** `scheduled.rebalance.max.delay.ms=30000` (revocation still at 3 s; 166 of 713 lost); `heartbeat.interval.ms=60000` with a 180 s session timeout (a Kafka restart lost 0 of 924, but a Connect crash then waited 63 s for the dead member and lost 318 of 644, because the gate trusts REST's stale `RUNNING`). 15 unit tests (seven deliberate breakages each turned one red), two static wiring tests, and the real resilience tests. **Not verified on Kubernetes:** the TLS check and the 1 s interval are tested against a local TLS server, not the cluster. | Fixed+tested |
+
 
 ## How the defects were found, and what that says about the process
 

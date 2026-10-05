@@ -219,7 +219,7 @@ Added 2026-10-03 at the owner's request: the plate-waste node estimates waste on
 | NFR-REL-03 | Data shall persist across a stop and start of the stack. | M | Status log, 2026-09-17 | T |
 | NFR-REL-04 | At-least-once delivery combined with idempotent storage shall give an exactly-once effect. | M | Status log, section 3.5 | T |
 | NFR-REL-05 | On the Compose path, a connector whose task has failed, or that stays unassigned, shall be restarted automatically; a paused connector shall be left alone and a connector that cannot start shall not be restarted more than once a minute. | S | DEF-137, DEF-142, 2026-10-04 | T |
-| NFR-REL-06 | Events a sensor publishes while the MQTT-to-Kafka bridge is down, restarting or not yet subscribed shall reach the database: the sensor holds them while its connector is not running and sends them in order when it is. A loss limited to the instant the bridge shuts down is tolerated and stated. | M | DEF-148, 2026-10-05 | T |
+| NFR-REL-06 | Events a sensor publishes while the MQTT-to-Kafka bridge is down, restarting or not yet subscribed shall reach the database: the sensor holds them while its connector is not running and sends them in order when it is. A loss limited to the instant the bridge is disturbed (a second or so around a Kafka, Mosquitto or Connect shutdown) is tolerated and stated. | M | DEF-148, DEF-151, 2026-10-05 | T |
 
 ### 5.3 Performance (PER)
 

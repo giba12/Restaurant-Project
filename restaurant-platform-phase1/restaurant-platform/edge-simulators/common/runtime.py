@@ -14,17 +14,12 @@ simulators:
      emit on a fixed clock tick.
   4. Log every publish so `kubectl logs` gives a visible, auditable event
      stream independent of the Kafka side.
-  5. Hold events while the bridge into Kafka is not running, and send them in
-     order when it is (common/ingest_gate.py, opt-in via INGEST_GATE_URL).
 """
 
-import collections
-import functools
 import json
 import logging
 import os
 import random
-import ssl
 import sys
 import threading
 import time
@@ -32,29 +27,10 @@ import time
 import jsonschema
 import paho.mqtt.client as mqtt
 
-from common.ingest_gate import IngestGate, first_bootstrap_address, kafka_is_reachable
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
-
-
-def _kafka_ssl_context():
-    """The TLS context for the gate's Kafka check: the same CA the simulators' Kafka consumer uses, only if they use TLS."""
-    if os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT").upper() == "PLAINTEXT":
-        return None
-    try:
-        return ssl.create_default_context(cafile=os.environ.get("KAFKA_SSL_CAFILE", "/etc/kafka-tls/ca.crt"))
-    except OSError:
-        return None  # no readable CA: the gate falls back to a plain connection, which still tells up from down
-
-
-# How long events may be held while the bridge is down before the oldest are dropped
-# (about 8 MB of events at the default size; hours at the real rates). Dropping is
-# logged: a bounded buffer that fails loudly beats an unbounded one that takes the pod down.
-OUTBOX_MAX_EVENTS = int(os.environ.get("OUTBOX_MAX_EVENTS", "5000"))
-FLUSH_INTERVAL_SECONDS = 0.5
 
 
 class Simulator:
@@ -78,22 +54,6 @@ class Simulator:
         # events per minute (Poisson rate parameter lambda); interval between
         # events is drawn from an exponential distribution with mean 60/rate
         self.rate_per_minute = float(os.environ.get("EVENT_RATE_PER_MIN", "6"))
-
-        # Store-and-forward: events wait here while this sensor's connector is not running.
-        self._has_connected_before = False
-        self._outbox: collections.deque = collections.deque(maxlen=OUTBOX_MAX_EVENTS)
-        self._dropped = 0
-        self.gate = IngestGate(
-            os.environ.get("INGEST_GATE_URL"),
-            os.environ.get("INGEST_GATE_CONNECTOR", f"{sensor_type}-source-connector"),
-            poll_seconds=float(os.environ.get("INGEST_GATE_POLL_SECONDS", "0.25")),
-            settle_seconds=float(os.environ.get("INGEST_GATE_SETTLE_SECONDS", "20")),
-            reconnect_hold_seconds=float(os.environ.get("INGEST_GATE_RECONNECT_HOLD_SECONDS", "30")),
-            kafka_address=first_bootstrap_address(os.environ.get("INGEST_GATE_KAFKA", os.environ.get("KAFKA_BOOTSTRAP_SERVERS"))),
-            kafka_hold_seconds=float(os.environ.get("INGEST_GATE_KAFKA_HOLD_SECONDS", "45")),
-            kafka_poll_seconds=float(os.environ.get("INGEST_GATE_KAFKA_POLL_SECONDS", "0.25")),
-            kafka_check=functools.partial(kafka_is_reachable, ssl_context=_kafka_ssl_context()),
-        )
 
         schema_dir = os.environ.get("SCHEMA_DIR", "/app/schemas")
         schema_path = os.path.join(schema_dir, schema_filename)
@@ -131,9 +91,6 @@ class Simulator:
             # they are re-established on every successful connect.
             for topic in self._handlers:
                 client.subscribe(topic, qos=1)
-            # A *re*connection means the broker went away; the connectors will take a while to follow.
-            self.gate.broker_back(reconnect=self._has_connected_before)
-            self._has_connected_before = True
             self._connected_event.set()
 
     def subscribe(self, topic: str, handler) -> None:
@@ -156,7 +113,6 @@ class Simulator:
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
         self._connected_event.clear()
-        self.gate.broker_lost()
 
     def connect(self):
         self.log.info(
@@ -193,47 +149,21 @@ class Simulator:
             )
 
     def publish(self, event: dict) -> None:
-        """Validate the event and queue it; it is sent now if the bridge is running, otherwise when it is."""
         self.validate(event)
-        if len(self._outbox) == self._outbox.maxlen:
-            self._dropped += 1
-            if self._dropped == 1 or self._dropped % 100 == 0:
-                self.log.error("outbox full (%d events) while the bridge is down: dropped %d event(s), oldest first",
-                               len(self._outbox), self._dropped)
-        self._outbox.append((event["event_type"], event["event_id"], json.dumps(event)))
-        self.flush()
-
-    def flush(self) -> None:
-        """Send held events, oldest first, for as long as the bridge is running."""
-        while self._outbox and self.gate.is_open():
-            event_type, event_id, payload = self._outbox.popleft()
-            # Out of the outbox before the broker has acknowledged: paho keeps an unacknowledged
-            # QoS 1 message and resends it itself after a reconnect, so sending it again here would
-            # put it into Kafka twice.
-            result = self.client.publish(self.mqtt_topic, payload, qos=1)
-            result.wait_for_publish(timeout=5)
-            self.log.info("published %s event_id=%s", event_type, event_id)
+        payload = json.dumps(event)
+        result = self.client.publish(self.mqtt_topic, payload, qos=1)
+        result.wait_for_publish(timeout=5)
+        self.log.info("published %s event_id=%s", event["event_type"], event["event_id"])
 
     def sleep_poisson_interval(self) -> None:
         mean_seconds = 60.0 / max(self.rate_per_minute, 0.01)
         interval = random.expovariate(1.0 / mean_seconds)
         # floor at 0.5s so a very small draw doesn't hammer the broker
-        deadline = time.monotonic() + max(interval, 0.5)
-        while True:
-            # Held events go out as soon as the bridge is back, not at the next event's turn.
-            try:
-                self.flush()
-            except Exception:
-                self.log.exception("unexpected error sending held events, will retry")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return
-            time.sleep(min(remaining, FLUSH_INTERVAL_SECONDS))
+        time.sleep(max(interval, 0.5))
 
     def run_forever(self, generate_event_fn):
         """generate_event_fn: () -> dict, called once per loop iteration."""
         self.connect()
-        self.gate.start()
         self.log.info(
             "starting event loop: sensor_type=%s rate=%.2f/min",
             self.sensor_type, self.rate_per_minute,

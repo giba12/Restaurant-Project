@@ -4,6 +4,10 @@ metadata:
   name: mosquitto
 spec:
   replicas: {{ .Values.replicaCount }}
+  # Recreate, not a rolling update: the data volume is ReadWriteOnce, and two brokers
+  # must never share one session store.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: mosquitto
@@ -12,6 +16,8 @@ spec:
       labels:
         app: mosquitto
     spec:
+      securityContext:
+        fsGroup: 1883  # the mosquitto user, so it can write the volume whatever the provisioner made it
       containers:
         - name: mosquitto
           image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
@@ -25,9 +31,14 @@ spec:
             - name: tls
               mountPath: /mosquitto/certs
               readOnly: true
+            - name: data
+              mountPath: /mosquitto/data
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mosquitto-data
         - name: config
           configMap:
             name: mosquitto-config

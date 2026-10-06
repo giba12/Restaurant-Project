@@ -31,52 +31,36 @@ def test_every_long_running_service_is_up(service):
     assert state["Running"], f"{service} is not running ({state.get('Status')})"
 
 
-def test_the_one_shot_connector_registration_completed_successfully():
-    from helpers import inspect
-
-    state = inspect("kafka-connect-init")["State"]
-    assert state["Status"] == "exited" and state["ExitCode"] == 0, state
-
-
-def test_registering_the_connectors_again_corrects_one_whose_configuration_has_drifted():
-    # The registration script used to POST, which Kafka Connect refuses for a connector that
-    # already exists, and then exit 0 whichever way it had gone. So a changed config file never
-    # reached a stack that had run before. It now PUTs, which creates or updates.
-    name = "pos-transaction-source-connector"
-    connect = f"http://kafka-connect:8083/connectors/{name}/config"
-
-    def current_config():
-        return json.loads(compose("exec", "-T", "kafka-connect", "wget", "-qO-", connect, timeout=30).stdout)
-
-    original = current_config()
-    drifted = {**original, "camel.kamelet.mqtt-source.clientId": "somebody-elses-client"}
-    # busybox wget cannot PUT; the supervisor's container has Python.
-    compose("exec", "-T", "kafka-connect-supervisor", "python", "-c",
-            "import sys, urllib.request as u; "
-            f"u.urlopen(u.Request('{connect}', data=sys.argv[1].encode(), method='PUT', headers={{'Content-Type': 'application/json'}}))",
-            json.dumps(drifted), timeout=60)
-    assert current_config() != original, "the test could not change the connector's configuration"
-
-    compose("run", "--rm", "-T", "kafka-connect-init", timeout=300)  # exit code 0 or this raises
-
-    assert current_config() == original, "registering again did not restore the connector's configuration"
-    wait_for(lambda: all(state == "RUNNING" for state in stack.connector_states().values()), 120, interval=3,
-             description="the connectors to be RUNNING after the configuration was restored")
+def test_the_bridge_is_connected_to_mqtt_and_subscribed():
+    # A bridge that is up but not connected moves nothing, and the stack looks healthy: three of four
+    # sensor topics once stopped reaching Kafka that way (problem log item 44).
+    assert stack.bridge_connected()
 
 
-def test_all_four_mqtt_connectors_are_running():
-    # One connector failing was invisible once (problem log item 44): three of
-    # four sensor topics silently stopped reaching Kafka.
-    states = stack.connector_states()
-    assert set(states) >= set(stack.CONNECTORS)
-    assert all(state == "RUNNING" for state in states.values()), states
+def test_the_bridge_has_nothing_stuck_waiting_for_kafka():
+    # Every message handed to Kafka is confirmed within seconds; an old unconfirmed one means Kafka is not taking them.
+    metrics = stack.bridge_metrics()
+    assert metrics["bridge_oldest_unconfirmed_seconds"] < 30, metrics
+    assert metrics.get("bridge_kafka_errors_total", 0.0) == 0.0, metrics
+
+
+def test_the_bridge_forwards_all_four_sensor_topics():
+    forwarded = {name: value for name, value in stack.bridge_metrics().items() if name.startswith("bridge_messages_forwarded_total{")}
+    assert len(forwarded) == 4 and all(value > 0 for value in forwarded.values()), forwarded
+
+
+def test_mosquitto_keeps_the_bridges_session_on_disk():
+    # The bridge's persistent session and the messages queued for it are what make "nothing is lost while the bridge
+    # or Mosquitto is down" true; without persistence a Mosquitto restart discarded both (DEF-152).
+    out = compose("exec", "-T", "mosquitto", "sh", "-c", "grep -E '^persistence ' /mosquitto/config/mosquitto.conf; ls /mosquitto/data").stdout
+    assert "persistence true" in out, out
 
 
 # ------------------------------------------------------------------ data flows, hop by hop
 
 @pytest.mark.parametrize("table", EVENT_TABLES)
 def test_every_sensor_type_reaches_the_database(table):
-    # simulator -> MQTT -> Kafka Connect -> Kafka -> storage-consumer -> TimescaleDB
+    # simulator -> MQTT -> mqtt-kafka-bridge -> Kafka -> storage-consumer -> TimescaleDB
     wait_for(lambda: sql_int(f"SELECT count(*) FROM {table}") >= 5, 240, description=f"5 rows in {table}")
 
 
@@ -84,7 +68,7 @@ def test_the_edge_nodes_model_and_inference_reach_the_database_intact():
     # The plate-waste node runs a model on the node itself. What the database
     # holds must name the exact model that is committed in the repository (the
     # image was built from it), and the node's own trust flags must be present.
-    # simulator (model inference) -> MQTT -> Kafka Connect -> Kafka -> consumer -> TimescaleDB
+    # simulator (model inference) -> MQTT -> mqtt-kafka-bridge -> Kafka -> consumer -> TimescaleDB
     from helpers import ROOT
 
     committed = json.load(open(ROOT / "edge-simulators" / "edge_ai" / "plate_waste_edge_model.json"))["weights_sha256"]

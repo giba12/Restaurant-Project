@@ -27,9 +27,8 @@ CHARTS = sorted(p.parent for p in (ROOT / "k8s").glob("*/Chart.yaml"))
 WORKLOADS = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"}
 
 # Charts that wrap an operator-managed custom resource rather than a plain
-# workload: their compute limits live inside the CR (Strimzi's `Kafka`,
-# `KafkaConnect`), which the generic container scan below cannot see.
-OPERATOR_MANAGED = {"kafka-strimzi", "kafka-connect-mqtt"}
+# workload: their compute limits live inside the CR (Strimzi's `Kafka`), which the generic container scan below cannot see.
+OPERATOR_MANAGED = {"kafka-strimzi"}
 
 
 def _name(path):

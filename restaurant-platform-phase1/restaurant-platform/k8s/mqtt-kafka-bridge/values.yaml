@@ -1,0 +1,32 @@
+image:
+  repository: localhost/local/mqtt-kafka-bridge
+  tag: "1.0"
+  pullPolicy: IfNotPresent
+
+# One replica, and a Recreate rollout (templates/deployment.yaml): the bridge's MQTT client id names
+# its persistent session, so a second copy would take the session over from the first and the two
+# would keep taking it from each other.
+replicaCount: 1
+
+env:
+  MQTT_HOST: "mosquitto.kafka.svc.cluster.local"
+  # The TLS listener, as the Kafka Connect connectors it replaces used. The CA is Mosquitto's own
+  # self-signed certificate (k8s/mosquitto-tls/), mounted below.
+  MQTT_PORT: "8883"
+  MQTT_TLS_ENABLED: "true"
+  KAFKA_BOOTSTRAP_SERVERS: "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9093"
+  KAFKA_SECURITY_PROTOCOL: "SSL"
+
+mosquittoTlsSecretName: "mosquitto-tls"
+# Strimzi's auto-generated cluster CA ("<Kafka CR name>-cluster-ca-cert"), as every other Kafka client here mounts.
+kafkaTlsSecretName: "restaurant-platform-kafka-cluster-ca-cert"
+
+# Right-sized by guess (a small Python process holding at most 20 unconfirmed messages: Mosquitto's
+# in-flight window); measure and adjust on the live cluster.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 300m
+    memory: 160Mi

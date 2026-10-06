@@ -44,11 +44,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # kafka-connect: custom image bundling the Camel MQTT source
-          # connector on top of apache/kafka's Connect distribution.
-          - image: kafka-connect
-            context: restaurant-platform-phase1/restaurant-platform/docker-compose/kafka-connect
-            dockerfile: restaurant-platform-phase1/restaurant-platform/docker-compose/kafka-connect/Dockerfile
+          # mqtt-kafka-bridge: carries sensor events from MQTT into Kafka
+          # without loss (it replaced the Kafka Connect image, DEF-152).
+          - image: mqtt-kafka-bridge
+            context: restaurant-platform-phase1/restaurant-platform/services
+            dockerfile: restaurant-platform-phase1/restaurant-platform/services/mqtt-kafka-bridge/Dockerfile
 
           # One image, four compose services (SENSOR_TYPE env var picks
           # the module at runtime) -- same design as the k8s chart.

@@ -47,7 +47,7 @@ flowchart LR
         E4[POS terminal]
     end
     Edge -->|MQTT| MQ[Eclipse Mosquitto]
-    MQ -->|Kafka Connect bridge| K[Apache Kafka / Strimzi]
+    MQ -->|mqtt-kafka-bridge, persistent session, ack after Kafka| K[Apache Kafka / Strimzi]
     K --> SC[Storage consumer]
     SC --> DB[(TimescaleDB)]
     K --> AGG[Ticket-timing aggregator]
@@ -78,7 +78,7 @@ Seven layers: simulated edge devices → MQTT/Kafka message backbone → Timesca
 
 ## Tech stack
 
-Python, Apache Kafka (KRaft), Strimzi, Eclipse Mosquitto (MQTT), Kafka Connect (Camel MQTT source connector), PostgreSQL + TimescaleDB, scikit-learn (isolation forest), Microsoft DoWhy + statsmodels, Ollama (Qwen 2.5, Apache-2.0), FastAPI, React + Vite, Prometheus + Grafana, Kubernetes (k3s) + Helm, Docker Compose.
+Python, Apache Kafka (KRaft), Strimzi, Eclipse Mosquitto (MQTT, persistent), a small Python MQTT-to-Kafka bridge (at-least-once, no event lost to a restart), PostgreSQL + TimescaleDB, scikit-learn (isolation forest), Microsoft DoWhy + statsmodels, Ollama (Qwen 2.5, Apache-2.0), FastAPI, React + Vite, Prometheus + Grafana, Kubernetes (k3s) + Helm, Docker Compose.
 
 ## Build phases
 

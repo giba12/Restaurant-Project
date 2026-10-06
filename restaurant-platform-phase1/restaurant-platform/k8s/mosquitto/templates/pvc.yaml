@@ -1,0 +1,13 @@
+# The bridge's persistent MQTT session and the messages queued for it (see configmap.yaml).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mosquitto-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}

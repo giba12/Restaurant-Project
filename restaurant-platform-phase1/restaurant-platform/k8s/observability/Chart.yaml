@@ -2,9 +2,9 @@ apiVersion: v2
 name: observability
 description: >
   Phase 7 - platform observability. kube-state-metrics for pod/deployment
-  health, Prometheus scraping it plus Strimzi's Kafka/Connect JMX
-  exporters (see k8s/kafka-strimzi and k8s/kafka-connect-mqtt's
-  metricsConfig), and Grafana with the Prometheus datasource and a
+  health, Prometheus scraping it plus Strimzi's Kafka JMX
+  exporter (see k8s/kafka-strimzi's metricsConfig) and the
+  MQTT-Kafka bridge's own metrics, and Grafana with the Prometheus datasource and a
   starter dashboard pre-provisioned. Alerting: Prometheus evaluates
   alerts.yml against those same metrics and forwards firing/resolved
   alerts to Alertmanager, which posts them to alert-relay (a small

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: mqtt-kafka-bridge
+description: "Carries every sensor event from MQTT into Kafka without losing one (DEF-152): a persistent MQTT session, and a message acknowledged only after Kafka has confirmed it. Replaces the Kafka Connect MQTT connectors (k8s/kafka-connect-mqtt, removed 2026-10-05)."
+type: application
+version: 0.1.0
+appVersion: "1.0"

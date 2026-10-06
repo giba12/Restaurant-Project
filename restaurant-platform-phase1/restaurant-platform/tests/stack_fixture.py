@@ -4,7 +4,6 @@ brought up and torn down by run_stack_tests.sh; these tests only verify it is
 actually ready before anything is asserted about it.
 """
 import functools
-import json
 import urllib.request
 
 import pytest
@@ -15,13 +14,12 @@ from helpers import DASHBOARD_PORT, compose, inspect, wait_for
 # llm-narrator): pulling a model on every run would dominate the runtime for
 # no pipeline coverage, since the narrator's logic is covered by its own tests.
 STACK_SERVICES = [
-    "mosquitto", "kafka", "kafka-connect", "kafka-connect-init", "kafka-connect-supervisor", "timescaledb",
+    "mosquitto", "kafka", "mqtt-kafka-bridge", "timescaledb",
     "edge-sim-plate-waste", "edge-sim-pos-transaction", "edge-sim-service-timing", "edge-sim-staff-shift",
     "storage-consumer", "ticket-timing-aggregator", "anomaly-detector", "causal-engine", "finding-reviewer",
     "scenario-injection-controller", "digital-twin", "dashboard-api", "dashboard-web",
 ]
-LONG_RUNNING = [s for s in STACK_SERVICES if s != "kafka-connect-init"]
-CONNECTORS = ["plate-waste-source-connector", "pos-transaction-source-connector", "service-timing-source-connector", "staff-shift-source-connector"]
+LONG_RUNNING = list(STACK_SERVICES)
 
 
 def http_get(path, timeout=10):
@@ -29,35 +27,30 @@ def http_get(path, timeout=10):
         return response.status, response.read()
 
 
-def summarise_connectors(payload: dict) -> dict:
-    """
-    Connector name -> "RUNNING" only if the connector and every one of its
-    tasks are running; otherwise the first state that is not (a FAILED task
-    wins over a RUNNING connector, and a connector with no task yet is
-    "NO_TASKS").
-
-    The connector's own state is not enough. Kafka Connect keeps reporting a
-    connector RUNNING while its task is FAILED, and the task is what moves the
-    data (problem log items 8 and 35). It happened again on 2026-10-03: a
-    start-up DNS failure left all four tasks FAILED under four RUNNING
-    connectors, and nothing was ingested, which a check of the connector
-    state alone would have called healthy.
-    """
-    summary = {}
-    for name, info in payload.items():
-        status = info["status"]
-        tasks = status.get("tasks", [])
-        states = [status["connector"]["state"]] + [task["state"] for task in tasks]
-        if not tasks:
-            summary[name] = "NO_TASKS"
-        else:
-            summary[name] = next((state for state in states if state != "RUNNING"), "RUNNING")
-    return summary
+def parse_metrics(text: str) -> dict:
+    """Prometheus text format -> {series: value}, labelled series keeping their labels in the key; comments skipped."""
+    metrics = {}
+    for line in text.splitlines():
+        if line and not line.startswith("#"):
+            name, _, value = line.rpartition(" ")
+            try:
+                metrics[name] = float(value)
+            except ValueError:
+                pass
+    return metrics
 
 
-def connector_states():
-    out = compose("exec", "-T", "kafka-connect", "wget", "-qO-", "http://localhost:8083/connectors?expand=status", timeout=30).stdout
-    return summarise_connectors(json.loads(out))
+def bridge_metrics():
+    """The bridge's own Prometheus metrics, read from inside its container."""
+    out = compose("exec", "-T", "mqtt-kafka-bridge", "python", "-c",
+                  "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/metrics', timeout=5).read().decode())",
+                  timeout=30).stdout
+    return parse_metrics(out)
+
+
+def bridge_connected():
+    """True while the bridge is connected to the MQTT broker, and so subscribed with its persistent session."""
+    return bridge_metrics().get("bridge_mqtt_connected") == 1.0
 
 
 def healthy(service):
@@ -68,8 +61,7 @@ def healthy(service):
 def wait_until_ready():
     wait_for(lambda: healthy("kafka") and healthy("timescaledb"), 240, description="kafka and timescaledb to be healthy")
     wait_for(lambda: http_get("/api/health")[0] == 200, 180, description="the dashboard to answer")
-    wait_for(lambda: set(connector_states()) >= set(CONNECTORS) and all(
-        state == "RUNNING" for state in connector_states().values()), 240, description="all four connectors to be RUNNING")
+    wait_for(bridge_connected, 240, description="the MQTT-Kafka bridge to be connected")
     return True
 
 

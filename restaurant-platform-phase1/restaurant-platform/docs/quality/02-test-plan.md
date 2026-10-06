@@ -47,16 +47,16 @@ Eight layers, each simulating one thing production does to a system. They are ca
 
 | # | Layer | Tests | What it simulates | Location |
 |---|---|---|---|---|
-| 1 | Static | 71 functions | Careless edits to config and files | `tests/static/` |
-| 2 | Unit | 252 functions | Careless edits to logic | beside each service; `game/bridge/`; `schemas/` |
+| 1 | Static | 65 functions | Careless edits to config and files | `tests/static/` |
+| 2 | Unit | 233 functions | Careless edits to logic | beside each service; `game/bridge/`; `schemas/` |
 | 3 | Database integration | 74 | Drift between code and database | `tests/integration/` |
 | 4 | Statistical | 14 | Subtly wrong maths | `tests/statistical/` |
-| 5 | End-to-end and acceptance | 23 | One broken hop in a long pipeline | `tests/e2e/` |
-| 6 | Resilience (chaos) | 9 | Crashes, outages, restarts | `tests/resilience/` |
+| 5 | End-to-end and acceptance | 24 | One broken hop in a long pipeline | `tests/e2e/` |
+| 6 | Resilience (chaos) | 11 | Crashes, outages, restarts | `tests/resilience/` |
 | 7 | Load and stability | 4 | Bursts and long runs | `tests/load/` |
 | 8 | Security and supply chain | 1 | Ageing dependencies | `tests/security/` |
 
-Plus the Godot client's own end-to-end test (`game/client/tests/smoke_test.gd`, roughly 80 checks) and the live audit script (`k8s/audit/audit-live-cluster.sh`), which is not automated in CI. In total: **447 distinct test names** (one name is shared by two files) plus the GDScript suite.
+Plus the Godot client's own end-to-end test (`game/client/tests/smoke_test.gd`, roughly 80 checks) and the live audit script (`k8s/audit/audit-live-cluster.sh`), which is not automated in CI. In total: **425 distinct test names** (one name is shared by two files) plus the GDScript suite.
 
 ### 3.2 Test design techniques used
 
@@ -144,6 +144,7 @@ Detailed in `09-test-environment-and-configuration-baseline.md`. In summary: a W
 | 2026-10-01 | Schema-compatibility test; first manual chaos test; live audit script |
 | 2026-10-02 | The eight-layer regime designed and built; first runs; defects DEF-100 to DEF-107 found |
 | 2026-10-03 | Resilience rerun after fixes; one complete clean run of every stack layer; documents prepared; the refutation gate repaired and re-verified (DEF-106, DEF-129) |
+| 2026-10-05 | A ledger check added to the resilience layer (what the sensors published against what was stored); it found the ingest path losing events (DEF-148, DEF-151); the Kafka Connect path was replaced by the MQTT-Kafka bridge and the layer now passes 10 of 10 with no loss allowed (DEF-152) |
 
 ## 12. Deliverables
 

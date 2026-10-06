@@ -1,6 +1,6 @@
 apiVersion: v2
 name: mosquitto
-description: Phase 2 - the Eclipse Mosquitto MQTT broker the edge simulators publish to (anonymous, non-persistent; local development only).
+description: "Phase 2 - the Eclipse Mosquitto MQTT broker the edge simulators publish to (anonymous, local development only). Persistent since 2026-10-05, because it holds the MQTT-Kafka bridge's session and queue across restarts (DEF-152)."
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

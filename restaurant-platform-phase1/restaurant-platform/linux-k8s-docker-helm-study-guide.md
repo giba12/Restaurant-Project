@@ -196,6 +196,8 @@ A workload's controller type should be verified (`kubectl get deploy`, then `sta
 
 ### 3.7. Diagnosing a `KafkaConnector` task failure with `describe`
 
+*(Kafka Connect was retired on 2026-10-05 and replaced by the MQTT-Kafka bridge, so this is kept as the record of how its failures were diagnosed; the technique applies to any Strimzi connector.)*
+
 `kubectl get kafkaconnector` shows only a `READY` column. `kubectl describe kafkaconnector` exposes a `Status.Connector Status` block distinguishing the connector-level object (`Connector: RUNNING`) from its actual data-moving `Task`(s) (`State: FAILED` possible independently) — two different sub-objects with independent state. Stack traces are read innermost `Caused by:` first. A `FAILED` task does not auto-retry; restart via the Connect REST API (`POST .../tasks/0/restart`).
 
 ### 3.8. Helm hook timeouts are a distinct failure class from the hooked resource actually failing (Phase 4)

@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 
 
 import stack_fixture as stack
-from helpers import compose, container_id, inspect, run, sql, sql_int, wait_for
+from helpers import compose, container_id, inspect, restart_count, run, sql, sql_int, wait_for
 
 SIMULATORS = ["edge-sim-plate-waste", "edge-sim-pos-transaction", "edge-sim-service-timing", "edge-sim-staff-shift"]
 TOPIC_TABLE = {
@@ -34,15 +34,6 @@ TOPIC_TABLE = {
 }
 RECOVERY_SECONDS = 240
 SETTLE_SECONDS = 15  # events published in the last moments may legitimately still be on their way
-SHUTDOWN_WINDOW_ALLOWANCE = 2  # measured 0 in six outages at the 0.25 s poll (5 in six at 1 s); see the test below
-# Kafka's listener closes about a second before the gate can see it, and what Connect had accepted but not
-# yet produced is discarded when it revokes its tasks: measured 2, 3 and 1 events across three restarts
-# (109 to 166 before the gate watched Kafka, 26 on GitHub's first run).
-KAFKA_RESTART_ALLOWANCE = 4
-# After a Mosquitto restart the simulators hold events 30 s while the connectors follow on their own backoff:
-# measured 0 in three restarts (11, 2 and 2 without the hold). The broker's own in-flight messages are the
-# one thing that could still go.
-MQTT_RESTART_ALLOWANCE = 2
 PUBLISHED_LINE = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d+ INFO \[[\w-]+\] published \w+ event_id=([0-9a-f-]{36})")
 
 
@@ -96,7 +87,7 @@ def quiesce_and_check_nothing_was_lost_or_duplicated():
             if stack.consumer_lag("storage-consumer") != 0:
                 return False
             before = {t: stack.end_offset(t) for t in TOPIC_TABLE}
-            time.sleep(8)  # the connectors may still be flushing the last MQTT messages
+            time.sleep(8)  # the bridge may still be forwarding the last MQTT messages
             after = {t: stack.end_offset(t) for t in TOPIC_TABLE}
             return before == after and stack.consumer_lag("storage-consumer") == 0
 
@@ -147,11 +138,13 @@ def events_sent_but_never_stored(since):
     return sent - stored_event_ids(since), len(sent)
 
 
-def assert_every_published_event_was_stored(since, allowed_missing=0, timeout=180):
+def assert_every_published_event_was_stored(since, allowed_missing=0, timeout=240):
     """
     Every event the simulators logged as published since `since` (settled ones: the last few
-    seconds may still be on their way) must be in the database. `allowed_missing` is for the one
-    loss that cannot be closed: see test_sensor_events_are_not_lost_while_the_kafka_connect_bridge_is_down.
+    seconds may still be on their way) must be in the database. No allowance is ever needed: the
+    bridge acknowledges a message to Mosquitto only after Kafka has it, so a message is either in
+    Kafka or still held by Mosquitto (DEF-152). `allowed_missing` exists for a test to state a
+    loss it has measured; none does.
     """
     outcome = {}
 
@@ -223,63 +216,80 @@ def test_a_kafka_restart_is_survived():
     since = utc_now()
     compose("restart", "kafka", timeout=180)
     wait_for(lambda: stack.healthy("kafka"), 240, description="kafka to be healthy again")
-    wait_for(lambda: all(state == "RUNNING" for state in stack.connector_states().values()), 240, interval=5,
-             description="the MQTT connectors to be RUNNING again")
+    wait_for(stack.bridge_connected, 240, interval=5, description="the bridge to be connected again")
     pipeline_is_flowing()
     quiesce_and_check_nothing_was_lost_or_duplicated()
-    assert_every_published_event_was_stored(since, allowed_missing=KAFKA_RESTART_ALLOWANCE)
+    # Zero allowed. Under Kafka Connect this lost 109 to 166 events locally and 26 of 734 on GitHub (DEF-151).
+    assert_every_published_event_was_stored(since)
 
 
 def test_an_mqtt_broker_restart_is_survived():
-    # The sensor-facing edge: if simulators or the connectors cannot reconnect,
-    # data silently stops (this is the shape of problem log item 44).
+    # The sensor-facing edge. Mosquitto now persists the bridge's session and its queue, and the bridge
+    # reconnects at once; nothing is held or guessed (the Kafka Connect connectors reconnected on their own
+    # backoff, 2 to 17 s after the simulators, and lost what was sent in between: DEF-151).
     pipeline_is_flowing()
     since = utc_now()
     compose("restart", "mosquitto", timeout=120)
+    wait_for(stack.bridge_connected, 120, interval=3, description="the bridge to reconnect to MQTT")
     pipeline_is_flowing()
-    states = stack.connector_states()
-    assert all(state == "RUNNING" for state in states.values()), states
-    assert_every_published_event_was_stored(since, allowed_missing=MQTT_RESTART_ALLOWANCE)
+    assert_every_published_event_was_stored(since)
 
 
-def test_sensor_events_are_not_lost_while_the_kafka_connect_bridge_is_down():
-    # The MQTT broker keeps nothing for a subscriber that is not connected, so what the
-    # sensors published while Kafka Connect was down or restarting never reached Kafka. Nothing
-    # noticed: "stored once" compares Kafka with the database, not the sensors with Kafka.
-    # Measured before the fix: 470 of 1,266 events across one 45 s outage and its recovery.
-    # The ledger here is the simulators' own log of what they published; they now hold events
-    # while their connector is not running (DEF-148).
-    #
-    # A small loss is allowed for (measured: none in six outages): when Connect shuts down its REST API stops answering
-    # slightly before its MQTT consumers stop, so an event published in that sub-second window
-    # is still lost.
+def test_a_mosquitto_that_is_killed_hard_loses_nothing():
+    # Not a stop (which saves its state) but a SIGKILL, as an out-of-memory kill would be. Mosquitto saves its
+    # state every 5 s, so what it had accepted in the last seconds is not on disk: the loss window is the time
+    # between accepting a message and handing it to the bridge, a few milliseconds, and after a restart it
+    # redelivers whatever the bridge had not acknowledged. Measured: 0 of 2,632 events across five kills.
     pipeline_is_flowing()
     since = utc_now()
-    compose("stop", "kafka-connect", timeout=120)
+    crash("mosquitto")
+    wait_for(lambda: healthy_and_running("mosquitto"), 120, description="the restart policy to bring Mosquitto back")
+    wait_for(stack.bridge_connected, 120, interval=2, description="the bridge to reconnect")
+    pipeline_is_flowing()
+    assert_every_published_event_was_stored(since)
+
+
+def test_sensor_events_are_not_lost_while_the_bridge_is_down():
+    # The case that started all of this (DEF-148): under Kafka Connect the MQTT broker kept nothing for a
+    # connector that was not connected, and 470 of 1,266 events were lost across one 45 s outage. The bridge
+    # keeps a persistent session, so Mosquitto holds everything published while it is away. The ledger is the
+    # simulators' own log of what they published.
+    pipeline_is_flowing()
+    since = utc_now()
+    compose("stop", "mqtt-kafka-bridge", timeout=120)
     time.sleep(45)  # long enough for every simulator to publish several events into the outage
-    compose("start", "kafka-connect", timeout=240)
-    wait_for(lambda: all(state == "RUNNING" for state in stack.connector_states().values()), 300, interval=5,
-             description="the connectors to be RUNNING again")
-    assert_every_published_event_was_stored(since, allowed_missing=SHUTDOWN_WINDOW_ALLOWANCE)
+    compose("start", "mqtt-kafka-bridge", timeout=120)
+    wait_for(stack.bridge_connected, 120, interval=3, description="the bridge to reconnect")
+    assert_every_published_event_was_stored(since)
 
 
-def test_connector_tasks_that_failed_at_startup_are_restarted_automatically():
-    # DEF-137, reproduced on purpose. With the MQTT broker stopped its hostname does not
-    # resolve, so Kafka Connect's tasks fail as they start (`UnknownHostException: mosquitto`,
-    # the failure a transient DNS fault caused on two real starts). Kafka Connect never
-    # restarts a failed task, so before the supervisor existed they stayed FAILED after the
-    # broker came back and the pipeline ingested nothing. The supervisor must notice and restart them.
+def test_a_killed_bridge_is_restarted_by_the_platform_and_loses_nothing():
     pipeline_is_flowing()
-    compose("stop", "mosquitto", timeout=120)
-    compose("restart", "kafka-connect", timeout=240)
-    wait_for(lambda: any(state == "FAILED" for state in stack.connector_states().values()), 300, interval=5,
-             description="a connector task to fail while the broker's name does not resolve (the precondition of this test)")
+    since = utc_now()
+    crash("mqtt-kafka-bridge")
+    time.sleep(15)  # a backlog builds at the broker while it is dead
+    wait_for(lambda: healthy_and_running("mqtt-kafka-bridge"), 120, description="the restart policy to bring the bridge back")
+    wait_for(stack.bridge_connected, 120, interval=3, description="the bridge to reconnect")
+    assert_every_published_event_was_stored(since)
 
-    compose("start", "mosquitto", timeout=120)
-    wait_for(lambda: all(state == "RUNNING" for state in stack.connector_states().values()), 180, interval=5,
-             description="the supervisor to restart the failed tasks")
+
+def test_a_kafka_outage_longer_than_the_bridge_will_wait_loses_nothing():
+    # The bridge gives up on a message Kafka will not take (the producer times out after 60 s) and exits; its
+    # supervisor starts it again and Mosquitto delivers what was never acknowledged. This is that path, run for
+    # real: Kafka stopped for 100 s, so the bridge fails and restarts at least once before Kafka returns.
     pipeline_is_flowing()
-    quiesce_and_check_nothing_was_lost_or_duplicated()
+    since = utc_now()
+    compose("stop", "kafka", timeout=120)
+    time.sleep(100)
+    compose("start", "kafka", timeout=180)
+    # 480 s, not 240: Docker's health state (a JVM started every 10 s) took over 240 s once, on a loaded host
+    # with every consumer group rejoining, although Kafka had been up for 30 s and the bridge was already
+    # forwarding. The loss check below is what this test is about, not how fast a health probe answers.
+    wait_for(lambda: stack.healthy("kafka"), 480, description="kafka to be healthy again")
+    wait_for(stack.bridge_connected, 240, interval=5, description="the bridge to be connected again")
+    pipeline_is_flowing()
+    assert restart_count("mqtt-kafka-bridge") >= 1, "the outage did not outlast the bridge's patience, so this test proved nothing"
+    assert_every_published_event_was_stored(since)
 
 
 # ------------------------------------------------------------------ the whole thing is stopped and restarted
@@ -293,8 +303,8 @@ def test_stopping_and_restarting_the_whole_stack_preserves_data():
 
     compose("down", timeout=300)  # containers and network go; named volumes stay
     # The simulators' logs go with their containers, so the ledger starts here: everything the
-    # new simulators publish from their first moment, including the seconds before Kafka Connect
-    # has subscribed, which used to be lost.
+    # new simulators publish from their first moment, including the seconds before the bridge
+    # has reconnected, which used to be lost.
     since = utc_now()
     compose("up", "-d", "--no-build", *STACK_SERVICES, timeout=600)
     stack.wait_until_ready.cache_clear()

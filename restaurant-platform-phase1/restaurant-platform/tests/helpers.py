@@ -69,7 +69,7 @@ def wait_for(predicate, timeout, interval=3.0, description="condition"):
 
 def container_id(service: str) -> str:
     # -a: Compose v2's `ps` lists only running containers, so a one-shot service that has
-    # already exited (kafka-connect-init) was not found on GitHub's runners (Docker Engine, v2).
+    # already exited (a one-shot helper such as ollama-init) was not found on GitHub's runners (Docker Engine, v2).
     # Compose v1 accepts the flag and lists the same containers.
     ids = compose("ps", "-a", "-q", service).stdout.strip().splitlines()
     assert ids, f"no container found for service {service}"

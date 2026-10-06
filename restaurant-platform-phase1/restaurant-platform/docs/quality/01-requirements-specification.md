@@ -218,8 +218,8 @@ Added 2026-10-03 at the owner's request: the plate-waste node estimates waste on
 | NFR-REL-02 | The pipeline shall survive the loss and return of the database, Kafka and the MQTT broker, with every message stored exactly once. | M | Derived (chaos test, 2026-10-01) | T |
 | NFR-REL-03 | Data shall persist across a stop and start of the stack. | M | Status log, 2026-09-17 | T |
 | NFR-REL-04 | At-least-once delivery combined with idempotent storage shall give an exactly-once effect. | M | Status log, section 3.5 | T |
-| NFR-REL-05 | On the Compose path, a connector whose task has failed, or that stays unassigned, shall be restarted automatically; a paused connector shall be left alone and a connector that cannot start shall not be restarted more than once a minute. | S | DEF-137, DEF-142, 2026-10-04 | T |
-| NFR-REL-06 | Events a sensor publishes while the MQTT-to-Kafka bridge is down, restarting or not yet subscribed shall reach the database: the sensor holds them while its connector is not running and sends them in order when it is. A loss limited to the instant the bridge is disturbed (a second or so around a Kafka, Mosquitto or Connect shutdown) is tolerated and stated. | M | DEF-148, DEF-151, 2026-10-05 | T |
+| NFR-REL-05 | The MQTT-to-Kafka bridge shall be restarted automatically when it fails or is killed, shall report itself unhealthy while it is not connected to MQTT, and shall exit instead of acknowledging a message that Kafka has not confirmed (including when its oldest unconfirmed message has waited too long). | S | DEF-137, DEF-142, DEF-152, 2026-10-05 | T |
+| NFR-REL-06 | **No sensor event shall be lost** to a restart or outage of the bridge, Kafka or Mosquitto (stop, crash or a long outage): the bridge keeps a persistent MQTT session and acknowledges a message only after Kafka has confirmed it, and Mosquitto persists the session and queue. Delivery is at-least-once; a duplicate is harmless because storage is idempotent on `event_id` (NFR-REL-04). | M | DEF-148, DEF-151, DEF-152, 2026-10-05 | T |
 
 ### 5.3 Performance (PER)
 
@@ -309,4 +309,4 @@ Computer-vision plate-waste detection (a solved, commercial problem; MinIO exist
 | 2026-10-02/03 | Reliability, performance and security requirements made explicit and measured (NFR-REL, NFR-PER, NFR-SEC-05) |
 | 2026-10-03 | Edge intelligence added: the plate-waste node infers on the node, with integrity, budget, drift and fleet-view requirements (FR-EDG-01 to 07) |
 | 2026-10-04 | Staffing made a real driver of the simulated kitchen (FR-ING-07); the done-condition finding required to pass refutation (FR-CAU-07); robust control limits (FR-ANA-05); self-healing connectors on Compose (NFR-REL-05) |
-| 2026-10-05 | Events published while the bridge into Kafka is down or starting must not be lost (NFR-REL-06) |
+| 2026-10-05 | No sensor event may be lost to a bridge, Kafka or Mosquitto restart (NFR-REL-06); the Kafka Connect connectors and their supervisor were replaced by the MQTT-Kafka bridge, so NFR-REL-05 now describes the bridge's self-healing instead of the supervisor's (DEF-152) |

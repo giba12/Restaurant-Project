@@ -6,7 +6,19 @@ data:
   mosquitto.conf: |
     listener 1883
     allow_anonymous true
-    persistence false
+
+    # Persistence is what makes the MQTT-to-Kafka bridge's guarantee survive a restart of
+    # Mosquitto itself (DEF-152). The bridge keeps a persistent session and acknowledges a
+    # message only after Kafka has it, so Mosquitto holds every message not yet safely in
+    # Kafka: in memory while it runs, on the volume when it stops. autosave_interval bounds
+    # what a hard kill (not a stop) could lose. max_queued_messages is the per-client queue
+    # for a session that is away; the default (1000) would start discarding in minutes.
+    persistence true
+    persistence_location /mosquitto/data/
+    autosave_interval 5
+    max_queued_messages {{ .Values.maxQueuedMessages }}
+    max_queued_bytes 0
+
     log_dest stdout
 
     # Added alongside 1883 rather than replacing it -- same non-breaking,

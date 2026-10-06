@@ -38,7 +38,7 @@ This is a simulated restaurant-operations data platform. Fake sensors emit event
 ```mermaid
 flowchart LR
     SIM["edge-simulators<br/>(4 pods)"] -->|MQTT| MQ[Mosquitto]
-    MQ -->|Kafka Connect + Camel MQTT source| RAW{{"4 raw topics<br/>plate-waste / pos-transaction /<br/>service-timing / staff-shift"}}
+    MQ -->|mqtt-kafka-bridge, persistent session, ack after Kafka| RAW{{"4 raw topics<br/>plate-waste / pos-transaction /<br/>service-timing / staff-shift"}}
     GAME["game/client (Godot)"] -->|HTTP| GB["game/bridge"]
     GB --> RAW
 
@@ -76,17 +76,17 @@ Two things are easy to miss in that picture:
 
 | Topic | Produced by | Consumed by (consumer group) |
 |---|---|---|
-| `plate-waste-events` | Kafka Connect (from MQTT) | storage-consumer |
-| `pos-transaction-events` | Kafka Connect | storage-consumer |
-| `service-timing-events` | Kafka Connect; game-bridge | storage-consumer, ticket-timing-aggregator, digital-twin |
-| `staff-shift-events` | Kafka Connect; game-bridge | storage-consumer, digital-twin |
+| `plate-waste-events` | mqtt-kafka-bridge (from MQTT) | storage-consumer |
+| `pos-transaction-events` | mqtt-kafka-bridge | storage-consumer |
+| `service-timing-events` | mqtt-kafka-bridge; game-bridge | storage-consumer, ticket-timing-aggregator, digital-twin |
+| `staff-shift-events` | mqtt-kafka-bridge; game-bridge | storage-consumer, digital-twin |
 | `ticket-timing-summaries` | ticket-timing-aggregator | anomaly-detector |
 | `anomaly-events` | anomaly-detector | causal-engine |
 | `causal-findings-events` | causal-engine | finding-reviewer |
 | `narration-ready-events` | finding-reviewer | finding-narrator |
 | `scenario-control-events` | scenario-injection-controller | the service-timing simulator (group `service-timing-scenario-control`) |
 
-Nothing declares these topics. There are no `KafkaTopic` objects on k3s and no topic-creation step in Compose, so the broker creates each one the first time something produces to or consumes from it. Kafka Connect and Kafka itself add their own internal topics (`connect-*`, `__consumer_offsets`).
+Nothing declares these topics. There are no `KafkaTopic` objects on k3s and no topic-creation step in Compose, so the broker creates each one the first time something produces to or consumes from it. Kafka itself adds its internal topics (`__consumer_offsets`); the `connect-*` topics left by the retired Kafka Connect worker are unused.
 
 ### 1.3 Database tables (TimescaleDB, database `restaurant_platform`)
 
@@ -118,7 +118,7 @@ On k3s every service is `ClusterIP`; use `kubectl port-forward` to reach the das
 |---|---|---|
 | Purpose | shows real Kubernetes/Strimzi operational depth | runs anywhere with Docker, one command |
 | Kafka | Strimzi-managed, KRaft | plain `apache/kafka`, KRaft |
-| Kafka Connect connectors | `KafkaConnector` custom resources | REST calls from a one-shot init container |
+| MQTT-to-Kafka bridge | `k8s/mqtt-kafka-bridge` (one Deployment, TLS to both brokers) | the `mqtt-kafka-bridge` service |
 | Schema application | Helm hook Job runs the four SQL files | Postgres image runs `docker-entrypoint-initdb.d` on first init |
 | LLM | `qwen2.5:3b-instruct`, Ollama native on the host, GPU | `qwen2.5:0.5b-instruct`, Ollama in a container, CPU |
 | Observability | Prometheus, Grafana, kube-state-metrics, Kafka exporter | not included |
@@ -161,7 +161,7 @@ The game touches version 1 in exactly four places, all intentional: the shared c
 #### `game-smoke-test` job (added 2026-09-29)
 - **What it does:** A second, separate job in the same workflow file that automates `game/client/tests/smoke_test.gd` -- the project's one true integration test, previously manual-only. Brings up a *minimal* Compose subset (`kafka`, `timescaledb`, `storage-consumer`, `ticket-timing-aggregator`, `dashboard-api`, `dashboard-web`, `game-bridge`), polls both `/api/health` endpoints until they answer, downloads the official Godot 4.5 Linux binary (matching `game/client/project.godot`'s `config/features` exactly, not "whatever's latest" -- confirmed the exact release asset name against Godot's own GitHub API rather than guessing a URL), and runs the smoke test headless.
 - **Why it works this way:**
-  - The service subset was derived by actually reading what the test calls, not copied from the full stack: it never touches MQTT/Kafka Connect (the bridge publishes straight to Kafka) or the simulators, and skips anomaly-detector/causal-engine/finding-reviewer/llm-narrator/ollama entirely since the test never reads a narrated finding -- pulling an Ollama model alone would make this job far slower for zero coverage gained. `ticket-timing-aggregator` earned its place by tracing `dashboard-api`'s `/api/comparison` (`services/dashboard-api/comparison.py`) down to the `ticket_timing_summaries` table it writes.
+  - The service subset was derived by actually reading what the test calls, not copied from the full stack: it never touches MQTT or the MQTT-Kafka bridge (the game bridge publishes straight to Kafka) or the simulators, and skips anomaly-detector/causal-engine/finding-reviewer/llm-narrator/ollama entirely since the test never reads a narrated finding -- pulling an Ollama model alone would make this job far slower for zero coverage gained. `ticket-timing-aggregator` earned its place by tracing `dashboard-api`'s `/api/comparison` (`services/dashboard-api/comparison.py`) down to the `ticket_timing_summaries` table it writes.
   - `SPAWN_SECONDS=1`/`CREW_MIN_SECONDS=1`/`CREW_MAX_SECONDS=2` (the same "fast test run" pacing `game/README.md` already documents for manual use) keeps the test's several wait-for-the-crew loops from running at their default 6-14s cadence.
   - `BRIDGE_API_KEY` is set explicitly to match `docker-compose.yml`'s own fallback exactly -- `bridge_client.gd` reads it from the environment with no fallback of its own, so leaving it unset (rather than matching) would 401 every authenticated call, silently, not loudly.
   - No `DASHBOARD_API_KEY` is needed even though `dashboard-api` requires one: `services/dashboard-web/nginx.conf.template` injects `X-API-Key` server-side from its own environment variable (which Compose already defaults to the same value dashboard-api expects), so the Godot client calling `dashboard-web`'s port never needs to know it -- confirmed by reading the nginx template, not assumed.
@@ -222,7 +222,7 @@ The game touches version 1 in exactly four places, all intentional: the shared c
 - **Purpose:** The "clone and run" document.
 
 ### `docker-compose.yml`
-- **What it does:** Defines the whole portable stack, 22 services, in dependency order: Mosquitto; Kafka; Kafka Connect, a one-shot connector registrar and a connector supervisor that restarts failed or stuck connectors; TimescaleDB; the four simulators; storage-consumer; the Phase 5 services (aggregator, anomaly detector, causal engine, reviewer, scenario controller); digital twin; narrator; dashboard API and web; Ollama and a one-shot model puller. It is version 1 only: the game bridge is added separately by `game/docker-compose.game.yml`. Three named volumes persist Kafka, TimescaleDB and Ollama data.
+- **What it does:** Defines the whole portable stack, 20 services, in dependency order: Mosquitto (with a persistent volume); Kafka; the MQTT-Kafka bridge, which the simulators wait for (its persistent session must exist before the first event is published); TimescaleDB; the four simulators; storage-consumer; the Phase 5 services (aggregator, anomaly detector, causal engine, reviewer, scenario controller); digital twin; narrator; dashboard API and web; Ollama and a one-shot model puller. It is version 1 only: the game bridge is added separately by `game/docker-compose.game.yml`. Four named volumes persist Mosquitto's session and queue, Kafka, TimescaleDB and Ollama data.
 - **Why it works this way:**
   - YAML anchors (`&edge-sim`, `&phase5-service`, `&phase5-env`) remove duplication, since four simulators share one image and most Phase 5 services share their environment.
   - `restart: unless-stopped` is on every long-running service because Compose, unlike a Kubernetes Deployment, does not restart crashed containers by default. A load-induced anomaly-detector crash stayed down forever until this was added.
@@ -332,7 +332,6 @@ One image runs all four sensors; an environment variable picks which. Every simu
 - **What it does:** Defines the `Simulator` class: load one schema, connect to MQTT with exponential backoff, validate each event against the schema, publish it (QoS 1) and sleep a Poisson-distributed interval.
 - **Why it works this way:**
 - **Added 2026-10-04:** `subscribe` (handlers per topic, re-subscribed on every connect because a clean-session reconnect drops them), `_on_message` (routes by topic; a failing handler is logged, never raised into the network thread) and `publish_state` (retained, QoS 1) so simulators can share simulated-world state.
-- **Added 2026-10-05 (DEF-148), store-and-forward:** `publish` now validates and queues the event in a bounded outbox (`OUTBOX_MAX_EVENTS`, 5,000; the oldest is dropped, loudly, if it fills) and `flush` sends held events oldest first while the ingest gate (`common/ingest_gate.py`) is open; `sleep_poisson_interval` flushes every half second so held events leave as soon as the bridge is back. An event is removed from the outbox as it is handed to the MQTT client, never resent, because paho resends what it accepted and a second copy would break "stored exactly once". With no `INGEST_GATE_URL` the gate is always open and behaviour is as before.
   - A schema violation is fatal (`sys.exit(1)`) because it means the generator has a bug; logging and skipping would hide it and could let bad data reach Kafka.
   - Connection and publish errors are logged and retried because the broker may simply not be up yet, and a crash loop would fix nothing.
   - The interval is floored at 0.5 s so a tiny random draw cannot hammer the broker.
@@ -390,17 +389,6 @@ One image runs all four sensors; an environment variable picks which. Every simu
 - **Why it works this way:** One scenario can now act on the kitchen and the staff together. `kafka-python` is imported inside the function so a simulator without scenario control does not need it.
 - **Connects to:** both simulators; `services/scenario-injection-controller`.
 - **Purpose:** Shared scenario hook.
-
-### `edge-simulators/common/ingest_gate.py`
-- **What it does:** Answers "is the bridge that carries this sensor's events into Kafka ready?" from three facts. (1) The Connect REST API (`GET /connectors/<sensor>-source-connector/status`, every 0.25 s): the connector and every task `RUNNING` continuously for a settle period (20 s); an unreachable API counts as closed. (2) Kafka itself (`kafka_is_reachable`: a connection, or a full TLS handshake when the simulator is configured for SSL; a TLS *error* counts as up): closed when it stops answering and for 45 s after it returns. (3) This simulator's own MQTT connection (`broker_lost` / `broker_back`, driven from `runtime.py`'s callbacks): closed when it drops and for 30 s after a *re*connection. `connector_is_running` is the pure decision; `IngestGate.poll_once` takes injectable fetch, Kafka check and clock.
-- **Why it works this way:** The MQTT broker keeps nothing for a subscriber that is not connected, and the connectors subscribe with clean sessions, so events published while a connector was down, restarting or still starting were lost (37% of one measured outage; about 30 s on every cold start). A persistent MQTT session was tried first and deadlocks this connector's start-up (the backlog arrives before the sink route exists, each message waits 30 s and fails). Connect reports a task `RUNNING` 3 to 7 s before it has subscribed, so the settle period is needed; and its REST status stays `RUNNING` while Kafka is down (it is written to a Kafka topic) even though Connect revokes every task three seconds after losing the group coordinator, and after a Mosquitto restart each connector reconnects on its own Paho backoff (up to 17 s measured), which is why the gate watches Kafka and its own broker connection too (DEF-151). The hold times are measured recovery times times about two, not guarantees; the small residual loss around a disturbance is measured in `docs/quality/06-defect-log.md` (DEF-148, DEF-151). Opt-in through `INGEST_GATE_URL`; Kafka's address comes from `KAFKA_BOOTSTRAP_SERVERS`.
-- **Connects to:** `common/runtime.py`; the Connect REST API (`kafka-connect:8083` under Compose, `connect-cluster-connect-api` on Kubernetes, where `k8s/edge-simulators/templates/networkpolicy.yaml` admits the simulators); `test_store_and_forward.py`, `tests/static/test_ingest_gate_wiring.py`, `tests/resilience/test_failure_recovery.py`.
-- **Purpose:** Stops sensors publishing into a bridge that is not there.
-
-### `edge-simulators/test_store_and_forward.py`
-- **What it does:** Tests the gate's decision table, settle clock and failure handling, and the simulator's outbox: events held while the gate is shut and sent in order, once each, when it opens, never queued if invalid, bounded with a loud oldest-first drop, and never resent after a failed acknowledgement. Fake MQTT client, fake Connect API, fake clock.
-- **Why it works this way:** The real behaviour (events surviving a real Connect outage) is checked on the real stack; these pin the logic. Checked for teeth by breaking the code nine ways, each turning a test red (one by hanging).
-- **Purpose:** Verification of the store-and-forward behaviour.
 
 ### `edge-simulators/edge_ai/__init__.py`
 - **What it does:** Empty. Makes `edge_ai` a package.
@@ -538,41 +526,25 @@ One image runs all four sensors; an environment variable picks which. Every simu
 ## 6. `docker-compose/`: Compose-only support files
 
 ### `docker-compose/mosquitto/mosquitto.conf`
-- **What it does:** Listens on 1883, allows anonymous clients, disables persistence, logs to stdout.
-- **Why it works this way:** It is a copy of the ConfigMap content in `k8s/mosquitto`, so both paths behave the same. Anonymous access is a local-development simplification, not a production position.
-- **Connects to:** mounted into the `mosquitto` service.
+- **What it does:** Listens on 1883, allows anonymous clients, **persists** the broker's state (`persistence true`, written to `/mosquitto/data/` every 5 s and on shutdown), allows 500,000 queued messages per client and logs to stdout.
+- **Why it works this way:** Persistence is what makes the bridge's guarantee survive a restart of Mosquitto itself: the bridge's persistent session, and every message queued for it while it is away or while Kafka has not confirmed it, live here (DEF-152). The queue limit replaces the default of 1,000, which would start discarding after minutes of a bridge outage. It is a copy of the ConfigMap content in `k8s/mosquitto`, so both paths behave the same. Anonymous access is a local-development simplification, not a production position.
+- **Connects to:** mounted into the `mosquitto` service, with the `mosquitto-data` volume.
 - **Purpose:** Broker configuration for Compose.
 
-### `docker-compose/kafka-connect/Dockerfile`
-- **What it does:** Builds a Kafka Connect image on the official `apache/kafka` image, downloads the Camel MQTT source connector into `/opt/kafka/plugins`, deletes a conflicting `connect-json` jar, and starts `connect-distributed.sh` with the worker properties.
-- **Why it works this way:** The k8s image is built on a Strimzi-specific base whose entrypoint expects the Strimzi operator, so it cannot run standalone. This variant uses the plain Apache image. That image is Alpine, which has neither `curl` nor `apt-get`, so the download uses `wget`. The Camel connector is chosen because it is Apache-licensed, unlike Confluent's MQTT connector.
-- **Connects to:** `connect-worker.properties`; `kafka` and `mosquitto`; the `kafka-connect` compose service.
-- **Purpose:** The MQTT-to-Kafka bridge image for the portable path.
+### `services/mqtt-kafka-bridge/bridge.py`
+- **What it does:** Carries every sensor event from MQTT into Kafka without losing one, and is the platform's only ingest path (DEF-152). It subscribes to the four `sensors/*` topics at QoS 1 with a **persistent session** (`clean_session=False`, a fixed client id) and **manual acknowledgement**, forwards each payload untouched to the matching Kafka topic from a worker thread, and acknowledges a message to Mosquitto only when Kafka has confirmed the write (`acks=all`). `Bridge` holds the logic with the MQTT client and the producer passed in, so it is testable without either; `parse_routes`, `build_producer`, `build_client`, `check` and `main` are the wiring. It exposes Prometheus metrics on port 8000 (`bridge_mqtt_connected`, `bridge_messages_forwarded_total{kafka_topic}`, `bridge_unconfirmed_messages`, `bridge_oldest_unconfirmed_seconds`, `bridge_kafka_errors_total`) and `python bridge.py --check` is its health probe.
+- **Why it works this way:** It replaced the four Camel MQTT connectors inside Kafka Connect, which subscribed with clean sessions and so lost whatever was published while they were down, restarting or not yet subscribed (470 of 1,266 events in one measured outage). Everything built around them could only shrink the loss: their REST status kept saying `RUNNING` while Kafka was down and Connect had revoked every task, a persistent session deadlocked their start-up (DEF-150), and the simulator-side gate (DEF-148, DEF-151) needed hold times that were guesses. Here the guarantee is structural: until Kafka confirms, Mosquitto still owns the message and delivers it again after any disconnect, and Mosquitto's in-flight window (20) bounds how many the bridge holds at once. Anything unrecoverable (Kafka refuses a message, or the oldest unconfirmed message is over 300 s old) ends the process and the supervisor restarts it; nothing is lost by exiting. The guarantee is at-least-once, not exactly-once: a crash between Kafka's confirmation and the acknowledgement delivers that message again, and the storage consumer's `event_id` uniqueness makes the copy harmless. Connecting to MQTT first and creating the Kafka producer on the worker thread (with retries) means the subscription, which starts Mosquitto queueing for it, exists even while Kafka is not ready.
+- **Connects to:** Mosquitto (MQTT, TLS on Kubernetes), Kafka (`phase5_common.py`'s settings: pinned `api_version`, opt-in TLS context), Prometheus (`pipeline-health` scrape on `:8000`), `test_bridge.py`.
+- **Purpose:** Lossless MQTT-to-Kafka ingest.
 
-### `docker-compose/kafka-connect/connect-worker.properties`
-- **Added 2026-10-04:** `scheduled.rebalance.max.delay.ms=0`. Kafka Connect's default (five minutes) made the single worker sit with every connector `UNASSIGNED` for exactly 300 s after a broker restart (DEF-142, probably DEF-143); with one worker there is nobody to wait for. The Kubernetes `KafkaConnect` resource sets the same.
-- **What it does:** A distributed-mode Connect worker config: bootstrap `kafka:9092`, group `connect-cluster`, byte-array converters, single-replica internal topics, plugin path `/opt/kafka/plugins`.
-- **Why it works this way:** Replication factors are 1 because there is one broker. Byte-array converters pass the JSON payload through untouched instead of re-encoding it.
-- **Connects to:** the Dockerfile above.
-- **Purpose:** Worker configuration.
+### `services/mqtt-kafka-bridge/Dockerfile`, `requirements.txt`
+- **What they do:** The image (Python 3.11 slim, non-root UID 1001, built from `services/` like the other services, entrypoint `python -u bridge.py`) and exact pins for `paho-mqtt`, `kafka-python` (3.0.11, the version verified to complete the TLS handshake against this broker) and `prometheus-client`.
+- **Purpose:** Build the bridge.
 
-### `docker-compose/kafka-connect/register-connectors.sh`
-- **What it does:** A one-shot script that waits for the Connect REST API, then `PUT`s the `config` object of each JSON file in `/connectors` to `/connectors/<name>/config`, retrying, and exits non-zero if a connector cannot be registered.
-- **Why it works this way:** With no Strimzi operator there are no `KafkaConnector` resources, so registration is a plain REST call. `PUT` creates or updates; it used to `POST`, which fails for a connector that already exists (Kafka keeps them across restarts), so a changed file never reached a stack that had run before, and the script then exited 0 whether that was the reason or the registration had genuinely failed (DEF-149). Tested by running it against a fake `curl` (`tests/static/test_register_connectors.py`) and live (`tests/e2e`).
-- **Connects to:** `connectors/*.json`; the `kafka-connect` REST API; run by `kafka-connect-init`.
-- **Purpose:** Compose's stand-in for the operator-managed connectors.
-
-### `docker-compose/kafka-connect/supervisor.py`
-- **What it does:** A small long-running supervisor (run by the `kafka-connect-supervisor` service) that polls Connect's REST status and restarts what is not healthy: a failed task or connector at once (`onlyFailed=true`); a connector that stays `UNASSIGNED`, or `RUNNING` with no task, for 30 seconds, in full. A restarted connector is left alone for 60 seconds, and paused or stopped connectors are never touched.
-- **Why it works this way:** Kafka Connect never restarts a failed task and reports a connector `RUNNING` while its task is `FAILED`. A transient start-up DNS failure (`UnknownHostException: mosquitto`) therefore left the whole pipeline ingesting nothing (DEF-137), and after a Kafka restart under Podman the connectors sat unassigned for about six minutes (DEF-142). The logic is a pure `classify` plus a `Supervisor` with an injectable clock and request function, so it is tested without Connect. Standard library only.
-- **Connects to:** the `kafka-connect` REST API; `docker-compose.yml`; `test_supervisor.py`.
-- **Purpose:** Compose's stand-in for what Strimzi can do on Kubernetes: self-healing connectors.
-
-### `docker-compose/kafka-connect/connectors/plate-waste-source-connector.json`, `pos-transaction-source-connector.json`, `service-timing-source-connector.json`, `staff-shift-source-connector.json`
-- **What they do:** Each defines one Camel MQTT source connector: subscribe to `sensors/<name>` on `tcp://mosquitto:1883` and write to `<name>-events`, with byte-array converters and a unique `clientId` (`kafka-connect-plate-waste` and so on).
-- **Why they work this way:** The unique `clientId`s fix a real bug: with the default id, two connectors kicked each other off the broker in a reconnect loop. They mirror the k8s connectors exactly so the two paths behave identically.
-- **Connects to:** Mosquitto, Kafka, `register-connectors.sh`.
-- **Purpose:** The four MQTT-topic to Kafka-topic bridges.
+### `services/mqtt-kafka-bridge/test_bridge.py`
+- **What it does:** Tests that a message is acknowledged only after Kafka confirms it (and once), that payloads and order pass through untouched, that an unrouted message is acknowledged and dropped so it cannot starve the in-flight window, that any Kafka failure ends the process without acknowledging, that the watchdog fires on an old unconfirmed message, that a Kafka that is not ready is retried without losing anything, that the MQTT client is built with a persistent session, manual acknowledgement and a fixed client id, that the **real** `KafkaProducer` accepts the bridge's settings (a mistake there once left the bridge forwarding nothing until a real stack run showed it), and the health probe.
+- **Why it works this way:** Fake MQTT client and fake producer, so every failure ordering can be forced. Checked for teeth by breaking the code ten ways (acknowledge on arrival, acknowledge on failure, no exit, unrouted not acknowledged, no subscription, QoS 0, clean session, auto-acknowledge, no watchdog exit, double acknowledgement), each turning a test red. That messages really survive real outages is checked on the real stack by `tests/resilience`.
+- **Purpose:** Verification of the bridge's guarantee.
 
 ### `docker-compose/ollama/pull-model.sh`
 - **What it does:** Waits for Ollama, then calls `/api/pull` for the configured model, retrying up to five times.
@@ -905,35 +877,16 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 - **Why it works this way:** A comment records that consumer-group lag cannot be derived here, and why the exporter exists. The metric names were confirmed against a live Prometheus after a first guess turned out wrong.
 - **Purpose:** Exposes Kafka throughput to Prometheus.
 
-#### `k8s/kafka-connect-mqtt/Chart.yaml`, `values.yaml`
-- **What they do:** Chart identity, and its description now says the connectors are not Helm templates and how to apply them (`kubectl apply -n kafka -f k8s/kafka-connect-mqtt/connectors/`). `values.yaml` is empty because the chart has no tunables.
+#### `k8s/mqtt-kafka-bridge/Chart.yaml`, `values.yaml`, `templates/deployment.yaml`
+- **What they do:** The bridge on Kubernetes: one replica with a **Recreate** rollout, the image `localhost/local/mqtt-kafka-bridge:1.0`, MQTT over the TLS listener (8883, Mosquitto's own certificate mounted from the `mosquitto-tls` secret) and Kafka over SSL on 9093 (Strimzi's cluster CA mounted), an exec readiness and liveness probe running `python bridge.py --check` (healthy only while connected to MQTT), a metrics port for Prometheus, and small resource limits (a guess to be measured).
+- **Why they work this way:** The bridge's MQTT client id names its persistent session, so a second copy running during a rolling update would take the session over and the two would keep taking it from each other: hence one replica and Recreate. The liveness probe restarts a bridge that is up but not connected, which loses nothing because what it had not acknowledged is still queued at Mosquitto. This chart replaced `k8s/kafka-connect-mqtt` (a Strimzi `KafkaConnect`, its four `KafkaConnector` resources, a custom Camel image and a JMX exporter config), removed on 2026-10-05.
+- **Connects to:** `k8s/mosquitto`, `k8s/kafka-strimzi`, `k8s/observability`.
+- **Purpose:** Lossless MQTT-to-Kafka ingest on k3s.
 
-#### `k8s/kafka-connect-mqtt/templates/kafka-connect.yaml`
-- **What it does:** A Strimzi `KafkaConnect` resource: Kafka 4.3.1, one replica, bootstrapping from the cluster's Service, using the custom image `localhost/local/kafka-connect-mqtt:1.1`, with its own internal storage topics and a JMX exporter.
-- **Why it works this way:** The annotation `strimzi.io/use-connector-resources: "true"` lets `KafkaConnector` resources manage connectors declaratively. Replication factors of 1 match the single broker.
-- **Resources and `jvmOptions.-Xmx`/`-Xms`, added 2026-09-28** (previously no `resources`/`jvmOptions` at all -- real memory usage had settled at ~580Mi organically, fully unbounded). Sized like the broker's own `kafka-nodepool.yaml` (explicit `-Xmx`, not left to the JVM's default 25%-of-container-limit auto-sizing): `-Xmx1g` inside a 1536Mi limit. **A real crash loop was caught live adding this**, but not from the memory settings -- the `cpu: "1"` limit chosen alongside it was the actual problem: Connect's plugin/classloader scanning at startup is CPU-bound, and Java's own container-aware CPU detection logged `os.vcpus = 1` once that limit existed (down from this node's full 12 cores, available when unbounded), serializing work that used to run in parallel. One plugin's classloader alone then took 34 seconds to register, blowing past the liveness probe's timeout and getting killed mid-startup, repeatedly. Fixed by raising the limit to `cpu: "4"` -- a steady-state memory concern turned into a startup-time CPU regression by pairing it with too tight a CPU cap, the same lesson re-learned minutes later on `k8s/kafka-strimzi`'s `userOperator`. **That fix sat uncommitted-to-the-cluster for two days despite being committed to this file**, found only by a 2026-10-01 chaos test (killing the Kafka broker to test alerting): `helm history` showed no release after the one that introduced the bug, and the live `KafkaConnect` CR still had `cpu: "1"`, crash-looping for 10 hours by the time anyone (human or alert) prompted a look. Editing a chart's `values.yaml` is not the same as it being live -- a `helm upgrade` has to actually run, and nothing in this project enforces that the two stay in sync beyond a human remembering.
-- **Connects to:** the Kafka cluster; `metrics-configmap.yaml`; the connector resources.
-- **Purpose:** The Connect worker that bridges MQTT to Kafka.
-
-#### `k8s/kafka-connect-mqtt/templates/metrics-configmap.yaml`
-- **What it does:** `jmx_exporter` rules for Connect: task status, connector task count and record errors.
-- **Purpose:** Connect health for Prometheus.
-
-#### `k8s/kafka-connect-mqtt/docker/Dockerfile`
-- **What it does:** Builds the Connect image on `quay.io/strimzi/kafka`, downloads the Camel MQTT source connector into the plugin path, removes a conflicting `connect-json` jar, and drops to UID 1001.
-- **Why it works this way:** Strimzi's operator expects a Strimzi-derived image. The Camel connector is Apache-licensed, which fits the project's cost and licensing rule.
-- **Connects to:** referenced by `kafka-connect.yaml`.
-- **Purpose:** The Kubernetes-path Connect image (the Compose variant is in `docker-compose/kafka-connect`).
-
-#### `k8s/kafka-connect-mqtt/connectors/plate-waste-source-connector.yaml`, `pos-transaction-source-connector.yaml`, `service-timing-source-connector.yaml`, `staff-shift-source-connector.yaml`
-- **What they do:** The four live `KafkaConnector` resources (JSON written with a `.yaml` extension, which is valid YAML). Each subscribes to one `sensors/*` MQTT topic and writes to the matching Kafka topic, with byte-array converters and a **unique `clientId`**.
-- **Why they work this way:** All connectors run in one Connect worker, and without distinct client ids each reconnect kicked the others off the broker, leaving three of four connectors `FAILED`. These files are applied with `kubectl apply -f` (they are not Helm templates) and are the version actually running.
-- **Purpose:** The authoritative MQTT-to-Kafka bridge definitions on k3s.
-
-#### `k8s/mosquitto/Chart.yaml`, `values.yaml`, `templates/configmap.yaml`, `templates/deployment.yaml`, `templates/service.yaml`
-- **What they do:** A working Mosquitto deployment: a ConfigMap with the same four-line config as Compose, a one-replica Deployment on `eclipse-mosquitto:2` mounting it, and a Service on 1883.
-- **Why it works this way:** It is small and stateless (`persistence false`). `values.yaml` now holds the real image and replica count and the Deployment template reads them (the render was checked to be identical to the deployed manifest); it used to hold unused `TBD` placeholders. **Gained a resource block, 2026-09-28** (previously none at all -- real usage is a few MiB, a lightweight C daemon, but unbounded is still a gap on a shared node): unlike the JVM sidecars touched the same session (`kafka-connect-mqtt`, `kafka-strimzi`'s `userOperator`), a plain C daemon has no classloading/JIT startup burst, so the same small `cpu: 100m`/`memory: 64Mi` limit that would have crash-looped a JVM applied here with zero issues -- confirmed live, no restart, edge simulators reconnected cleanly within seconds of the one expected blip from the pod rolling.
-- **Purpose:** The MQTT broker the simulators publish to.
+#### `k8s/mosquitto/Chart.yaml`, `values.yaml`, `templates/configmap.yaml`, `templates/deployment.yaml`, `templates/service.yaml`, `templates/pvc.yaml`
+- **What they do:** A Mosquitto deployment: a ConfigMap with the broker config (anonymous, **persistent**, 500,000 queued messages per client), a one-replica **Recreate** Deployment on `eclipse-mosquitto:2` with a 512 Mi volume claim mounted at `/mosquitto/data` (and `fsGroup: 1883` so the broker can write it), and a Service on 1883 and 8883.
+- **Why it works this way:** Persistence is what makes the bridge's guarantee survive a restart of Mosquitto itself (DEF-152): the bridge's persistent session and the messages queued for it are on the volume. Recreate because the volume is ReadWriteOnce and two brokers must never share a session store. Until 2026-10-05 it was stateless (`persistence false`); the first restart on this cluster after the change is what creates the volume's contents. `values.yaml` holds the real image, replica count, volume size and queue limit, and the templates read them.
+- **Purpose:** The MQTT broker the simulators publish to, and the bridge's durable queue.
 
 ### 9.2 Storage
 
@@ -1072,7 +1025,7 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 #### `k8s/observability/templates/prometheus.yaml`
 - **What it does:** A ServiceAccount and RBAC, a ConfigMap holding the scrape configuration, a second ConfigMap (`prometheus-rules`) holding alert rules, a Deployment and a Service. Scrape jobs: Prometheus itself, kube-state-metrics, the Kafka exporter (`kafka-consumer-lag`), the Strimzi JMX exporters (`kafka-jmx`) and cAdvisor through the kubelet. `prometheus.yml` also has a `rule_files`/`alerting.alertmanagers` block pointing at the `alertmanager` Service.
 - **Why it works this way:**
-  - The `kafka-jmx` job discovers pods by label and is restricted to `strimzi.io/component-type` of `kafka` or `kafka-connect`. Without that, it also scraped the Kafka exporter pod (same cluster label, same port 9404) and produced duplicate lag series.
+  - The `kafka-jmx` job discovers pods by label and is restricted to `strimzi.io/component-type` of `kafka` (it also matched `kafka-connect` until that worker was retired on 2026-10-05). Without that, it also scraped the Kafka exporter pod (same cluster label, same port 9404) and produced duplicate lag series.
   - The Kafka exporter is scraped by a fixed Service name because Strimzi creates no Service for it and one was added by hand.
   - Storage is an `emptyDir`, so metric history is lost whenever the pod restarts.
   - **Alerting, added 2026-09-28:** `prometheus-rules`/`alerts.yml` (four groups, five rules -- `TargetDown`, `PodCrashLooping`, `DeploymentReplicasMismatch`, `KafkaConsumerLagHigh`, `ContainerMemoryNearLimit`) evaluates against metrics already scraped above; every PromQL expression and the `container!=""`/`> 0` guard clauses on the memory-ratio rule were confirmed live against this cluster's own Prometheus (2026-09-28, not assumed from docs), and the whole file passes `promtool check rules`. The `KafkaConsumerLagHigh` threshold (500, 10m) is a starting point, not derived from an SLA -- this project doesn't have one; every consumer group sits at 0 lag under normal load.
@@ -1103,7 +1056,7 @@ The Phase 5 to 7 service charts share one pattern, so it is described once here:
 | To do this | Touch these files |
 |---|---|
 | Add or change a field on an event | the `schemas/*.schema.json`; a **new** numbered SQL migration (never edit an applied one) copied to `k8s/timescaledb/files/` and wired into `schema-configmap.yaml`, `schema-init-job.yaml` and the Compose `initdb.d` mounts; the insert function in `storage/consumer/consumer.py`; then rebuild every image that bakes schemas in (edge-simulators, storage-consumer, game-bridge). The three Phase 5 schemas also need their copy in `k8s/phase5-schemas/files/`. |
-| Add a new kind of sensor | `edge-simulators/common/world.py` (ids), a new `simulators/<name>.py`, the table in `entrypoint.py`, a schema, a table and consumer insert, a connector JSON in `docker-compose/kafka-connect/connectors/`, a connector in `k8s/kafka-connect-mqtt/connectors/`, and an entry in `k8s/edge-simulators/values.yaml` and `docker-compose.yml`. |
+| Add a new kind of sensor | `edge-simulators/common/world.py` (ids), a new `simulators/<name>.py`, the table in `entrypoint.py`, a schema, a table and consumer insert, a route in `BRIDGE_ROUTES` (default in `services/mqtt-kafka-bridge/bridge.py`; a static test checks it against the simulators' topics), and an entry in `k8s/edge-simulators/values.yaml` and `docker-compose.yml`. |
 | Ask a new causal question | a `TREATMENT_MAP` entry in `causal_engine.py` (query, confounders, unit). The metric must already be one the anomaly detector emits (`TRACKED_METRICS` in `detector.py`), and the underlying rows must exist. |
 | Change how findings are phrased | the prompt and retry settings in `narrator.py`; the rules in `narration_guard.py` plus a regression case in `test_narration_guard.py`; the model through `OLLAMA_MODEL`. |
 | Add a dashboard panel | an endpoint in `services/dashboard-api/main.py`, then a component in `services/dashboard-web/src/App.jsx`. |
@@ -1157,14 +1110,14 @@ Nothing on k3s breaks meanwhile: the game bridge is not deployed there, so no in
 
 - `storage/schema/*.sql` and `k8s/timescaledb/files/*.sql` (all four are identical as of writing, verified byte for byte; the `001` copy had previously drifted and caused real bugs).
 - `schemas/{AnomalyEvent,CausalFinding,TicketTimingSummary}.schema.json` and `k8s/phase5-schemas/files/` (identical as of writing).
-- `docker-compose/kafka-connect/connectors/*.json` and `k8s/kafka-connect-mqtt/connectors/*.yaml` describe the same four connectors in two syntaxes.
+- `docker-compose/mosquitto/mosquitto.conf` and the ConfigMap in `k8s/mosquitto/templates/configmap.yaml` carry the same persistence settings in two places (the topic routes live once, in `bridge.py`).
 - `docker-compose/mosquitto/mosquitto.conf` and the ConfigMap in `k8s/mosquitto/templates/configmap.yaml`.
 
 Nothing checks any of these automatically.
 
 ### 11.4 Small inconsistencies
 
-- **Kafka Connect topic names** differ between paths (`connect-cluster-configs` on k8s, `connect-configs` on Compose). Each path is self-consistent.
+- **Retired:** the Kafka Connect topic names that used to differ between paths (`connect-cluster-configs` on k8s, `connect-configs` on Compose) are gone with the worker; the leftover `connect-*` topics on a cluster that ran it are unused.
 - **The status document's Sections 1 to 3** still describe the design as of Phase 4; they carry a dated update note and the current state is in Section 4 and the problem log.
 
 ### 11.5 Limitations that are design trade-offs, not bugs

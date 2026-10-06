@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name }}
+  namespace: kafka
+  labels:
+    app: {{ .Chart.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ .Chart.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Chart.Name }}
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            {{- range $name, $value := .Values.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+          ports:
+            - name: metrics
+              containerPort: 8000
+          # Healthy only while connected to MQTT. A bridge that is up but not connected moves nothing
+          # and looks fine; the liveness probe restarts it (a restart loses nothing: whatever it had not
+          # acknowledged is still queued at Mosquitto).
+          readinessProbe:
+            exec:
+              command: ["python", "bridge.py", "--check"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["python", "bridge.py", "--check"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          volumeMounts:
+            - name: kafka-tls
+              mountPath: /etc/kafka-tls
+              readOnly: true
+            - name: mosquitto-tls
+              mountPath: /etc/mosquitto-tls
+              readOnly: true
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: kafka-tls
+          secret:
+            secretName: {{ .Values.kafkaTlsSecretName }}
+        - name: mosquitto-tls
+          secret:
+            secretName: {{ .Values.mosquittoTlsSecretName }}

@@ -65,7 +65,7 @@ Installed in a virtual environment at `~/.cache/rp-test-venv` (the exact install
 | Kafka | `docker.io/apache/kafka:4.3.1` (Compose); Kafka 4.3.1 under Strimzi 1.2.0 (k3s) |
 | TimescaleDB | `docker.io/timescale/timescaledb-ha:pg16-ts2.16-all` (about 5.7 GB) |
 | Mosquitto | `docker.io/library/eclipse-mosquitto:2` |
-| Kafka Connect | custom image on `apache/kafka:4.3.1` with the Camel MQTT source connector 4.18.0 |
+| MQTT-Kafka bridge | `services/mqtt-kafka-bridge`: Python 3.11, paho-mqtt 2.1.0, kafka-python 3.0.11, prometheus-client 0.26.0 (replaced Kafka Connect with the Camel MQTT source connector 4.18.0 on 2026-10-05) |
 | Ollama | `docker.io/ollama/ollama:latest` (about 5.2 GB; **unpinned by design**), model `qwen2.5:0.5b-instruct` on Compose, `qwen2.5:3b-instruct` on k3s |
 | Application images | `python:3.11-slim`, non-root user 1001; `node:22-slim` and `nginx:1.27-alpine` for the dashboard |
 | MinIO | `cgr.dev/chainguard/minio`, pinned by digest (k3s only) |

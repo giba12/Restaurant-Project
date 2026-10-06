@@ -52,7 +52,7 @@ dashboard:k8s/dashboard
 digital-twin:k8s/digital-twin
 edge-simulators:k8s/edge-simulators
 game-bridge:game/k8s/bridge
-kafka-connect-mqtt:k8s/kafka-connect-mqtt
+mqtt-kafka-bridge:k8s/mqtt-kafka-bridge
 kafka-strimzi:k8s/kafka-strimzi
 llm-narrator:k8s/llm-narrator
 minio:k8s/minio

@@ -19,6 +19,9 @@ services:
     restart: unless-stopped
     volumes:
       - ./docker-compose/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      # The bridge's persistent session and the messages queued for it live here, so
+      # they survive a restart of Mosquitto itself (DEF-152).
+      - mosquitto-data:/mosquitto/data
 
   kafka:
     image: docker.io/apache/kafka:4.3.1
@@ -56,37 +59,34 @@ services:
       retries: 30
       start_period: 30s
 
-  kafka-connect:
+  # Carries every sensor event from MQTT into Kafka without losing one (DEF-152).
+  # Replaces the Kafka Connect MQTT connectors, which subscribed with clean
+  # sessions and so lost whatever was published while they were down. This keeps a
+  # persistent MQTT session and acknowledges a message only after Kafka has
+  # confirmed it, so Mosquitto holds everything not yet safely in Kafka. It is the
+  # first thing the simulators wait for: the session has to exist before the first
+  # event is published, or that event has no subscriber.
+  mqtt-kafka-bridge:
     restart: unless-stopped
     build:
-      context: ./docker-compose/kafka-connect
+      context: ./services
+      dockerfile: mqtt-kafka-bridge/Dockerfile
     depends_on:
+      mosquitto:
+        condition: service_started
       kafka:
         condition: service_healthy
-
-  kafka-connect-init:
-    image: docker.io/curlimages/curl:8.11.1
-    depends_on:
-      - kafka-connect
-    volumes:
-      - ./docker-compose/kafka-connect/register-connectors.sh:/register-connectors.sh:ro
-      - ./docker-compose/kafka-connect/connectors:/connectors:ro
-    entrypoint: ["/bin/sh", "/register-connectors.sh"]
-    restart: "no"
-
-  # Restarts a connector whose task failed, or that is stuck unassigned after a
-  # broker restart. Kafka Connect does not, and without this one transient
-  # start-up failure left the whole pipeline ingesting nothing (DEF-137, DEF-142).
-  kafka-connect-supervisor:
-    image: docker.io/library/python:3.11-slim
-    restart: unless-stopped
-    depends_on:
-      - kafka-connect
     environment:
-      CONNECT_URL: http://kafka-connect:8083
-    volumes:
-      - ./docker-compose/kafka-connect/supervisor.py:/supervisor.py:ro
-    command: ["python", "-u", "/supervisor.py"]
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    healthcheck:
+      # Healthy once it is connected to MQTT (and so subscribed).
+      test: ["CMD", "python", "bridge.py", "--check"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 5s
 
   # -------------------------------------------------------------------
   # Storage
@@ -129,15 +129,14 @@ services:
     depends_on:
       mosquitto:
         condition: service_started
+      # The bridge's persistent session must exist before the first event is published.
+      mqtt-kafka-bridge:
+        condition: service_healthy
     environment: &edge-sim-env
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
       SCENARIO_CONTROL_ENABLED: "true"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      # Hold events while this sensor's Kafka Connect connector is not running, and send them
-      # when it is (DEF-148). Without it everything published during a Connect outage, and
-      # during the first seconds of every start, was lost.
-      INGEST_GATE_URL: http://kafka-connect:8083
       SENSOR_TYPE: plate-waste
       MQTT_TOPIC: sensors/plate-waste
       SOURCE_ID: sim-plate-cam-01
@@ -348,6 +347,7 @@ services:
     restart: "no"
 
 volumes:
+  mosquitto-data:
   kafka-data:
   timescaledb-data:
   ollama-data:

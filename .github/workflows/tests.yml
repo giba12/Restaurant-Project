@@ -70,11 +70,11 @@ jobs:
           - name: edge-ai
             dir: restaurant-platform-phase1/restaurant-platform/edge-simulators
             install: pip install numpy jsonschema pytest scikit-learn==1.5.1
-            run: python -m pytest test_edge_ai.py test_world_coupling.py test_store_and_forward.py training/test_training.py -v
-          - name: connector-supervisor
-            dir: restaurant-platform-phase1/restaurant-platform/docker-compose/kafka-connect
-            install: pip install pytest
-            run: python -m pytest test_supervisor.py -v
+            run: python -m pytest test_edge_ai.py test_world_coupling.py training/test_training.py -v
+          - name: mqtt-kafka-bridge
+            dir: restaurant-platform-phase1/restaurant-platform/services/mqtt-kafka-bridge
+            install: pip install paho-mqtt==2.1.0 kafka-python==3.0.11 prometheus-client==0.26.0 pytest
+            run: python -m pytest test_bridge.py -v
           - name: schema-compatibility
             dir: restaurant-platform-phase1/restaurant-platform/schemas
             install: pip install jsonschema pandas pytest numpy prometheus-client==0.26.0
@@ -172,7 +172,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # Only the services the smoke test actually exercises -- not
-      # mosquitto/Kafka Connect (the game publishes straight to Kafka, no
+      # mosquitto/the MQTT-Kafka bridge (the game publishes straight to Kafka, no
       # MQTT involved), not the simulators, not anomaly-detector/causal-
       # engine/finding-reviewer/llm-narrator/ollama (the test never reads
       # narrated findings, and pulling a model would make this job far

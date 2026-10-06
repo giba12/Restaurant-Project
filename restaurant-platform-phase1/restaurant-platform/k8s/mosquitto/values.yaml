@@ -13,3 +13,11 @@ resources:
   limits:
     cpu: 100m
     memory: 64Mi
+
+# Persistence for the MQTT-Kafka bridge's session and queue (DEF-152). The queue only holds what
+# Kafka has not yet confirmed, so it is small in normal running; this is the room for an outage.
+# 500000 queued messages at the simulators' real rates is days of bridge outage.
+persistence:
+  size: 512Mi
+  storageClass: ""   # the cluster default (k3s: local-path)
+maxQueuedMessages: 500000

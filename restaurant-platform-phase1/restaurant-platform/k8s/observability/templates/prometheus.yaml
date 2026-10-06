@@ -65,10 +65,11 @@ data:
         static_configs:
           - targets: ["restaurant-platform-kafka-kafka-exporter:9404"]
 
-      # Strimzi Kafka/Connect JMX exporters -- see k8s/kafka-strimzi and
-      # k8s/kafka-connect-mqtt's metricsConfig. Strimzi exposes these on
-      # port 9404 on each broker/connect pod; discover via the pod API
-      # and keep only pods that belong to this project's Kafka cluster.
+      # Strimzi Kafka JMX exporter -- see k8s/kafka-strimzi's metricsConfig.
+      # Strimzi exposes it on port 9404 on each broker pod; discover via
+      # the pod API and keep only pods that belong to this project's Kafka
+      # cluster. (It also scraped the Kafka Connect worker until 2026-10-05,
+      # when the MQTT-Kafka bridge replaced Connect: DEF-152.)
       - job_name: kafka-jmx
         kubernetes_sd_configs:
           - role: pod
@@ -76,7 +77,7 @@ data:
               names: ["kafka"]
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_label_strimzi_io_cluster]
-            regex: (restaurant-platform-kafka|connect-cluster)
+            regex: restaurant-platform-kafka
             action: keep
           # component-type, not just cluster: the cluster label alone
           # also matches the kafka-exporter and entity-operator pods
@@ -87,7 +88,7 @@ data:
           # component is scraped by the dedicated kafka-consumer-lag
           # job above instead.
           - source_labels: [__meta_kubernetes_pod_label_strimzi_io_component_type]
-            regex: (kafka|kafka-connect)
+            regex: kafka
             action: keep
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: pod
@@ -111,7 +112,7 @@ data:
               names: ["kafka"]
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_label_app]
-            regex: (anomaly-detector|causal-engine|finding-reviewer)
+            regex: (anomaly-detector|causal-engine|finding-reviewer|mqtt-kafka-bridge)
             action: keep
           - source_labels: [__meta_kubernetes_pod_label_app]
             target_label: service
@@ -219,6 +220,35 @@ data:
               severity: warning
             annotations:
               summary: "consumer group {{ `{{ $labels.consumergroup }}` }} lag on {{ `{{ $labels.topic }}` }} is {{ `{{ $value }}` }}"
+
+      - name: bridge
+        rules:
+          # The MQTT-Kafka bridge (services/mqtt-kafka-bridge) holds the platform's one ingest guarantee: a
+          # message is acknowledged to Mosquitto only after Kafka has it. These three are its ways of not
+          # doing that. Nothing is lost while any of them fires (Mosquitto keeps what is unacknowledged),
+          # but nothing reaches Kafka either, so they matter at once.
+          - alert: BridgeNotConnectedToMqtt
+            expr: bridge_mqtt_connected == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "the MQTT-Kafka bridge has been disconnected from Mosquitto for 2m: sensor events are queueing at the broker"
+
+          - alert: BridgeKafkaErrors
+            expr: increase(bridge_kafka_errors_total[15m]) > 0
+            labels:
+              severity: warning
+            annotations:
+              summary: "Kafka refused {{ `{{ $value }}` }} message(s) from the bridge in 15m; it restarted itself, and Mosquitto redelivers them"
+
+          - alert: BridgeWaitingOnKafka
+            expr: bridge_oldest_unconfirmed_seconds > 60
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "the oldest message the bridge has handed to Kafka has been unconfirmed for {{ `{{ $value }}` }}s"
 
       - name: resources
         rules:

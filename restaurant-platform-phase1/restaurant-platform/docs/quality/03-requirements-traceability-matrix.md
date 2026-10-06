@@ -166,7 +166,7 @@ Read the summary with care: "verified (automated)" means a test in this reposito
 |---|---|---|
 | FR-ING-02 | The simulators' timing distribution is asserted in documents, not tested (the to-go effect, FR-ING-03, is now tested through the edge node) | A statistical test on a batch of generated inter-arrival times |
 | FR-ING-05 | The fatal-on-violation branch is not exercised | A unit test that forces an invalid event |
-| NFR-REL-06 | Proven on Compose and GitHub's Docker Engine; on k3s the bridge is deployed and healthy but the no-loss guarantee has not been exercised there | Repeat the ledger test against the cluster (restart the bridge pod, Kafka and Mosquitto) |
+| NFR-REL-06 | Proven on Compose, GitHub's Docker Engine and the live k3s cluster (six disturbances, 569 events, 0 missing, run by hand with `k8s/audit/k3s_scenarios.py`, not in CI) | Run the cluster scenarios on a schedule or after each realign; a node or volume loss is untested |
 | NFR-SEC-04, NFR-SEC-06, FR-OBS-02, NFR-OPS-01, NFR-OPS-04, CON-05 | Verified live on the author's k3s cluster, which CI cannot reach | A disposable cluster in CI (for example k3d) and moving the audit there |
 | FR-GAM-05 | GDScript test, run in CI on 2026-09-30, not re-run on 2026-10-03 | Include it in the nightly workflow |
 | NFR-POR-01, NFR-POR-03, CON-04 | Run on GitHub's Docker Engine and Compose v2 on a clean machine (2026-10-04), but never on a recruiter's own machine, under the user's own Compose plugin, or in a Codespace; the two fixes from that run were re-run there (e2e only); a full nightly run on 2026-10-05 passed every layer, resilience 9 of 9 included | The next nightly run; a Codespaces trial; a trial on a second machine |

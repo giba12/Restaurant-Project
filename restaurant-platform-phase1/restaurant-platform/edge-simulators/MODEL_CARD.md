@@ -74,6 +74,16 @@ So: individually, the guard misses almost all of a slow fault (under 1% of readi
 - Drift is injected by a static `EDGE_LENS_FOULING` setting; it is not yet a scenario the scenario-injection controller can start and stop.
 - The per-reading threshold and the drift threshold are calibrated on the same simulated process they are tested on.
 
+## Scope decision: on-node inference stays on the plate-waste node only (2026-10-06)
+
+The owner decided not to add models to the POS, ticket-timer or staffing sensors. The case was weighed both ways first.
+
+**For adding them.** (1) A fleet of one node does not exercise fleet management (versioning, canary, the fleet view of FR-EDG-06). (2) The ticket timer could flag a stalled or at-risk ticket locally, which works through a network outage and addresses a known weakness (stalled tickets once blinded the anomaly detector, DEF-056; the aggregator drops in-flight tickets by design). (3) POS void and discount scoring is a recognised edge use and keeps detail local. (4) Latency, offline operation and privacy are generic edge benefits. (5) Breadth.
+
+**Against.** (1) **There is no raw signal to infer from.** Plate waste fuses four noisy continuous channels into a quantity; a POS transaction, a ticket stage change and a clock-in are already the information, so a model there would only re-score numbers the author's own generator produced. (2) **It would repeat the circularity already recorded for the one model** (RSK-031: judged only against the simulator that made its data), three times over, with no new evidence. (3) **It would muddy the product's purpose.** The platform's value is auditable root-cause analysis; an edge model that predicts delay from staffing would contaminate the very staffing-to-delay estimate the causal engine makes, and the plate-waste node already needed an out-of-distribution and drift filter (FR-EDG-05) for that reason. (4) **The cloud does it better and cheaper**: the anomaly detector sees every ticket across stations with simple robust control limits, while a per-station model sees only its own. (5) **No pressure to move compute to the edge**: about 0.7 events a second in total, so no bandwidth or latency problem to relieve. (6) **Cost**: the single node took a trainer, hash and budgets, two guards, a fleet view and dozens of tests, and re-verifying it surfaced eleven log entries (DEF-133 to DEF-143); every additional model multiplies that, and there is still no model update path (RSK-033). (7) A reviewer may read models added for their own sake as AI for show, which would cost the project's main strength, that its claims are measured and its limits stated.
+
+**Decision and what would change it.** Edge inference only where there is a raw signal and a physical or bandwidth reason. It would be worth revisiting with real hardware or real data, a genuinely raw source (a camera counting covers or queue length, say), an offline-first kitchen display, or a privacy requirement that keeps data on the device. If a cheap version of the stalled-ticket idea is wanted, it should be a deterministic threshold in the ticket-timer node, labelled as edge logic and not as AI.
+
 ## Retraining
 
 ```bash

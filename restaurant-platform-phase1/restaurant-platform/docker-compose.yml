@@ -10,6 +10,14 @@
 # stretch goal). No reason to add startup weight for zero demonstrated
 # use in the portable path.
 
+# The environment shared by the four edge simulators (below). A top-level extension field, so the plate-waste
+# node can add its own settings without the other three inheriting them.
+x-edge-sim-env: &edge-sim-env
+  MQTT_HOST: mosquitto
+  MQTT_PORT: "1883"
+  SCENARIO_CONTROL_ENABLED: "true"
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+
 services:
   # -------------------------------------------------------------------
   # Message backbone
@@ -132,15 +140,16 @@ services:
       # The bridge's persistent session must exist before the first event is published.
       mqtt-kafka-bridge:
         condition: service_healthy
-    environment: &edge-sim-env
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      SCENARIO_CONTROL_ENABLED: "true"
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    environment:
+      <<: *edge-sim-env
       SENSOR_TYPE: plate-waste
       MQTT_TOPIC: sensors/plate-waste
       SOURCE_ID: sim-plate-cam-01
       EVENT_RATE_PER_MIN: "8"
+      # Only this node runs a model, so only this node takes model commands from the cloud (edge_ai/updater.py).
+      # Signed with this key; a node with no key takes no commands at all. The default is for local use only:
+      # set EDGE_CONTROL_KEY in the environment (or .env) for anything shared.
+      EDGE_CONTROL_KEY: ${EDGE_CONTROL_KEY:-dev-only-edge-control-key}
 
   edge-sim-pos-transaction:
     <<: *edge-sim

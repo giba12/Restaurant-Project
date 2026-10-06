@@ -45,6 +45,13 @@ spec:
               value: {{ $.Values.kafka.securityProtocol | quote }}
             - name: MQTT_TLS_ENABLED
               value: {{ $.Values.mqtt.tlsEnabled | quote }}
+            {{- if .controlKeySecret }}
+            - name: EDGE_CONTROL_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .controlKeySecret | quote }}
+                  key: key
+            {{- end }}
           volumeMounts:
             - name: kafka-tls
               mountPath: /etc/kafka-tls

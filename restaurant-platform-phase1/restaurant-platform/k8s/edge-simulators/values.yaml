@@ -61,6 +61,11 @@ simulators:
     mqttTopic: sensors/plate-waste
     eventRatePerMin: 8
     sourceId: sim-plate-cam-01
+    # Name of a Secret holding the node's control key under the key `key` (edge-simulators/edge_ai/updater.py).
+    # Empty means the node takes NO model commands, which is the safe default on a broker that allows
+    # anonymous clients. To enable: kubectl create secret generic edge-control -n kafka
+    # --from-literal=key="$(openssl rand -hex 32)", then set this to edge-control and upgrade the chart.
+    controlKeySecret: ""
   - sensorType: pos-transaction
     mqttTopic: sensors/pos-transaction
     eventRatePerMin: 12

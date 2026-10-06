@@ -14,7 +14,7 @@ import re
 import pytest
 
 import stack_fixture as stack
-from helpers import compose, logs, restart_count, sql_int, wait_for
+from helpers import compose, logs, restart_count, sql, sql_int, wait_for
 
 EVENT_TABLES = ["plate_waste_events", "pos_transaction_events", "service_timing_events", "staff_shift_events"]
 PYTHON_SERVICES = ["storage-consumer", "ticket-timing-aggregator", "anomaly-detector", "causal-engine",
@@ -227,3 +227,79 @@ def test_the_anomaly_detector_is_actually_consuming_summaries():
         return False
 
     wait_for(processed, 300, description="the detector to process at least one summary")
+
+
+# ------------------------------------------------------------------ the model update path, on the live node
+#
+# Last in this file on purpose: it moves the running node to an older model and back, which leaves events from
+# both models in the database, and the edge tests above assert that every stored estimate names the committed model.
+
+def edge_control(*args):
+    """The operator's tool, run inside the node's own container: its broker address and control key are already there."""
+    return compose("exec", "-T", "edge-sim-plate-waste", "python", "-m", "control.edge_control", *args, timeout=60).stdout
+
+
+def edge_status():
+    return json.loads(compose("exec", "-T", "edge-sim-plate-waste", "python", "-c", (
+        "import json;from control import edge_control as c;l=c.Link();r=l.collect('edge/status/plate-waste/sim-plate-cam-01',3);l.close();"
+        "print(next(iter(r.values())).decode() if r else '{}')"), timeout=60).stdout.strip() or "{}")
+
+
+def inline_publish(source: str):
+    """Run a few lines of Python inside the node's container that publish a hand-made (bad) command to its own topic."""
+    prelude = ("import copy,json,os,time;from control import edge_control as c;from edge_ai import updater;"
+               "key=os.environ['EDGE_CONTROL_KEY'];store=c.ModelStore();good=store.load('1.1.0')[0];link=c.Link();"
+               "topic='control/edge/plate-waste/sim-plate-cam-01';")
+    compose("exec", "-T", "edge-sim-plate-waste", "python", "-c", prelude + source + "link.close()", timeout=60)
+
+
+def events_from(version, since):
+    return sql_int("SELECT count(*) FROM plate_waste_events WHERE raw_payload ? 'edge_inference' "
+                   f"AND raw_payload #>> '{{edge_inference,model_version}}' = '{version}' AND ingested_at > '{since}'")
+
+
+def db_now():
+    return sql("SELECT now()")
+
+
+def test_a_live_node_is_rolled_back_refuses_two_bad_models_and_is_rolled_forward_without_a_restart():
+    started = db_now()
+    wait_for(lambda: events_from("1.1.0", started) >= 3, 180, description="events from the model baked into the image")
+
+    # 1. A rollback to the older model (a version from before the shift monitor): applied at once, no shadow.
+    before_rollback = db_now()
+    edge_control("rollback", "--to", "1.0.0", "--nodes", "sim-plate-cam-01")
+    wait_for(lambda: events_from("1.0.0", before_rollback) >= 3, 180, description="events from the rolled-back model")
+    assert edge_status()["state"] == "applied"
+    assert sql_int("SELECT count(*) FROM plate_waste_events WHERE raw_payload #>> '{edge_inference,model_version}' = '1.0.0' "
+                   f"AND ingested_at > '{before_rollback}' AND raw_payload -> 'edge_inference' -> 'shift_score' <> 'null'::jsonb") == 0, \
+        "a model from before the shift monitor reported a shift score"
+
+    # 2. A model whose artifact was changed after its hash was declared is refused, and estimates carry on unchanged.
+    before_corrupt = db_now()
+    inline_publish("cmd=c.command_from_artifact(good,key,shadow_readings=5);cmd['model']['artifact']=copy.deepcopy(good);"
+                   "cmd['model']['artifact']['layers'][0]['bias'][0]+=0.5;cmd['issued_at']=time.time();"
+                   "link.publish(topic,json.dumps(updater.sign(cmd,key)),True);")
+    wait_for(lambda: "hash mismatch" in edge_status().get("reason", ""), 60, description="the corrupted model to be refused")
+    assert edge_status()["state"] == "rejected" and edge_status()["active"]["model_version"] == "1.0.0"
+
+    # 3. A model with a valid hash and answers that match the cloud's, but 30 g heavier on every estimate, passes every
+    #    check except the one that compares it with the model in service on live readings, and is refused there.
+    heavy = ("bad=copy.deepcopy(good);bad['layers'][-1]['bias'][0]+=0.3;bad['model_version']='9.9.9';"
+             "bad['weights_sha256']=c.edge_model.behaviour_hash(bad);"
+             "cmd=c.command_from_artifact(bad,key,shadow_readings=10,now=time.time());"
+             "link.publish(topic,json.dumps(cmd),True);")
+    inline_publish(heavy)
+    wait_for(lambda: edge_status().get("state") == "rejected" and "shadow disagreement" in edge_status().get("reason", ""), 120,
+             description="the heavy model to be refused after its shadow comparison")
+    assert events_from("9.9.9", before_corrupt) == 0, "an estimate from the refused model was published"
+    assert events_from("1.1.0", before_corrupt) == 0, "the node left the older model without being told to"
+
+    # 4. Rolled forward again, with the shadow comparison, to the model baked into the image: no restart involved.
+    restarts = restart_count("edge-sim-plate-waste")
+    before_forward = db_now()
+    edge_control("rollout", "--version", "1.1.0", "--nodes", "sim-plate-cam-01", "--shadow-readings", "10")
+    wait_for(lambda: events_from("1.1.0", before_forward) >= 3, 180, description="events from the rolled-forward model")
+    assert edge_status()["state"] == "applied"
+    assert restart_count("edge-sim-plate-waste") == restarts, "the node restarted to change model"
+    edge_control("clear", "--nodes", "sim-plate-cam-01")

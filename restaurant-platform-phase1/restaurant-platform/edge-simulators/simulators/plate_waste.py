@@ -12,6 +12,7 @@ engine is meant to find is unchanged: a to-go box cuts what is left to a
 quarter), but never gives it to the node. `last_true_grams` keeps it on the
 simulator side so tests can score the node's estimates; it is never published.
 """
+import json
 import os
 import random
 
@@ -20,6 +21,7 @@ from common.ids import new_event_id, now_iso
 from common.runtime import Simulator
 from edge_ai import sensor
 from edge_ai.model import DEFAULT_MODEL_PATH, EdgeModel
+from edge_ai.updater import ModelUpdater
 
 PORTION_VARIANTS = ["standard", "standard", "standard", "half", "large", "unknown"]
 
@@ -32,17 +34,34 @@ SCHEMA_VERSION = "1.2.0"
 LENS_FOULING = float(os.environ.get("EDGE_LENS_FOULING", "0"))
 
 
+DEFAULT_NODE_ID = "sim-plate-cam-01"
+CONTROL_TOPIC = "control/edge/plate-waste/{}"
+STATUS_TOPIC = "edge/status/plate-waste/{}"
+
+
 class PlateWasteNode:
-    def __init__(self, model: EdgeModel, lens_fouling: float = 0.0, rng=random):
+    def __init__(self, model: EdgeModel, lens_fouling: float = 0.0, rng=random,
+                 node_id: str = DEFAULT_NODE_ID, control_key: str | None = None):
         self.model = model
+        self.node_id = node_id
         self.lens_fouling = lens_fouling
         self.rng = rng
+        # Owns which model is in service: a command from the cloud can change it between two readings
+        # (edge_ai/updater.py). The monitors are tied to a model's own calibration, so a swap restarts them.
+        self.updater = ModelUpdater(model, node_id=node_id, key=control_key)
+        self._adopt(model)
+        self.last_true_grams = None  # simulator-side ground truth; never published
+
+    def _adopt(self, model: EdgeModel) -> None:
+        self.model = model
         self.drift_monitor = model.new_drift_monitor()
         self.shift_monitor = model.new_shift_monitor()
-        self.last_true_grams = None  # simulator-side ground truth; never published
 
     def next_event(self) -> dict:
         rng = self.rng
+        in_service = self.updater.active
+        if in_service is not self.model:
+            self._adopt(in_service)
         n_items = rng.randint(1, 3)
         plate_item_ids = rng.sample(world.MENU_ITEM_IDS, k=n_items)
 
@@ -54,7 +73,9 @@ class PlateWasteNode:
         reading = sensor.read_sensors(true_grams, rng, self.lens_fouling)
 
         # From here on the node uses only its sensor channels.
-        inference = self.model.infer(sensor.feature_vector(reading))
+        features = sensor.feature_vector(reading)
+        inference = self.model.infer(features)
+        self.updater.observe(features, inference.grams)
         drift_score, spread_alarm = self.drift_monitor.update(inference.ood_score)
         shift_score, shift_alarm = self.shift_monitor.update(inference.deviation)
 
@@ -62,7 +83,7 @@ class PlateWasteNode:
             "event_id": new_event_id(),
             "event_type": "PlateWasteEvent",
             "schema_version": SCHEMA_VERSION,
-            "source_id": "sim-plate-cam-01",
+            "source_id": self.node_id,
             "source_kind": "simulated",
             "timestamp": now_iso(),
             "restaurant_id": world.RESTAURANT_ID,
@@ -90,6 +111,13 @@ class PlateWasteNode:
         }
 
 
+def attach_control(sim, node: PlateWasteNode) -> None:
+    """Wire the node to the control topics: commands in (its own topic and the fleet-wide one), status out (retained)."""
+    for target in (node.node_id, "all"):
+        sim.subscribe(CONTROL_TOPIC.format(target), node.updater.handle)
+    node.updater.on_status = lambda status: sim.publish_state(STATUS_TOPIC.format(node.node_id), json.dumps(status))
+
+
 _default_node = None
 
 
@@ -106,12 +134,16 @@ def main():
     # and continues past errors raised while generating an event, so a model
     # that fails its integrity check inside generate_event would be retried
     # forever instead of stopping the pod where someone can see it.
-    node = PlateWasteNode(EdgeModel.from_file(os.environ.get("EDGE_MODEL_PATH", DEFAULT_MODEL_PATH)), LENS_FOULING)
+    node = PlateWasteNode(
+        EdgeModel.from_file(os.environ.get("EDGE_MODEL_PATH", DEFAULT_MODEL_PATH)), LENS_FOULING,
+        node_id=os.environ.get("SOURCE_ID", DEFAULT_NODE_ID), control_key=os.environ.get("EDGE_CONTROL_KEY"),
+    )
     sim = Simulator(
         sensor_type="plate-waste",
         schema_filename="PlateWasteEvent.schema.json",
         mqtt_topic="sensors/plate-waste",
     )
+    attach_control(sim, node)
     sim.log.info(
         "plate-waste node: model %s v%s sha256=%s, drift window %d, shift window %d, lens_fouling=%.2f",
         node.model.model_id, node.model.model_version, node.model.sha256[:12], node.model.drift_window,

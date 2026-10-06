@@ -70,7 +70,7 @@ jobs:
           - name: edge-ai
             dir: restaurant-platform-phase1/restaurant-platform/edge-simulators
             install: pip install numpy jsonschema pytest scikit-learn==1.5.1
-            run: python -m pytest test_edge_ai.py test_world_coupling.py training/test_training.py -v
+            run: python -m pytest test_edge_ai.py test_edge_update.py test_real_drift_harness.py test_world_coupling.py training/test_training.py -v
           - name: mqtt-kafka-bridge
             dir: restaurant-platform-phase1/restaurant-platform/services/mqtt-kafka-bridge
             install: pip install paho-mqtt==2.1.0 kafka-python==3.0.11 prometheus-client==0.26.0 pytest
@@ -114,6 +114,26 @@ jobs:
       - name: Static checks (compose, Dockerfiles, Helm charts, schemas, lint, secrets, version boundary)
         working-directory: restaurant-platform-phase1/restaurant-platform
         run: python -m pytest tests/static -v -p no:cacheprovider
+
+  # The React dashboard's component tests (Vitest, React Testing Library, jsdom): the real <App/> against canned
+  # dashboard-api answers, nothing live. Also lints and builds it, so a broken build fails here and not in the image.
+  dashboard-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: restaurant-platform-phase1/restaurant-platform/services/dashboard-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: restaurant-platform-phase1/restaurant-platform/services/dashboard-web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
 
   integration:
     runs-on: ubuntu-latest

@@ -116,8 +116,10 @@ class EdgeModel:
         self.ood_threshold = float(ood["threshold"])
         self.drift_window = int(ood["drift_window"])
         self.drift_threshold = float(ood["drift_threshold"])
-        self.shift_window = int(ood["shift_window"])
-        self.shift_threshold = float(ood["shift_threshold"])
+        # Absent in artifacts from before model 1.1.0. They must still load: a rollback to 1.0.0 is a normal
+        # operation (edge_ai/updater.py), and such a model runs with the spread monitor alone, as it always did.
+        self.shift_window = int(ood["shift_window"]) if "shift_window" in ood else None
+        self.shift_threshold = float(ood["shift_threshold"]) if "shift_threshold" in ood else None
 
     @classmethod
     def from_file(cls, path=DEFAULT_MODEL_PATH) -> "EdgeModel":
@@ -152,7 +154,9 @@ class EdgeModel:
     def new_drift_monitor(self) -> "DriftMonitor":
         return DriftMonitor(self.drift_window, self.drift_threshold)
 
-    def new_shift_monitor(self) -> "ShiftMonitor":
+    def new_shift_monitor(self):
+        if self.shift_window is None:
+            return NoShiftMonitor()
         return ShiftMonitor(self.shift_window, self.shift_threshold, self._ood_precision)
 
     # ---- the one-reading path the node actually runs
@@ -233,3 +237,10 @@ class ShiftMonitor:
         mean = np.mean(self._deviations, axis=0)
         score = round(float(self.window * (mean @ self._precision @ mean)), 3)
         return score, score > self.threshold
+
+
+class NoShiftMonitor:
+    """What a model from before the shift monitor reports: no score and no alarm, ever."""
+
+    def update(self, deviation):
+        return None, False

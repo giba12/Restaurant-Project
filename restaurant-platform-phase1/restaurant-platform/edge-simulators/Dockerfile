@@ -25,6 +25,11 @@ COPY schemas/ /app/schemas/
 
 COPY edge-simulators/common/ /app/common/
 COPY edge-simulators/edge_ai/ /app/edge_ai/
+# The cloud side of the model update path and the versioned model store, so an operator can run
+# `python -m control.edge_control ...` inside a node's own container (docker compose exec / kubectl exec),
+# where the broker address, its TLS certificate and the control key are already in place.
+COPY edge-simulators/control/ /app/control/
+COPY edge-simulators/model_store/ /app/model_store/
 COPY edge-simulators/simulators/ /app/simulators/
 COPY edge-simulators/entrypoint.py /app/entrypoint.py
 

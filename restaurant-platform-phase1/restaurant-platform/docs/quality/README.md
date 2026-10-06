@@ -19,7 +19,7 @@ The three registers (traceability matrix, defect log, risk register) were first 
 
 | # | Document | What it answers | Read it if you are |
 |---|---|---|---|
-| 01 | [Requirements specification](01-requirements-specification.md) | What must the system do? (97 identified requirements) | Anyone judging whether the project meets its goals |
+| 01 | [Requirements specification](01-requirements-specification.md) | What must the system do? (99 identified requirements) | Anyone judging whether the project meets its goals |
 | 02 | [Master test plan](02-test-plan.md) | How is it verified, and with what limits? | A tester or reviewer |
 | 03 | [Requirements traceability matrix](03-requirements-traceability-matrix.md) | Which test proves each requirement, and is it met? | An auditor |
 | 04 | [SQA plan](04-sqa-plan.md) | What quality practices were in force, and how good are they honestly? | A manager |

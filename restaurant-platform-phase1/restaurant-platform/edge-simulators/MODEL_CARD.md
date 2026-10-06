@@ -35,9 +35,21 @@ Quantizing to int8 costs 0.7% of accuracy; using all four channels instead of th
 
 | Budget | Ceiling | Measured |
 |---|---|---|
-| Artifact size | 16 KB | 3.4 KB |
+| Artifact size | 16 KB | 4.9 KB (1.1.0; 3.4 KB for 1.0.0) |
 | Inference latency, p99 | 5 ms | about 0.13 ms mean per reading on the development laptop |
 | Memory to load | 1 MB of allocations | well under that |
+
+These describe the model, measured on the development laptop. The whole node, measured in its own image under the limits the Kubernetes chart gives it (100m CPU, 96Mi; `footprint_probe.py`, run by `tests/load/test_edge_footprint.py`):
+
+| What | Measured |
+|---|---|
+| Resident memory of the node process | 41-43 MiB, of which 31 MiB is importing Python's libraries (numpy, jsonschema, paho); the model is 5 KB. Memory did not grow over 500 events |
+| Memory the container actually needs | the cgroup peaked at about 26 MiB; the probe ran in 28 MiB and was killed (out of memory) at 24 MiB, so the chart's 96 MiB is about 3.5 times the floor |
+| Inference at the node's real pace (one reading every few seconds) | p50 0.38 ms, p99 0.88 ms against the 5 ms budget |
+| The same call back to back | p99 about 90 ms, maximum about 96 ms: a CPU quota pauses the container for the rest of each 100 ms period (0.16 s of work took 1.5 s, 15 throttled periods). The node never does this on its own |
+| Taking a model update | the checks take about 0.4 s of CPU time (so one 90 ms pause in the event loop), the shadow comparison adds under 1 MiB, and the update was promoted inside the limits |
+
+**What this does and does not show.** The same code under a CPU and memory ceiling: what the node needs, and how it behaves when the CPU is rationed. It is not a different processor, clock speed or instruction set, so it says nothing about a microcontroller or a slow ARM core. The finding that matters is that the budgets above describe the *model*: what a device needs is the *runtime*, about 40 MiB, which is why a node on something far smaller than a Raspberry Pi would need the inference path rewritten without Python and numpy, not just the model shrunk.
 
 ## Knowing when not to be trusted
 
@@ -71,7 +83,47 @@ So: individually, the guard misses almost all of a slow fault. The spread monito
 
 **A mistake worth keeping in the record.** The risk register (RSK-032) had recorded that "a more sensitive statistic, for example CUSUM, would narrow" the gap. It was tried first, calibrated to the same 0.1% clean alarm time, on the squared distance and on three tamer transforms of it (the distance, the squared distance capped at 9 and at 16, its logarithm): none beat the rolling mean (best 57.5% at fouling 0.2, against 59.5%). The limit was the quantity being monitored, not the way it was accumulated: at fouling 0.2 the squared distance moves only from 4.0 to 4.6 against a spread of 3.3. Monitoring the mean deviation, which the fault actually moves, was what worked. (The CUSUM experiment is not in the repository; its numbers are from a scratch script and are recorded here as a measurement, not a test.)
 
+**What neither monitor sees: a signal that goes quiet.** Both alarm on readings moving away from the training data (the spread monitor on how far, the shift monitor on which way on average). A sensor that goes dead and reports something close to its normal value, or a gain that falls so the readings shrink toward their own average, moves neither: found while testing the real-data harness, where a synthetic gain loss on zero-centred readings was invisible to both. A flatline detector (readings that stop varying) is the usual remedy and is not built.
+
 **What the shift monitor does not do.** It is not a fault diagnosis. A change in the real mix of plates (a menu change that makes plates heavier) or a change in the room's light would raise it just as a fouling lens does: it says *the inputs have shifted*, and what has shifted needs a person. At fouling 0.1, where the error is already 1.6 times the clean figure, about a quarter of onsets still take more than 150 readings (about 19 minutes) to alarm (7 of 30 in the test's trials), and about 5% (the one early false alarm included) never alarm within 300. And, as everywhere in this card, the fault is the author's own simulation of a fouled lens, a pure bias with a known direction, which is the case this statistic is best at.
+
+## Checked against drift the project did not generate
+
+Everything above is measured on the project's own simulation of a fouled lens (RSK-031). `validation/real_drift_check.py` runs the shipped `DriftMonitor` and `ShiftMonitor` classes, with the same calibration recipe, on the UCI *Gas Sensor Array Drift Dataset at Different Concentrations* (13,910 measurements from 16 chemical sensors over 36 months, in ten batches, with real drift; CC BY 4.0; the script downloads it and checks its SHA-256). It needs the network, so it is not in CI; its harness is tested offline on synthetic data (`test_real_drift_harness.py`).
+
+**What this is not.** A validation of the plate-waste model: the data has none of its channels and no leftover-food weights, and no public dataset that I know of does. It checks the drift-detection *method* on real drift. The sensors are chemical; the features are the 16 steady-state responses projected onto 4 principal components (the node has 4 channels), chosen once and not tuned; readings are drawn in random order (within a batch they are grouped by gas, which a window would mistake for drift) and each batch is resampled to the first batch's gas mix (gases 1 to 5). The ground truth for "this drift matters" is the error of a classifier trained on batch 1. Eight random splits of batch 1, fixed seeds.
+
+**Clean data.** Held-out batch-1 readings, calibrated for 0.1%: the spread monitor was in alarm **4.5% of the time** (sd 7.8 points across splits) and the shift monitor **0.66%** (sd 1.1). The calibration did not transfer. The calibration set here is about 110 readings of a mixture of gases, a harsher setting than the node's 300,000 simulated readings, but real clean data of that size does not exist in this set, so the 0.1% figure is a property of the simulation and should not be quoted for a real sensor.
+
+**Large real drift.** From batch 2 on, a classifier trained on batch 1 is wrong about half the time (4.6% on clean data). The shift monitor was in alarm **100% of the time in every later batch** (98.7% in batch 10). The spread monitor was uneven: 100% in batches 3 to 5, 80% in batch 2, 39 to 51% in batches 6, 7 and 10, and **0% in batches 8 and 9**, where the classifier was 49 and 55% wrong.
+
+| Batch | Spread monitor | Shift monitor | Classifier error |
+|---|---|---|---|
+| 2 | 80.3% | 100% | 52.8% |
+| 3 | 100% | 100% | 49.9% |
+| 4 | 100% | 100% | 50.5% |
+| 5 | 100% | 100% | 49.3% |
+| 6 | 39.2% | 100% | 51.4% |
+| 7 | 41.8% | 100% | 50.5% |
+| 8 | 0.0% | 100% | 49.3% |
+| 9 | 0.0% | 100% | 55.1% |
+| 10 | 51.1% | 98.7% | 42.3% |
+
+**Mild drift: not supported.** To see how mild a drift is caught, a fraction of batch-2 readings was mixed into clean batch-1 data:
+
+| Drifted readings | Spread monitor | Shift monitor | Classifier error |
+|---|---|---|---|
+| 0% | 3.6% | 0.5% | 4.8% |
+| 5% | 5.1% | 1.1% | 7.2% |
+| 10% | 7.2% | 1.9% | 9.6% |
+| 20% | 14.1% | 7.8% | 14.4% |
+| 30% | 22.5% | 21.2% | 19.4% |
+| 50% | 42.5% | 65.4% | 28.6% |
+| 100% | 78.8% | 100% | 52.6% |
+
+With a classifier error 2 to 3 times the clean figure (10 to 20% mixed in), neither monitor is clearly above its own false-alarm level, and the spread monitor is as sensitive as the shift monitor or more so (and has the far higher false-alarm baseline). The claim that the shift monitor catches mild drift in 99.5% of onsets is for a pure bias in the readings' average, the shape of the simulated lens fault; a mixture of two populations is a different fault, and it does not carry over. This metric (time in alarm over a steady stream) is also not the onset-detection metric of the simulated table.
+
+**What the real data supports.** Both monitors detect large drift; the shift monitor was the reliable one (it never missed, where the spread monitor missed two batches entirely). It does not support the 0.1% false-alarm calibration, or mild-drift detection, outside the simulation.
 
 ## How the platform uses the node's self-assessment
 
@@ -83,7 +135,9 @@ So: individually, the guard misses almost all of a slow fault. The spread monito
 
 - State (the spread and shift windows) is in memory and starts empty after a restart: no score and no alarm for the first 30 readings (shift) and 50 (spread).
 - The sensor model is the author's design; the relationships the model learns are ones the author put there.
-- No model-update path exists yet: changing the model means rebuilding the simulator image. A versioned model store with canary and rollback is the natural next slice.
+- The update path (below) gates a new model on agreement with the model in service, not on correctness: there is no ground truth in the field. It cannot tell a model that is wrong the same way, or one that differs by less than the tolerance, from a good one; judge a model on a held-out labelled set before it goes into the store.
+- After a restart a node runs the model baked into its image until the retained command arrives (seconds after it reconnects).
+- One shared control key for the fleet, no rotation, and a broker that allows anonymous clients (RSK-036). Control is off on the cluster until a Secret is created. The update path has been run on the Compose stack and in unit tests, not on k3s.
 - Drift is injected by a static `EDGE_LENS_FOULING` setting; it is not yet a scenario the scenario-injection controller can start and stop.
 - The per-reading, spread and shift thresholds are calibrated on the same simulated process they are tested on, and so is the claim that the shift monitor catches mild fouling (RSK-031).
 
@@ -97,6 +151,31 @@ The owner decided not to add models to the POS, ticket-timer or staffing sensors
 
 **Decision and what would change it.** Edge inference only where there is a raw signal and a physical or bandwidth reason. It would be worth revisiting with real hardware or real data, a genuinely raw source (a camera counting covers or queue length, say), an offline-first kitchen display, or a privacy requirement that keeps data on the device. If a cheap version of the stalled-ticket idea is wanted, it should be a deterministic threshold in the ticket-timer node, labelled as edge logic and not as AI.
 
+## Updating a model, and rolling it back
+
+A node takes a new model from the cloud over MQTT, checks it, compares it with the model in service on live readings, and only then swaps (`edge_ai/updater.py`; cloud side `control/edge_control.py`). The versions are in `model_store/plate-waste-edge-regressor/` (1.0.0, the first model, byte for byte as first shipped; 1.1.0, the one baked into the image). Run the tool inside a node's own container, where the broker address and the key are already set:
+
+```bash
+docker compose exec edge-sim-plate-waste python -m control.edge_control list
+docker compose exec edge-sim-plate-waste python -m control.edge_control rollout  --version 1.1.0 --nodes sim-plate-cam-01   # a canary
+docker compose exec edge-sim-plate-waste python -m control.edge_control status
+docker compose exec edge-sim-plate-waste python -m control.edge_control rollout  --version 1.1.0 --nodes all                 # then the fleet
+docker compose exec edge-sim-plate-waste python -m control.edge_control rollback --to 1.0.0 --nodes all                      # back, no comparison
+docker compose exec edge-sim-plate-waste python -m control.edge_control clear    --nodes all                                 # drop the desired state
+```
+
+**What the node checks, in order.** The command is signed with the node's key (a node with no key takes no commands at all); it is newer than the last command acted on; the artifact is this model (same id and input channels), within the 16 KB budget, passes the loader's hash check, and carries the hash the command declares; the node computes the same grams as the cloud on sixteen probe readings (a known-answer test, which catches an artifact read differently on the node, not a bad model); and inference meets the latency budget. Then **a shadow comparison**: for 50 live readings (the default) the candidate runs beside the model in service on the same inputs, the published estimates still come from the model in service, and the candidate is promoted only if its estimates agree (mean absolute difference under 10 g by default) and it raised no errors. A rejected model leaves the node's estimates unchanged and the node reports why.
+
+**Why the shadow comparison and not the out-of-distribution rate.** The rate depends on the inputs, not the weights: a fouled lens would look like a bad model, and a bad model fed normal inputs would look fine.
+
+**Rollback** is a forced rollout of an older stored version: it skips only the shadow comparison (a rollback must not be judged against the faulty model it replaces); the signature, hash, probe and budget checks still apply. A version from before the shift monitor runs with the spread monitor alone.
+
+**Desired state.** A rollout is a retained message, so a node that restarts is told again. A rollback replaces what a restarting node will be told; `clear` removes it, and a node that restarts after that runs the model baked into its image. Commands go to one node, or to `all` (so a canary can go first); where both are retained the newest wins.
+
+**What the cloud does with a drift alarm: nothing, except advise.** `curl ... /api/edge/plate-waste | python -m control.edge_control advise` says what to look at. A drift alarm cannot tell a dirty lens from a changed population, and a model retrained on a fouled lens's data would learn the fault, so no rollout is triggered by it: a person decides.
+
+**Turning it on.** Compose sets a local default key for the plate-waste node (set `EDGE_CONTROL_KEY` for anything shared). On Kubernetes control is off: `kubectl create secret generic edge-control -n kafka --from-literal=key="$(openssl rand -hex 32)"`, set `controlKeySecret: edge-control` on the plate-waste entry in `k8s/edge-simulators/values.yaml`, rebuild and import the simulator image, and upgrade the chart.
+
 ## Retraining
 
 ```bash
@@ -109,5 +188,7 @@ To add the shift monitor to an artifact **without retraining** (this is how 1.1.
 ```bash
 python edge-simulators/training/train_plate_waste_model.py --add-shift-monitor
 ```
+
+A model is published by adding its artifact to `model_store/<model_id>/<version>.json` (the file name is the version; the store refuses a file whose hash or name does not match) and, if it should be the default for new nodes, copying it over `edge_ai/plate_waste_edge_model.json`: a test fails if the newest stored version and the image's default differ.
 
 Every random choice is seeded. Different scikit-learn versions can differ in the last bits, so the committed artifact and its hash are the source of truth and the tests check that retraining reproduces the quality, not the bytes. A retrained model gets a new hash; bump `MODEL_VERSION` in the trainer when you publish one.

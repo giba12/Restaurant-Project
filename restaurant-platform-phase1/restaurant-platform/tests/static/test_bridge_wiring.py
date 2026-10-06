@@ -134,6 +134,9 @@ def test_the_realign_script_installs_the_bridge_before_it_retires_connect_and_im
     imported = script.index("for img in storage-consumer")
     install = script.index("helm upgrade --install mqtt-kafka-bridge")
     retire = script.index("helm uninstall kafka-connect-mqtt")
+    # The connectors were applied by hand, not by Helm, so uninstalling the release leaves them behind (seen on the
+    # live cluster, 2026-10-05): the script must delete them too, after the bridge is carrying messages.
+    assert retire < script.index("kubectl delete kafkaconnector -n \"$NS\" --all")
     # Mosquitto's volume must exist before the bridge subscribes, the image must be in k3s before the pod is
     # created, and Connect may only go once the bridge is carrying messages (the other order leaves a gap).
     assert build < imported and persist < install and imported < install < retire

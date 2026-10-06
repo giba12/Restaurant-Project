@@ -141,6 +141,9 @@ echo "== 6b. the MQTT-Kafka bridge replaces Kafka Connect"
 run helm upgrade --install mqtt-kafka-bridge k8s/mqtt-kafka-bridge -n "$NS" --wait --timeout 5m
 if [ "$DRY" = 1 ] || helm status kafka-connect-mqtt -n "$NS" >/dev/null 2>&1; then
   run helm uninstall kafka-connect-mqtt -n "$NS"
+  # The four KafkaConnector resources were applied with `kubectl apply`, not by Helm, so uninstalling the
+  # release leaves them behind as orphans pointing at a cluster that no longer exists.
+  run kubectl delete kafkaconnector -n "$NS" --all --ignore-not-found
 else
   echo "kafka-connect-mqtt is already gone"
 fi
@@ -166,6 +169,6 @@ SQL
     | grep -E "^bridge_(messages_forwarded_total|mqtt_connected|unconfirmed_messages|kafka_errors_total)" || true
   echo "--- Mosquitto's persistent volume (Bound), and nothing left of Kafka Connect (expect no output below):"
   kubectl get pvc mosquitto-data -n "$NS" || true
-  kubectl get kafkaconnect,kafkaconnector,pods -n "$NS" 2>/dev/null | grep -i connect || true
+  kubectl get kafkaconnect,kafkaconnector,pods -n "$NS" 2>/dev/null | grep -i connect || echo "  (nothing)"
 fi
 echo "done"

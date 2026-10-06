@@ -4,10 +4,18 @@ metadata:
   name: mosquitto
 spec:
   replicas: {{ .Values.replicaCount }}
-  # Recreate, not a rolling update: the data volume is ReadWriteOnce, and two brokers
-  # must never share one session store.
+  # The old broker must stop before the new one starts: the data volume is ReadWriteOnce, and two
+  # brokers must never share one session store. That is `maxSurge: 0` (no extra pod) with
+  # `maxUnavailable: 1`. It is deliberately NOT `type: Recreate`: switching an existing Deployment's
+  # strategy type made `helm upgrade` fail on the live cluster ("spec.strategy.rollingUpdate:
+  # Forbidden: may not be specified when strategy type is Recreate": the API server's defaulted
+  # rollingUpdate block stayed behind), although a server-side dry run had passed. Changing two
+  # values inside the existing RollingUpdate strategy has no such problem.
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app: mosquitto

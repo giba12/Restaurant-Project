@@ -72,7 +72,13 @@ def test_mosquitto_on_kubernetes_persists_the_bridges_session_on_a_volume_and_ne
     assert int(re.search(r"^\s*max_queued_messages (\d+)\s*$", conf, flags=re.M).group(1)) >= 100_000
 
     deployment = one(docs, "Deployment", "mosquitto")
-    assert deployment["spec"]["strategy"]["type"] == "Recreate", "a ReadWriteOnce volume cannot be shared by two brokers"
+    # The old broker must stop before the new one starts (a ReadWriteOnce volume, one session store). Done with
+    # maxSurge 0 / maxUnavailable 1 inside the existing RollingUpdate strategy, NOT by switching the type to
+    # Recreate: on the live cluster that switch failed `helm upgrade` ("spec.strategy.rollingUpdate: Forbidden: may
+    # not be specified when strategy type is Recreate") although a server-side dry run had passed.
+    strategy = deployment["spec"]["strategy"]
+    assert strategy["type"] == "RollingUpdate", "changing an existing Deployment's strategy type broke the live upgrade"
+    assert str(strategy["rollingUpdate"]["maxSurge"]) == "0" and str(strategy["rollingUpdate"]["maxUnavailable"]) == "1"
     pod = deployment["spec"]["template"]["spec"]
     assert any(m["mountPath"] == "/mosquitto/data" for m in pod["containers"][0]["volumeMounts"])
     assert {"name": "data", "persistentVolumeClaim": {"claimName": "mosquitto-data"}} in pod["volumes"]
@@ -109,6 +115,16 @@ def test_kafka_connect_is_gone_from_both_deployments():
     assert not (ROOT / "docker-compose" / "kafka-connect").exists()
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
     assert not [name for name in compose if "connect" in name], "a Kafka Connect service is still in docker-compose.yml"
+
+
+def test_the_realign_script_tells_you_how_to_recover_when_a_step_fails_part_way():
+    # It scales every database client to zero first. When `helm upgrade mosquitto` failed, the script stopped and
+    # the clients stayed at zero with no message, because bash does not run an ERR trap inside a function (the
+    # `run` helper) unless `set -E` is on. The hint existed and never printed.
+    script = (ROOT / "k8s" / "realign" / "realign-live-cluster.sh").read_text()
+    assert re.search(r"^set -[A-Za-z]*E[A-Za-z]* *\n?", script, flags=re.M) or "set -Eeuo pipefail" in script
+    assert "trap restore_hint ERR" in script
+    assert "kubectl scale deploy/$d -n $NS --replicas=1" in script
 
 
 def test_the_realign_script_installs_the_bridge_before_it_retires_connect_and_imports_its_image_first():

@@ -9,6 +9,9 @@ parts that can be tested without containers are tested here.
 """
 import os
 import sys
+import types
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import stack_fixture  # noqa: E402
@@ -37,3 +40,51 @@ def test_comments_blank_lines_and_unparseable_lines_are_ignored():
 
 def test_an_empty_or_missing_metrics_body_gives_no_series_rather_than_an_error():
     assert stack_fixture.parse_metrics("") == {}
+
+
+# ------------------------------------------------------------------ crash(): delivering a real SIGKILL
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "resilience"))
+import test_failure_recovery as recovery  # noqa: E402
+
+
+def fake_run_recording(calls, returncode=0, stderr=""):
+    def fake_run(cmd, check=True, **kwargs):
+        calls.append(cmd)
+        return types.SimpleNamespace(returncode=returncode, stdout="", stderr=stderr)
+    return fake_run
+
+
+def test_a_process_the_host_user_owns_is_killed_directly_with_no_docker_or_sudo(monkeypatch):
+    calls, signals = [], []
+    monkeypatch.setattr(recovery, "inspect", lambda service: {"State": {"Pid": 4242}})
+    monkeypatch.setattr(recovery.os, "kill", lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr(recovery, "run", fake_run_recording(calls))
+    recovery.crash("storage-consumer")
+    assert signals == [(4242, recovery.signal.SIGKILL)] and calls == []
+
+
+def test_a_root_owned_process_is_killed_with_sudo_never_with_docker_kill(monkeypatch):
+    # On GitHub's rootful Docker the runner (UID 1001) can signal the UID-1001 services directly but not Mosquitto.
+    # `docker kill` there is a manual stop that the restart policy ignores: Mosquitto stayed down for the rest of
+    # the run and four later tests failed (DEF-154).
+    calls = []
+    monkeypatch.setattr(recovery, "inspect", lambda service: {"State": {"Pid": 4242}})
+
+    def denied(pid, sig):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(recovery.os, "kill", denied)
+    monkeypatch.setattr(recovery, "run", fake_run_recording(calls))
+    recovery.crash("mosquitto")
+    assert calls == [["sudo", "-n", "kill", "-9", "4242"]]
+
+
+def test_when_no_real_sigkill_can_be_delivered_the_test_fails_loudly_instead_of_using_docker_kill(monkeypatch):
+    calls = []
+    monkeypatch.setattr(recovery, "inspect", lambda service: {"State": {"Pid": 4242}})
+    monkeypatch.setattr(recovery.os, "kill", lambda pid, sig: (_ for _ in ()).throw(PermissionError()))
+    monkeypatch.setattr(recovery, "run", fake_run_recording(calls, returncode=1, stderr="sudo: a password is required"))
+    with pytest.raises(RuntimeError, match="docker kill. is not an acceptable substitute"):
+        recovery.crash("mosquitto")
+    assert not any("docker" in part for call in calls for part in call), "it fell back to docker kill"

@@ -50,7 +50,7 @@
 #
 # Needs: sudo, kubectl, helm, and a container CLI. Under rootless Podman on
 # WSL2:  export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock
-set -euo pipefail
+set -Eeuo pipefail
 
 NS=kafka
 # Every deployment that connects to TimescaleDB. All run one replica.

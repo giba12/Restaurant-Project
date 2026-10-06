@@ -28,7 +28,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 
 ## Summary
 
-**153 entries** (137 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-05.
+**154 entries** (138 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-05.
 
 ### By severity
 
@@ -37,20 +37,20 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | S1 Critical | 8 |
 | S2 High | 31 |
 | S3 Medium | 48 |
-| S4 Low | 50 |
+| S4 Low | 51 |
 | Info | 16 |
-| **Total** | **153** |
+| **Total** | **154** |
 
 ### By status
 
 | Status | Count |
 |---|---|
-| Fixed+tested | 44 |
+| Fixed+tested | 45 |
 | Fixed | 79 |
 | Mitigated | 8 |
 | Clarified | 17 |
 | Open | 5 |
-| **Total** | **153** |
+| **Total** | **154** |
 
 ### By part (project period)
 
@@ -68,8 +68,8 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Part J: Found while building and verifying the edge-inference feature (2026-10-03) | 13 |
 | Part K: Found by the first GitHub runs (2026-10-04) | 2 |
 | Part L: Closing the event-loss gap between sensors and Kafka (2026-10-05) | 4 |
-| Part M: Replacing the ingest path (2026-10-05) | 2 |
-| **Total** | **153** |
+| Part M: Replacing the ingest path (2026-10-05) | 3 |
+| **Total** | **154** |
 
 ### By how it was found
 
@@ -81,10 +81,10 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Automated test regime (2026-10-02) | 7 |
 | Chaos test | 5 |
 | Attempting the done condition | 3 |
-| CI or first push | 6 |
+| CI or first push | 7 |
 | User report | 3 |
 | Audit script | 1 |
-| **Total** | **153** |
+| **Total** | **154** |
 
 ### By class
 
@@ -93,7 +93,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Deployment | 22 |
 | Logic | 27 |
 | Environment/tooling | 21 |
-| Test defect | 18 |
+| Test defect | 19 |
 | Observability | 9 |
 | Dependency | 7 |
 | Configuration | 6 |
@@ -108,7 +108,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Repository hygiene | 2 |
 | Operator error | 2 |
 | Code quality | 1 |
-| **Total** | **153** |
+| **Total** | **154** |
 
 ### Open items (5)
 
@@ -356,12 +356,13 @@ DEF-148 to DEF-150 were found by reading the container log the owner pasted from
 
 ## Part M. Replacing the ingest path (2026-10-05)
 
-The owner asked for a real fix after DEF-151 showed the gate could shrink the loss but not remove it. These record the replacement and what its first real run found.
+The owner asked for a real fix after DEF-151 showed the gate could shrink the loss but not remove it. These record the replacement and what its first real runs found (the first on the Compose stack, DEF-153; the first on GitHub's Docker Engine, DEF-154).
 
 | ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
 |---|---|---|---|---|---|---|---|
-| DEF-152 | Ingest | owner request after DEF-151 | **The ingest path could not be made lossless inside Kafka Connect, so it was replaced.** After DEF-148 and DEF-151 the simulators held events behind a gate that watched Connect's REST status, Kafka's reachability and their own MQTT connection. It worked (Kafka restart 1 to 3 events lost, the rest 0) but only as measured heuristics: the hold times (20, 30 and 45 s) were measured recovery times times two, Connect's status was known to lie in two ways, a persistent MQTT session deadlocked the Camel connector (DEF-150), and a few events per disturbance could still go. **The root cause is that the Camel connectors subscribe with clean sessions and acknowledge on arrival**, so Mosquitto never holds anything for them, and the connector offers no way to change that. | S2 High | Test-regime run or observation | **A bridge that owns the guarantee** (`services/mqtt-kafka-bridge`, about 250 lines of Python): a persistent MQTT session, QoS 1, manual acknowledgement, and a message acknowledged to Mosquitto only after Kafka has confirmed it (`acks=all`); anything unrecoverable ends the process and its supervisor restarts it, losing nothing because nothing unconfirmed was acknowledged. Mosquitto persists the session and queue to a volume (500,000 messages per client). The simulators wait for a healthy bridge before publishing, so the session exists before the first event. Removed: Kafka Connect (Compose and Strimzi), its four connectors, the registration script, the supervisor, the simulator-side gate and its NetworkPolicy. Delivery is at-least-once, not exactly-once: a crash between Kafka's confirmation and the acknowledgement delivers that message again, which the storage consumer's `event_id` uniqueness makes harmless. **Verified on the Compose stack: the resilience layer passed 10 of 10 with NO loss allowed in any test** (Kafka restart, Mosquitto restart, bridge stopped 45 s, bridge killed with SIGKILL, Kafka stopped 100 s so the bridge exits and restarts at least once, full stack restart); 28 bridge unit tests (ten deliberate breakages each turned one red); eight static wiring tests (five breakages each turned one red). **Then from a clean stack (`run_stack_tests.sh full`, everything rebuilt first):** e2e 66 passed (4 skipped); acceptance 4 of 4, the scenario's finding passing refutation again (effect -2,648 ms per additional staff member); load 4 of 4, with event-to-stored latency p95 **0.06 s** against 0.95 s under Kafka Connect; resilience 9 of 10 in that run, the tenth (Kafka stopped 100 s) timing out on Docker's *health state* for Kafka after Kafka and the bridge had both recovered within 30 s, then passing when run alone (Kafka healthy 45 s after its start; the wait is now 480 s); static 201 passed; security 12 passed, auditing the bridge's pins. **Hard kill of Mosquitto itself** (it saves its state every 5 s, so in principle the last milliseconds before the bridge takes a message could go): five `SIGKILL`s lost 0 of 2,632 events, and a test repeats it. **Not verified on the cluster:** the new chart, the Mosquitto volume claim, the probes and the Prometheus changes pass server-side dry runs, but `k8s/realign/realign-live-cluster.sh` (which needs `sudo` to import the image) has not been run. | Fixed+tested |
+| DEF-152 | Ingest | owner request after DEF-151 | **The ingest path could not be made lossless inside Kafka Connect, so it was replaced.** After DEF-148 and DEF-151 the simulators held events behind a gate that watched Connect's REST status, Kafka's reachability and their own MQTT connection. It worked (Kafka restart 1 to 3 events lost, the rest 0) but only as measured heuristics: the hold times (20, 30 and 45 s) were measured recovery times times two, Connect's status was known to lie in two ways, a persistent MQTT session deadlocked the Camel connector (DEF-150), and a few events per disturbance could still go. **The root cause is that the Camel connectors subscribe with clean sessions and acknowledge on arrival**, so Mosquitto never holds anything for them, and the connector offers no way to change that. | S2 High | Test-regime run or observation | **A bridge that owns the guarantee** (`services/mqtt-kafka-bridge`, about 250 lines of Python): a persistent MQTT session, QoS 1, manual acknowledgement, and a message acknowledged to Mosquitto only after Kafka has confirmed it (`acks=all`); anything unrecoverable ends the process and its supervisor restarts it, losing nothing because nothing unconfirmed was acknowledged. Mosquitto persists the session and queue to a volume (500,000 messages per client). The simulators wait for a healthy bridge before publishing, so the session exists before the first event. Removed: Kafka Connect (Compose and Strimzi), its four connectors, the registration script, the supervisor, the simulator-side gate and its NetworkPolicy. Delivery is at-least-once, not exactly-once: a crash between Kafka's confirmation and the acknowledgement delivers that message again, which the storage consumer's `event_id` uniqueness makes harmless. **Verified on the Compose stack: the resilience layer passed 10 of 10 with NO loss allowed in any test** (Kafka restart, Mosquitto restart, bridge stopped 45 s, bridge killed with SIGKILL, Kafka stopped 100 s so the bridge exits and restarts at least once, full stack restart); 28 bridge unit tests (ten deliberate breakages each turned one red); eight static wiring tests (five breakages each turned one red). **Then from a clean stack (`run_stack_tests.sh full`, everything rebuilt first):** e2e 66 passed (4 skipped); acceptance 4 of 4, the scenario's finding passing refutation again (effect -2,648 ms per additional staff member); load 4 of 4, with event-to-stored latency p95 **0.06 s** against 0.95 s under Kafka Connect; resilience 9 of 10 in that run, the tenth (Kafka stopped 100 s) timing out on Docker's *health state* for Kafka after Kafka and the bridge had both recovered within 30 s, then passing when run alone (Kafka healthy 45 s after its start; the wait is now 480 s); static 201 passed; security 12 passed, auditing the bridge's pins. **Hard kill of Mosquitto itself** (it saves its state every 5 s, so in principle the last milliseconds before the bridge takes a message could go): five `SIGKILL`s lost 0 of 2,632 events, and a test repeats it. **First GitHub run (nightly 37396768496, commit f92bd03):** e2e 66 passed, acceptance 4, load 4, statistical and security passed; resilience 6 of 11, the five failures all traced to one harness fault (DEF-154), not to the bridge; re-run after the fix pending. **Not verified on the cluster:** the new chart, the Mosquitto volume claim, the probes and the Prometheus changes pass server-side dry runs, and the first run of `k8s/realign/realign-live-cluster.sh` failed at the Mosquitto upgrade (changing the Deployment's strategy type breaks Helm's apply on the live object; the chart now changes only `maxSurge`/`maxUnavailable`), so the cluster still runs Kafka Connect. | Fixed+tested |
 | DEF-153 | Ingest | found while verifying DEF-152 | **The bridge forwarded nothing on its first real run, and no unit test could see it.** kafka-python 3.0.11 rejects a producer whose `delivery_timeout_ms` is not above `linger_ms + request_timeout_ms`; the bridge's settings broke that rule, so it connected to MQTT, then sat in its "Kafka is not ready" retry loop. Nothing was lost (Mosquitto held every message, and delivered 3,200 of them when the bridge was fixed), but nothing was forwarded either, and the unit tests fake the producer. | S3 Medium | Test-regime run or observation | The settings are corrected, and a unit test builds the real `KafkaProducer` from them (it makes no connection when the `api_version` is given); it was shown to fail with the old setting. | Fixed+tested |
+| DEF-154 | Test regime | first GitHub nightly of the bridge | **The resilience harness could not really crash a root-owned container on rootful Docker, and one failure cascaded into five.** `crash()` sends `SIGKILL` to the container's process. On GitHub's runner (UID 1001) that works for the UID-1001 services (consumer, aggregator, bridge) but is denied for Mosquitto, which runs as root, and the helper then fell back to `docker kill`, which Docker treats as a deliberate stop and does not restart (the helper's own comment said it would). Mosquitto stayed down from 01:19:08 for the rest of the run and the bridge never reconnected; the hard-kill test timed out at 120 s and the four tests after it (bridge stopped, bridge killed, Kafka stopped 100 s, full restart) timed out on "rows to keep arriving". **The product was not at fault:** in the same run e2e (66), acceptance (4), load (4), statistical and security passed, and resilience passed 6 of 11. | S4 Low | CI or first push | `crash()` now delivers the `SIGKILL` with `sudo -n kill -9` when the process belongs to another user, and **fails loudly instead of falling back to `docker kill`**; an autouse fixture brings every service back and waits for the bridge before each resilience test, so one failure can no longer poison the tests after it. Three unit tests (shown to fail with the old fallback). | Fixed+tested |
 
 
 ## How the defects were found, and what that says about the process

@@ -22,8 +22,10 @@ import time
 from datetime import datetime, timedelta, timezone
 
 
+import pytest
+
 import stack_fixture as stack
-from helpers import compose, container_id, inspect, restart_count, run, sql, sql_int, wait_for
+from helpers import compose, inspect, restart_count, run, sql, sql_int, wait_for
 
 SIMULATORS = ["edge-sim-plate-waste", "edge-sim-pos-transaction", "edge-sim-service-timing", "edge-sim-staff-shift"]
 TOPIC_TABLE = {
@@ -42,18 +44,45 @@ def crash(service):
     Kill a service's process the way the kernel's out-of-memory killer does: a
     SIGKILL delivered to it from outside, with no chance to clean up.
 
-    Not `docker kill`: Podman treats that API call as a deliberate stop and
-    will not apply the restart policy (measured: a `--restart=unless-stopped`
-    container was restarted after a host-side SIGKILL but not after
-    `docker kill`), so using it would test Podman's semantics, not the
-    platform's. Where the host cannot signal the process directly (rootful
-    Docker), `docker kill` is used instead, and Docker does restart after it.
+    Never `docker kill`: both Podman and Docker treat that API call as a deliberate
+    stop and do not apply the restart policy. Measured on Podman (a
+    `--restart=unless-stopped` container was restarted after a host-side SIGKILL
+    but not after `docker kill`) and then on GitHub's Docker Engine, where a
+    `docker kill` of Mosquitto left it down for the rest of the run (the bridge
+    never reconnected) and four later tests failed because of it (DEF-154). The
+    signal is sent to the process itself instead: directly when the host user owns
+    it (rootless Podman; on GitHub's runner the UID-1001 services), with `sudo`
+    when it belongs to root (Mosquitto on rootful Docker). If neither can
+    deliver it, fail rather than test the wrong thing.
     """
     pid = int(inspect(service)["State"]["Pid"])
     try:
         os.kill(pid, signal.SIGKILL)
-    except OSError:
-        run(["docker", "kill", container_id(service)])
+        return
+    except PermissionError:
+        pass  # the container's process belongs to another user
+    result = run(["sudo", "-n", "kill", "-9", str(pid)], check=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"cannot deliver a real SIGKILL to {service} (pid {pid}): the process is not ours and `sudo -n kill` failed "
+            f"({result.stderr.strip()}). `docker kill` is not an acceptable substitute: Docker treats it as a manual "
+            "stop and will not restart the container."
+        )
+
+
+@pytest.fixture(autouse=True)
+def the_whole_stack_is_up_before_each_test():
+    """
+    Bring every service back before each test. A test that breaks something and then fails halfway
+    (or whose recovery does not happen) must not leave the stack broken for the tests after it: on
+    GitHub one dead Mosquitto turned one real failure into five, and hid which later tests were fine.
+    `up -d` on a running service does nothing; on a stopped one it starts it.
+    """
+    from stack_fixture import STACK_SERVICES
+
+    compose("up", "-d", "--no-build", *STACK_SERVICES, timeout=600)
+    wait_for(stack.bridge_connected, 240, interval=3, description="the bridge to be connected before the test starts")
+    yield
 
 
 def total_rows():

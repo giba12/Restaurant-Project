@@ -47,7 +47,7 @@ Eight layers, each simulating one thing production does to a system. They are ca
 
 | # | Layer | Tests | What it simulates | Location |
 |---|---|---|---|---|
-| 1 | Static | 65 functions | Careless edits to config and files | `tests/static/` |
+| 1 | Static | 69 functions | Careless edits to config and files | `tests/static/` |
 | 2 | Unit | 233 functions | Careless edits to logic | beside each service; `game/bridge/`; `schemas/` |
 | 3 | Database integration | 74 | Drift between code and database | `tests/integration/` |
 | 4 | Statistical | 14 | Subtly wrong maths | `tests/statistical/` |
@@ -56,7 +56,7 @@ Eight layers, each simulating one thing production does to a system. They are ca
 | 7 | Load and stability | 4 | Bursts and long runs | `tests/load/` |
 | 8 | Security and supply chain | 1 | Ageing dependencies | `tests/security/` |
 
-Plus the Godot client's own end-to-end test (`game/client/tests/smoke_test.gd`, roughly 80 checks) and the live audit script (`k8s/audit/audit-live-cluster.sh`), which is not automated in CI. In total: **425 distinct test names** (one name is shared by two files) plus the GDScript suite.
+Plus the Godot client's own end-to-end test (`game/client/tests/smoke_test.gd`, roughly 80 checks) and the live audit script (`k8s/audit/audit-live-cluster.sh`), which is not automated in CI. In total: **429 distinct test names** (one name is shared by two files) plus the GDScript suite.
 
 ### 3.2 Test design techniques used
 

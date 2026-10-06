@@ -30,7 +30,10 @@ Three things make this an edge model and not just a function call:
     within a few minutes. The two are complementary: the spread monitor
     reacts to added noise far more strongly than the shift monitor does, the
     shift monitor to a small consistent bias the spread monitor mostly misses,
-    so the node alarms when either does. Nothing on the node
+    so the node alarms when either does. Neither sees a signal that goes quiet (a sensor stuck at a plausible value, or a
+    gain that falls so every channel shrinks toward normal), because that moves neither how far readings are nor their
+    average, so a third monitor, the FlatlineMonitor, watches how much each channel varies within the window and alarms
+    when the least-varying channel has gone far quieter than it ever is on clean data. Nothing on the node
     can tell an estimate is wrong (there is no ground truth in the field), but
     it can tell that its inputs have stopped looking like anything it was
     trained on.
@@ -120,6 +123,9 @@ class EdgeModel:
         # operation (edge_ai/updater.py), and such a model runs with the spread monitor alone, as it always did.
         self.shift_window = int(ood["shift_window"]) if "shift_window" in ood else None
         self.shift_threshold = float(ood["shift_threshold"]) if "shift_threshold" in ood else None
+        # Likewise absent before model 1.2.0 (the flatline monitor): such a model runs without it.
+        self.flatline_window = int(ood["flatline_window"]) if "flatline_window" in ood else None
+        self.flatline_threshold = float(ood["flatline_threshold"]) if "flatline_threshold" in ood else None
 
     @classmethod
     def from_file(cls, path=DEFAULT_MODEL_PATH) -> "EdgeModel":
@@ -153,6 +159,11 @@ class EdgeModel:
 
     def new_drift_monitor(self) -> "DriftMonitor":
         return DriftMonitor(self.drift_window, self.drift_threshold)
+
+    def new_flatline_monitor(self):
+        if self.flatline_window is None:
+            return NoShiftMonitor()
+        return FlatlineMonitor(self.flatline_window, self.flatline_threshold)
 
     def new_shift_monitor(self):
         if self.shift_window is None:
@@ -240,7 +251,33 @@ class ShiftMonitor:
 
 
 class NoShiftMonitor:
-    """What a model from before the shift monitor reports: no score and no alarm, ever."""
+    """What a model from before the shift (or flatline) monitor reports: no score and no alarm, ever."""
 
     def update(self, deviation):
         return None, False
+
+
+class FlatlineMonitor:
+    """
+    The smallest per-channel standard deviation over the last `window` readings, in units of the training spread.
+
+    On clean data every channel varies about as much as it did in training, so the smallest of four sits somewhat
+    under 1 (around 0.9 for a 30-reading window) and rarely drops far. A channel that has stopped varying (a sensor
+    stuck at a plausible value), or a gain that has fallen so all channels shrink toward normal, drags it toward 0.
+    That is the fault the other two monitors cannot see: a reading stuck at its normal value is no further from the
+    training data and does not move the average. The alarm is a score *below* a threshold calibrated on the clean
+    side (the 0.1% lower tail). Until a full window has been seen there is no score and no alarm.
+    """
+
+    def __init__(self, window: int, threshold: float):
+        self.window = window
+        self.threshold = threshold
+        self._deviations = collections.deque(maxlen=window)
+
+    def update(self, deviation):
+        """Feed one reading's per-channel deviation; returns (score or None, flatline_suspected)."""
+        self._deviations.append(np.asarray(deviation, dtype=np.float64))
+        if len(self._deviations) < self.window:
+            return None, False
+        score = round(float(np.min(np.std(np.asarray(self._deviations), axis=0, ddof=1))), 3)
+        return score, score < self.threshold

@@ -187,7 +187,7 @@ def main(argv=None, link_factory=Link) -> int:
     if args.action == "list":
         for version in store.versions():
             _, model = store.load(version)
-            print(f"{MODEL_ID} {version}  sha256 {model.sha256[:12]}  shift monitor: {'yes' if model.shift_window else 'no'}")
+            print(f"{MODEL_ID} {version}  sha256 {model.sha256[:12]}  shift monitor: {'yes' if model.shift_window else 'no'}, flatline monitor: {'yes' if model.flatline_window else 'no'}")
         return 0
 
     if args.action == "advise":

@@ -79,10 +79,12 @@ for v in vectors:
 out["inference_ms_paced"] = percentiles(paced)
 
 # The same call back to back: this is where a CPU quota shows, as the container is paused until the next period.
+# Run until a fixed amount of CPU time has been used, not a fixed number of calls: a fast machine would otherwise
+# finish inside one quota period and show nothing (a GitHub runner is about ten times quicker than a laptop).
 burst = []
 wall = time.perf_counter()
 cpu = time.process_time()
-for _ in range(3):
+while time.process_time() - cpu < 0.3:
     for v in vectors:
         start = time.perf_counter()
         node.model.infer(v)

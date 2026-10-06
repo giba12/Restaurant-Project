@@ -2,11 +2,11 @@
 
 | | |
 |---|---|
-| Model | `plate-waste-edge-regressor` version `1.1.0` (1.0.0 had the same weights and one drift monitor; 1.1.0 added the shift monitor, 2026-10-06) |
-| SHA-256 | `279d8a64fd02` (full value in the artifact; 1.0.0 was `155f41cd2a84`) |
+| Model | `plate-waste-edge-regressor` version `1.2.0` (the weights are those of 1.0.0; 1.1.0 added the shift monitor and 1.2.0 the flatline monitor, both 2026-10-06) |
+| SHA-256 | `ccbb7a351773` (full value in the artifact; 1.1.0 was `279d8a64fd02`, 1.0.0 `155f41cd2a84`) |
 | Runs in | `edge-simulators/simulators/plate_waste.py`, on the (simulated) node, through `edge_ai/model.py` |
 | Trained by | `edge-simulators/training/train_plate_waste_model.py` (offline; scikit-learn is not on the node) |
-| Artifact | `edge_ai/plate_waste_edge_model.json`, 4992 bytes |
+| Artifact | `edge_ai/plate_waste_edge_model.json`, 5799 bytes |
 
 All figures below are the ones recorded in the artifact's `card` and re-checked on fresh data by `test_edge_ai.py` and `training/test_training.py`.
 
@@ -35,7 +35,7 @@ Quantizing to int8 costs 0.7% of accuracy; using all four channels instead of th
 
 | Budget | Ceiling | Measured |
 |---|---|---|
-| Artifact size | 16 KB | 4.9 KB (1.1.0; 3.4 KB for 1.0.0) |
+| Artifact size | 16 KB | 5.7 KB (1.2.0; 3.4 KB for 1.0.0) |
 | Inference latency, p99 | 5 ms | about 0.13 ms mean per reading on the development laptop |
 | Memory to load | 1 MB of allocations | well under that |
 
@@ -46,20 +46,21 @@ These describe the model, measured on the development laptop. The whole node, me
 | Resident memory of the node process | 41-43 MiB, of which 31 MiB is importing Python's libraries (numpy, jsonschema, paho); the model is 5 KB. Memory did not grow over 500 events |
 | Memory the container actually needs | the cgroup peaked at about 26 MiB; the probe ran in 28 MiB and was killed (out of memory) at 24 MiB, so the chart's 96 MiB is about 3.5 times the floor |
 | Inference at the node's real pace (one reading every few seconds) | p50 0.38 ms, p99 0.88 ms against the 5 ms budget |
-| The same call back to back | p99 about 90 ms, maximum about 96 ms: a CPU quota pauses the container for the rest of each 100 ms period (0.16 s of work took 1.5 s, 15 throttled periods). The node never does this on its own |
+| The same call back to back | p99 about 88 ms: a CPU quota pauses the container for the rest of each 100 ms period (the probe runs until it has used 0.3 s of CPU, so a fast machine cannot finish inside one period: 0.34 s of work took 3.3 s, 34 throttled periods). The node never does this on its own |
 | Taking a model update | the checks take about 0.4 s of CPU time (so one 90 ms pause in the event loop), the shadow comparison adds under 1 MiB, and the update was promoted inside the limits |
 
 **What this does and does not show.** The same code under a CPU and memory ceiling: what the node needs, and how it behaves when the CPU is rationed. It is not a different processor, clock speed or instruction set, so it says nothing about a microcontroller or a slow ARM core. The finding that matters is that the budgets above describe the *model*: what a device needs is the *runtime*, about 40 MiB, which is why a node on something far smaller than a Raspberry Pi would need the inference path rewritten without Python and numpy, not just the model shrunk.
 
 ## Knowing when not to be trusted
 
-Nothing on the node can tell that an estimate is wrong, because there is no ground truth in the field. What it can tell is that its **inputs have stopped looking like anything it was trained on.** There are three guards, calibrated on held-out clean data.
+Nothing on the node can tell that an estimate is wrong, because there is no ground truth in the field. What it can tell is that its **inputs have stopped looking like anything it was trained on.** There are four guards, calibrated on held-out clean data.
 
 1. **Per reading** (`out_of_distribution`): Mahalanobis distance from the training data above a threshold set at the 99.9th percentile of clean readings (0.10% of clean readings are flagged). It catches gross failures: an impossible weight, a stuck light sensor, a camera that sees nothing while the depth says a heap.
 2. **Spread over a window** (`drift_score`): the rolling mean of the squared distance over the last 50 readings (about six minutes at the simulator's default rate), alarming above 5.658. It reacts to how far readings are from the training data, not to which way.
 3. **Shift over a window** (`shift_score`, added in 1.1.0): a Hotelling T-squared of the *mean* deviation over the last 30 readings (about four minutes), alarming above 18.559. On clean data it follows a chi-squared law with four degrees of freedom (one per channel), so the calibrated threshold sits close to that law's 99.9th percentile (18.5). A sustained bias in any direction adds to it with every reading.
+4. **Flatline over a window** (`flatline_score`, added in 1.2.0): the smallest per-channel standard deviation over the last 30 readings, in units of the training spread, alarming when it falls **below** 0.575 (the lower 0.1% tail of clean windows). On clean data it sits around 0.9; a channel that has stopped varying, or a gain that has fallen so every channel shrinks toward normal, drags it toward 0.
 
-`drift_suspected` is true when **either** window guard alarms. On a fresh clean stream of about 300,000 readings the spread monitor alarmed 0.13% of the time, the shift monitor 0.15% and either 0.27%, so the combined guard costs about twice the false alarms of one.
+`drift_suspected` is true when **any** of the three window guards alarms. On a fresh clean stream of about 300,000 readings the spread monitor alarmed 0.06% of the time, the shift monitor 0.10%, the flatline monitor 0.08% and any of them 0.24% (on a different stream the first two together were 0.27%, so read these as 0.2 to 0.3%): the combined guard costs about two to three times the false alarms of one.
 
 ### The per-reading guard is not enough on its own
 
@@ -83,7 +84,17 @@ So: individually, the guard misses almost all of a slow fault. The spread monito
 
 **A mistake worth keeping in the record.** The risk register (RSK-032) had recorded that "a more sensitive statistic, for example CUSUM, would narrow" the gap. It was tried first, calibrated to the same 0.1% clean alarm time, on the squared distance and on three tamer transforms of it (the distance, the squared distance capped at 9 and at 16, its logarithm): none beat the rolling mean (best 57.5% at fouling 0.2, against 59.5%). The limit was the quantity being monitored, not the way it was accumulated: at fouling 0.2 the squared distance moves only from 4.0 to 4.6 against a spread of 3.3. Monitoring the mean deviation, which the fault actually moves, was what worked. (The CUSUM experiment is not in the repository; its numbers are from a scratch script and are recorded here as a measurement, not a test.)
 
-**What neither monitor sees: a signal that goes quiet.** Both alarm on readings moving away from the training data (the spread monitor on how far, the shift monitor on which way on average). A sensor that goes dead and reports something close to its normal value, or a gain that falls so the readings shrink toward their own average, moves neither: found while testing the real-data harness, where a synthetic gain loss on zero-centred readings was invisible to both. A flatline detector (readings that stop varying) is the usual remedy and is not built.
+**What the first two monitors cannot see, and the flatline monitor.** The spread and shift monitors alarm on readings moving away from the training data (how far, and which way on average). A sensor that goes dead at a normal value, or a gain that falls so the readings shrink toward normal, moves neither: found while testing the real-data harness (DEF-157), then confirmed on the plate node. Time in alarm, 5,000 readings per fault (`edge_ai/sensor.py` `inject_fault`):
+
+| Fault | Per-reading guard | Spread | Shift | Flatline |
+|---|---|---|---|---|
+| Light sensor stuck at its normal value | 0.0% | 0.0% | 0.0% | **100%** |
+| Camera-area channel stuck | 4.1% | 100% | 11.8% | 100% |
+| Scale channel stuck | 4.0% | 99.5% | 11.6% | 100% |
+| Every channel's departure from normal halved (gain 0.5) | 0.0% | 0.0% | 0.0% | **99.8%** |
+| Departures cut by 30% (gain 0.7) | 0.0% | 0.0% | 0.0% | **21%** |
+
+A stuck camera or scale channel was already caught by the spread monitor, because it breaks the correlation between channels; the light sensor is the channel that is independent of the others, so it was invisible. **The limit:** a mild gain loss (0.7) is mostly not caught, and the other monitors never see it; a fault that gentle goes unnoticed. The 0.575 threshold and these rates are measured on the simulated sensors (RSK-031), and the real-data check above did not test this monitor.
 
 **What the shift monitor does not do.** It is not a fault diagnosis. A change in the real mix of plates (a menu change that makes plates heavier) or a change in the room's light would raise it just as a fouling lens does: it says *the inputs have shifted*, and what has shifted needs a person. At fouling 0.1, where the error is already 1.6 times the clean figure, about a quarter of onsets still take more than 150 readings (about 19 minutes) to alarm (7 of 30 in the test's trials), and about 5% (the one early false alarm included) never alarm within 300. And, as everywhere in this card, the fault is the author's own simulation of a fouled lens, a pure bias with a known direction, which is the case this statistic is best at.
 
@@ -153,13 +164,13 @@ The owner decided not to add models to the POS, ticket-timer or staffing sensors
 
 ## Updating a model, and rolling it back
 
-A node takes a new model from the cloud over MQTT, checks it, compares it with the model in service on live readings, and only then swaps (`edge_ai/updater.py`; cloud side `control/edge_control.py`). The versions are in `model_store/plate-waste-edge-regressor/` (1.0.0, the first model, byte for byte as first shipped; 1.1.0, the one baked into the image). Run the tool inside a node's own container, where the broker address and the key are already set:
+A node takes a new model from the cloud over MQTT, checks it, compares it with the model in service on live readings, and only then swaps (`edge_ai/updater.py`; cloud side `control/edge_control.py`). The versions are in `model_store/plate-waste-edge-regressor/` (1.0.0, the first model, byte for byte as first shipped; 1.1.0, with the shift monitor; 1.2.0, with the flatline monitor too, the one baked into the image). Run the tool inside a node's own container, where the broker address and the key are already set:
 
 ```bash
 docker compose exec edge-sim-plate-waste python -m control.edge_control list
-docker compose exec edge-sim-plate-waste python -m control.edge_control rollout  --version 1.1.0 --nodes sim-plate-cam-01   # a canary
+docker compose exec edge-sim-plate-waste python -m control.edge_control rollout  --version 1.2.0 --nodes sim-plate-cam-01   # a canary
 docker compose exec edge-sim-plate-waste python -m control.edge_control status
-docker compose exec edge-sim-plate-waste python -m control.edge_control rollout  --version 1.1.0 --nodes all                 # then the fleet
+docker compose exec edge-sim-plate-waste python -m control.edge_control rollout  --version 1.2.0 --nodes all                 # then the fleet
 docker compose exec edge-sim-plate-waste python -m control.edge_control rollback --to 1.0.0 --nodes all                      # back, no comparison
 docker compose exec edge-sim-plate-waste python -m control.edge_control clear    --nodes all                                 # drop the desired state
 ```
@@ -188,6 +199,8 @@ To add the shift monitor to an artifact **without retraining** (this is how 1.1.
 ```bash
 python edge-simulators/training/train_plate_waste_model.py --add-shift-monitor
 ```
+
+The flatline monitor was added the same way (`--add-flatline-monitor`, 1.2.0 from 1.1.0: weights, input statistics and the other monitors' thresholds unchanged, holdout error unchanged at 7.1 g). To see a sensor fault on a running node, set `EDGE_SENSOR_FAULT` (one of `stuck-light`, `stuck-camera-area`, `stuck-scale`, `gain-loss-0.7`, `gain-loss-0.5`) as `EDGE_LENS_FOULING` is set.
 
 A model is published by adding its artifact to `model_store/<model_id>/<version>.json` (the file name is the version; the store refuses a file whose hash or name does not match) and, if it should be the default for new nodes, copying it over `edge_ai/plate_waste_edge_model.json`: a test fails if the newest stored version and the image's default differ.
 

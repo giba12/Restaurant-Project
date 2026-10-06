@@ -101,7 +101,8 @@ def small_sizes(monkeypatch):
 def legacy_artifact(tmp_path):
     """The committed artifact as it was before the shift monitor: no shift keys, version 1.0.0, its own hash."""
     artifact = json.load(open(edge_model.DEFAULT_MODEL_PATH))
-    del artifact["ood"]["shift_window"], artifact["ood"]["shift_threshold"]
+    for key in ("shift_window", "shift_threshold", "flatline_window", "flatline_threshold"):
+        del artifact["ood"][key]
     artifact["model_version"] = "1.0.0"
     artifact["weights_sha256"] = edge_model.behaviour_hash(artifact)
     path = tmp_path / "legacy.json"
@@ -115,8 +116,9 @@ def test_adding_the_shift_monitor_changes_the_monitor_and_the_hash_but_not_the_w
     assert upgraded["layers"] == legacy["layers"]
     assert upgraded["input_mean"] == legacy["input_mean"] and upgraded["input_std"] == legacy["input_std"]
     assert upgraded["ood"]["mean"] == legacy["ood"]["mean"] and upgraded["ood"]["precision"] == legacy["ood"]["precision"]
-    assert upgraded["model_version"] == trainer.MODEL_VERSION
+    assert upgraded["model_version"] == trainer.SHIFT_MONITOR_VERSION == "1.1.0"
     assert upgraded["weights_sha256"] != legacy["weights_sha256"]
+    assert "flatline_window" not in upgraded["ood"], "adding the shift monitor must not add the flatline monitor"
     loaded = edge_model.EdgeModel(upgraded)  # the new hash verifies
     committed = json.load(open(edge_model.DEFAULT_MODEL_PATH))["ood"]["shift_threshold"]
     assert 0.7 * committed < loaded.shift_threshold < 1.4 * committed  # a shorter calibration stream, so only roughly equal
@@ -128,3 +130,47 @@ def test_the_upgrade_refuses_an_artifact_that_does_not_match_its_own_hash(tmp_pa
     path.write_text(json.dumps(legacy))
     with pytest.raises(edge_model.ModelIntegrityError):
         trainer.add_shift_monitor(path)
+
+
+def test_a_retrained_model_carries_a_calibrated_flatline_monitor_that_catches_a_stuck_sensor(retrained):
+    card = retrained["card"]
+    assert card["flatline_monitor"]["clean_time_in_alarm"] < 0.01
+    assert np.isfinite(retrained["ood"]["flatline_threshold"]) and 0 < retrained["ood"]["flatline_threshold"] < 1
+    stuck = card["fault_response"]["stuck-light"]
+    assert stuck["flatline_time_in_alarm"] > 0.95
+    assert stuck["spread_time_in_alarm"] < 0.05 and stuck["shift_time_in_alarm"] < 0.05  # the gap it exists to fill
+
+
+def test_the_committed_card_states_what_the_committed_flatline_monitor_measured():
+    artifact = json.load(open(edge_model.DEFAULT_MODEL_PATH))
+    card = artifact["card"]
+    assert card["flatline_monitor"]["threshold"] == artifact["ood"]["flatline_threshold"]
+    assert card["flatline_monitor"]["window"] == artifact["ood"]["flatline_window"]
+    assert card["flatline_monitor"]["clean_time_in_alarm"] < 0.005
+    assert card["fault_response"]["stuck-light"]["flatline_time_in_alarm"] > 0.95
+    assert card["fault_response"]["gain-loss-0.7"]["flatline_time_in_alarm"] < 0.5  # the stated limit
+
+
+def test_adding_the_flatline_monitor_changes_the_monitor_and_the_hash_but_not_the_weights(tmp_path, small_sizes):
+    folder = os.path.join(os.path.dirname(HERE), "model_store", "plate-waste-edge-regressor")
+    before = json.load(open(os.path.join(folder, "1.1.0.json")))  # has the shift monitor, not the flatline monitor
+    path = tmp_path / "before.json"
+    path.write_text(json.dumps(before))
+    upgraded = trainer.add_flatline_monitor(path)
+    assert upgraded["layers"] == before["layers"] and upgraded["ood"]["precision"] == before["ood"]["precision"]
+    assert upgraded["ood"]["shift_threshold"] == before["ood"]["shift_threshold"]  # the other monitors are untouched
+    assert upgraded["model_version"] == trainer.MODEL_VERSION == "1.2.0"
+    assert upgraded["weights_sha256"] != before["weights_sha256"]
+    loaded = edge_model.EdgeModel(upgraded)  # the new hash verifies
+    committed = json.load(open(edge_model.DEFAULT_MODEL_PATH))["ood"]["flatline_threshold"]
+    assert 0.8 * committed < loaded.flatline_threshold < 1.25 * committed  # a shorter calibration stream, so only roughly equal
+
+
+def test_the_flatline_upgrade_refuses_an_artifact_that_does_not_match_its_own_hash(tmp_path, small_sizes):
+    folder = os.path.join(os.path.dirname(HERE), "model_store", "plate-waste-edge-regressor")
+    tampered = json.load(open(os.path.join(folder, "1.1.0.json")))
+    tampered["layers"][0]["bias"][0] += 0.5
+    path = tmp_path / "tampered.json"
+    path.write_text(json.dumps(tampered))
+    with pytest.raises(edge_model.ModelIntegrityError):
+        trainer.add_flatline_monitor(path)

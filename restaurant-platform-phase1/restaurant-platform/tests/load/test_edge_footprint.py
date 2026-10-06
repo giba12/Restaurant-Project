@@ -50,9 +50,10 @@ def test_inference_meets_its_latency_budget_at_the_charts_cpu_limit_at_the_nodes
 
 
 def test_a_cpu_quota_pauses_a_burst_which_is_why_the_budget_is_judged_at_the_nodes_real_pace(footprint):
-    # Pinned so the limit is known and not rediscovered: back to back, 0.2 s of work took about 2 s as the container
-    # was paused for the rest of each 100 ms period (p99 about 91 ms, 21 throttled periods). The node never does this
-    # on its own, but a burst of work (an update's checks) causes one such pause. Asserting it keeps the explanation honest.
+    # Pinned so the limit is known and not rediscovered: back to back, 0.3 s of work (the probe runs until it has used
+    # that much CPU, so a fast machine cannot finish inside one quota period) takes about ten times as long as the
+    # container is paused for the rest of each 100 ms period. The node never does this on its own, but a burst of work
+    # (an update's checks) causes one such pause. Asserting it keeps the explanation honest.
     assert footprint["cpu_periods_throttled"] > 0
     assert footprint["burst_wall_seconds"] > 3 * footprint["burst_cpu_seconds"]
 

@@ -46,6 +46,7 @@ SCHEMA = json.load(open(os.path.join(os.environ["SCHEMA_DIR"], "PlateWasteEvent.
 KEY = "test-control-key"
 STORE = control.ModelStore()
 OLD, NEW = STORE.load("1.0.0")[0], STORE.load("1.1.0")[0]
+NEWEST = STORE.load(STORE.versions()[-1])[0]  # the model baked into the image
 
 
 def node(artifact=NEW, key=KEY, node_id="sim-plate-cam-01", seed=1):
@@ -121,6 +122,25 @@ def test_a_model_from_before_the_shift_monitor_loads_and_runs_with_no_shift_scor
     events = readings(n, 80)
     assert all(e["edge_inference"]["shift_score"] is None for e in events)
     assert events[60]["edge_inference"]["drift_score"] is not None
+
+
+def test_the_newest_model_is_promoted_over_the_one_before_it_with_no_difference_in_any_estimate():
+    # 1.2.0 added a monitor to the same weights, so the shadow comparison must find the estimates identical.
+    n, statuses = node(NEW)
+    send(n, command(NEWEST, shadow_readings=20))
+    readings(n, 21)
+    assert last(statuses)["state"] == "applied" and last(statuses)["shadow"]["mean_abs_diff_g"] == 0.0
+    assert n.updater.active.model_version == edge_model.EdgeModel(NEWEST).model_version
+
+
+def test_a_rollback_from_the_flatline_model_to_the_one_before_it_drops_the_flatline_score_and_keeps_the_contract():
+    n, statuses = node(NEWEST)
+    assert readings(n, 40)[-1]["edge_inference"]["flatline_score"] is not None
+    send(n, command(NEW, shadow_readings=0, force=True))
+    assert last(statuses)["state"] == "applied"
+    events = readings(n, 40)
+    assert all(e["edge_inference"]["flatline_score"] is None for e in events)
+    assert events[-1]["edge_inference"]["shift_score"] is not None  # the older model's own monitors carry on
 
 
 def test_the_same_model_again_is_reported_as_unchanged_and_not_shadowed():

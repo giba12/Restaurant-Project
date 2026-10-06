@@ -14,7 +14,8 @@ claims, and writes edge_ai/plate_waste_edge_model.json.
 
 adds the shift monitor to an existing artifact WITHOUT retraining: the weights
 stay byte for byte as they were, only the monitor's calibration, the version,
-the hash and the card change. That is how version 1.1.0 was made from 1.0.0.
+the hash and the card change. That is how version 1.1.0 was made from 1.0.0;
+`--add-flatline-monitor` does the same for the flatline monitor (1.2.0 from 1.1.0).
 
 Every random choice is seeded, so the same library versions reproduce the same
 artifact. Different scikit-learn versions can differ in the last bits, which
@@ -36,7 +37,8 @@ from edge_ai import model as edge_model  # noqa: E402
 from edge_ai import sensor  # noqa: E402
 
 MODEL_ID = "plate-waste-edge-regressor"
-MODEL_VERSION = "1.1.0"
+MODEL_VERSION = "1.2.0"
+SHIFT_MONITOR_VERSION = "1.1.0"  # the version `--add-shift-monitor` produces
 HIDDEN = (16, 8)
 TRAIN_SAMPLES = 40_000
 HOLDOUT_SAMPLES = 20_000
@@ -48,6 +50,8 @@ DRIFT_QUANTILE = 0.999  # of rolling window means on clean data
 DRIFT_CALIBRATION_READINGS = 300_000
 SHIFT_WINDOW = 30  # readings; about four minutes at the simulator's default rate
 SHIFT_QUANTILE = 0.999  # of rolling window scores on clean data
+FLATLINE_WINDOW = 30  # readings
+FLATLINE_QUANTILE = 0.001  # the LOWER tail of clean window scores: a flatline is a score that is too small
 DRIFT_ONSET_TRIALS = 200
 TO_GO_RATE = 0.15  # the simulator's own rate
 
@@ -98,6 +102,7 @@ def build(seed_override: int | None = None) -> dict:
         "mean": z_train.mean(axis=0).tolist(), "precision": np.linalg.inv(covariance).tolist(),
         "threshold": 0.0, "drift_window": DRIFT_WINDOW, "drift_threshold": 0.0,
         "shift_window": SHIFT_WINDOW, "shift_threshold": 0.0,
+        "flatline_window": FLATLINE_WINDOW, "flatline_threshold": 0.0,
     }
 
     artifact = {
@@ -126,6 +131,7 @@ def build(seed_override: int | None = None) -> dict:
     artifact["weights_sha256"] = edge_model.behaviour_hash(artifact)
     deployed = edge_model.EdgeModel(artifact)
     calibrate_shift_monitor(artifact)
+    calibrate_flatline_monitor(artifact)
     deployed = edge_model.EdgeModel(artifact)
 
     estimate, distance = deployed.predict_batch(x_hold)
@@ -163,6 +169,23 @@ def drift_card(deployed) -> dict:
         },
         "drift_response": {},
     }
+    if deployed.flatline_window is not None:
+        clean_flatline = flatline_scores(deployed, draw(DRIFT_CALIBRATION_READINGS, HOLDOUT_SEED + 6)[0])
+        card["flatline_monitor"] = {
+            "window": FLATLINE_WINDOW,
+            "threshold": deployed.flatline_threshold,
+            "clean_time_in_alarm": round(float(np.mean(clean_flatline < deployed.flatline_threshold)), 4),
+        }
+        card["fault_response"] = {}
+        for k, fault in enumerate(sensor.FAULTS):
+            x_fault = sensor.inject_fault(draw(5_000, HOLDOUT_SEED + 200 + k)[0], fault)
+            _, dist_f = deployed.predict_batch(x_fault)
+            card["fault_response"][fault] = {
+                "per_reading_flag_rate": round(float(np.mean(dist_f > deployed.ood_threshold)), 4),
+                "spread_time_in_alarm": round(float(np.mean(rolling_scores(deployed, x_fault) > deployed.drift_threshold)), 4),
+                "shift_time_in_alarm": round(float(np.mean(shift_scores(deployed, x_fault) > deployed.shift_threshold)), 4),
+                "flatline_time_in_alarm": round(float(np.mean(flatline_scores(deployed, x_fault) < deployed.flatline_threshold)), 4),
+            }
     for fouling in (0.1, 0.15, 0.2, 0.3, 0.4, 0.6, 0.8):
         x_drift, y_drift = draw(5_000, HOLDOUT_SEED + int(round(fouling * 100)), lens_fouling=fouling)
         est_d, dist_d = deployed.predict_batch(x_drift)
@@ -203,6 +226,42 @@ def calibrate_shift_monitor(artifact: dict) -> None:
     artifact["weights_sha256"] = edge_model.behaviour_hash(artifact)
 
 
+def flatline_scores(model, features: np.ndarray) -> np.ndarray:
+    """The flatline monitor's score after each reading once its window is full, exactly as the node computes it."""
+    monitor = model.new_flatline_monitor()
+    scores = []
+    for deviation in model.deviations(features):
+        score, _ = monitor.update(deviation)
+        if score is not None:
+            scores.append(score)
+    return np.asarray(scores)
+
+
+def calibrate_flatline_monitor(artifact: dict) -> None:
+    """Set the flatline threshold at the lower tail of a long clean stream, then refresh the hash. Weights are not touched."""
+    artifact["ood"]["flatline_window"] = FLATLINE_WINDOW
+    artifact["ood"]["flatline_threshold"] = 0.0
+    artifact["weights_sha256"] = edge_model.behaviour_hash(artifact)
+    provisional = edge_model.EdgeModel(artifact)
+    clean = flatline_scores(provisional, draw(DRIFT_CALIBRATION_READINGS, HOLDOUT_SEED + 5)[0])
+    artifact["ood"]["flatline_threshold"] = round(float(np.quantile(clean, FLATLINE_QUANTILE)), 3)
+    artifact["weights_sha256"] = edge_model.behaviour_hash(artifact)
+
+
+def add_flatline_monitor(path: Path) -> dict:
+    """Upgrade an artifact that has the shift monitor: same weights, flatline monitor added, new version and hash."""
+    artifact = json.loads(Path(path).read_text())
+    if artifact["weights_sha256"] != edge_model.behaviour_hash(artifact):
+        raise edge_model.ModelIntegrityError("refusing to upgrade an artifact that does not match its own hash")
+    weights_before = json.dumps(artifact["layers"], sort_keys=True)
+    calibrate_flatline_monitor(artifact)
+    artifact["model_version"] = MODEL_VERSION
+    artifact["weights_sha256"] = edge_model.behaviour_hash(artifact)
+    assert json.dumps(artifact["layers"], sort_keys=True) == weights_before, "the upgrade must not change the weights"
+    artifact["card"].update(drift_card(edge_model.EdgeModel(artifact)))
+    return artifact
+
+
 def add_shift_monitor(path: Path) -> dict:
     """Upgrade an existing artifact in place of retraining: same weights, new monitor, new version and hash."""
     artifact = json.loads(Path(path).read_text())
@@ -211,7 +270,7 @@ def add_shift_monitor(path: Path) -> dict:
         raise edge_model.ModelIntegrityError("refusing to upgrade an artifact that does not match its own hash")
     weights_before = json.dumps(artifact["layers"], sort_keys=True)
     calibrate_shift_monitor(artifact)
-    artifact["model_version"] = MODEL_VERSION
+    artifact["model_version"] = SHIFT_MONITOR_VERSION
     artifact["weights_sha256"] = edge_model.behaviour_hash(artifact)
     assert json.dumps(artifact["layers"], sort_keys=True) == weights_before, "the upgrade must not change the weights"
     deployed = edge_model.EdgeModel(artifact)
@@ -273,8 +332,13 @@ def main():
     parser.add_argument("--out", default=str(edge_model.DEFAULT_MODEL_PATH))
     parser.add_argument("--add-shift-monitor", action="store_true",
                         help="add the shift monitor to the artifact at --out without retraining its weights")
+    parser.add_argument("--add-flatline-monitor", action="store_true",
+                        help="add the flatline monitor to the artifact at --out (which must have the shift monitor) without retraining")
     args = parser.parse_args()
-    artifact = add_shift_monitor(args.out) if args.add_shift_monitor else build()
+    if args.add_shift_monitor and args.add_flatline_monitor:
+        parser.error("add one monitor at a time: shift first, then flatline")
+    artifact = (add_shift_monitor(args.out) if args.add_shift_monitor
+                else add_flatline_monitor(args.out) if args.add_flatline_monitor else build())
     text = json.dumps(artifact, separators=(",", ":"), allow_nan=False)  # a NaN here would be silently invalid JSON
     Path(args.out).write_text(text + "\n")
     print(f"wrote {args.out}: {len(text)} bytes, sha256 {artifact['weights_sha256']}")

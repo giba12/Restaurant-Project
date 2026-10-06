@@ -86,9 +86,11 @@ def test_the_shipped_model_loads_and_reports_the_hash_it_was_published_with(mode
     lambda a: a["ood"].__setitem__("drift_threshold", a["ood"]["drift_threshold"] * 2),
     lambda a: a["ood"].__setitem__("shift_threshold", a["ood"]["shift_threshold"] * 2),
     lambda a: a["ood"].__setitem__("shift_window", a["ood"]["shift_window"] + 1),
+    lambda a: a["ood"].__setitem__("flatline_threshold", a["ood"]["flatline_threshold"] * 2),
+    lambda a: a["ood"].__setitem__("flatline_window", a["ood"]["flatline_window"] + 1),
     lambda a: a.__setitem__("output_scale_g", a["output_scale_g"] * 1.01),
 ], ids=["a-weight", "a-bias", "input-statistics", "ood-threshold", "drift-threshold", "shift-threshold", "shift-window",
-        "output-scale"])
+        "flatline-threshold", "flatline-window", "output-scale"])
 def test_any_change_to_what_determines_behaviour_is_refused_at_load(tamper):
     # The point of the hash: a corrupted or hand-edited model must stop the
     # node, not emit plausible-looking numbers under the old model's name.
@@ -438,15 +440,16 @@ def test_a_node_with_a_mildly_fouled_lens_reports_drift_within_a_few_minutes_of_
     assert any(e["shift_score"] is not None and e["shift_score"] > model.shift_threshold for e in events)
 
 
-def test_drift_suspected_is_true_exactly_when_either_score_is_over_its_threshold():
+def test_drift_suspected_is_true_exactly_when_any_score_is_past_its_threshold():
     model = edge_model.EdgeModel.from_file()
-    for fouling in (0.0, 0.2, 0.6):
-        node = plate_waste.PlateWasteNode(model, lens_fouling=fouling, rng=random.Random(135))
+    for fouling, fault in ((0.0, ""), (0.2, ""), (0.6, ""), (0.0, "stuck-light")):
+        node = plate_waste.PlateWasteNode(model, lens_fouling=fouling, rng=random.Random(135), sensor_fault=fault)
         for _ in range(150):
             e = node.next_event()["edge_inference"]
             over_spread = e["drift_score"] is not None and e["drift_score"] > model.drift_threshold
             over_shift = e["shift_score"] is not None and e["shift_score"] > model.shift_threshold
-            assert e["drift_suspected"] == (over_spread or over_shift)
+            under_flatline = e["flatline_score"] is not None and e["flatline_score"] < model.flatline_threshold
+            assert e["drift_suspected"] == (over_spread or over_shift or under_flatline)
 
 
 def test_a_noisy_sensor_is_reported_by_the_node_through_the_spread_alarm_alone(monkeypatch):
@@ -468,6 +471,111 @@ def test_a_noisy_sensor_is_reported_by_the_node_through_the_spread_alarm_alone(m
     assert len(spread_only) > 50, "the node did not report drift in readings only the spread monitor flagged"
 
 
+# ------------------------------------------------------------------ the flatline monitor
+
+def test_the_flatline_monitor_reports_nothing_until_its_window_is_full():
+    monitor = edge_model.FlatlineMonitor(window=5, threshold=0.5)
+    for i in range(4):
+        assert monitor.update([float(i), 1.0, 1.0, 1.0]) == (None, False)
+    score, suspected = monitor.update([4.0, 1.0, 1.0, 1.0])
+    assert score == 0.0 and suspected is True  # three channels have not moved in five readings
+
+
+def test_the_flatline_score_is_the_smallest_per_channel_spread_over_the_window_and_the_alarm_is_below_the_threshold():
+    rng = np.random.default_rng(301)
+    monitor = edge_model.FlatlineMonitor(window=8, threshold=0.4)
+    seen = []
+    for _ in range(40):
+        deviation = rng.normal(size=4) * [1.0, 0.2, 1.0, 1.0]  # the second channel varies about a fifth as much
+        seen.append(deviation)
+        score, suspected = monitor.update(deviation)
+        if len(seen) >= 8:
+            expected = round(float(np.min(np.std(np.asarray(seen[-8:]), axis=0, ddof=1))), 3)
+            assert score == pytest.approx(expected, abs=1e-3)
+            assert suspected == (score < 0.4)
+
+
+def test_the_flatline_monitor_stays_quiet_through_normal_operation(model):
+    # Calibrated to the 0.1% lower tail of clean windows (measured 0.12% on a fresh stream); 1% is a loose bound.
+    features, _ = draw(20000, seed=111)
+    scores = []
+    monitor = model.new_flatline_monitor()
+    for deviation in model.deviations(features):
+        score, _ = monitor.update(deviation)
+        if score is not None:
+            scores.append(score)
+    assert np.mean(np.asarray(scores) < model.flatline_threshold) < 0.01
+    assert 0.7 < float(np.median(scores)) < 1.0  # about 0.89: the smallest of four channels' window spreads sits a little under 1
+
+
+def window_alarm_rates(model, features):
+    """Fraction of the time, once each window is full, that each monitor and the per-reading guard are in alarm."""
+    _, distance = model.predict_batch(features)
+    spread, shift, flat = model.new_drift_monitor(), model.new_shift_monitor(), model.new_flatline_monitor()
+    counts = np.zeros(3)
+    window_readings = 0
+    for d, deviation in zip(np.round(distance, 3), model.deviations(features)):
+        a = spread.update(float(d))
+        b = shift.update(deviation)
+        c = flat.update(deviation)
+        if a[0] is not None and b[0] is not None and c[0] is not None:
+            window_readings += 1
+            counts += [a[1], b[1], c[1]]
+    return counts / window_readings, float(np.mean(distance > model.ood_threshold))
+
+
+@pytest.mark.parametrize("fault", ["stuck-light", "stuck-camera-area", "stuck-scale", "gain-loss-0.5"])
+def test_the_flatline_monitor_catches_a_sensor_that_has_gone_quiet(model, fault):
+    # Measured over 5,000 readings: every stuck sensor 100%, a gain loss to 0.5 99.8% of the time in alarm.
+    features, _ = draw(4000, seed=311)
+    (_, _, flat), _ = window_alarm_rates(model, sensor.inject_fault(features, fault))
+    assert flat > 0.95
+
+
+def test_the_spread_and_shift_monitors_and_the_per_reading_guard_cannot_see_a_stuck_light_sensor_which_is_why_the_flatline_monitor_exists(model):
+    # DEF-157, pinned so nobody believes the older monitors cover it: with the light sensor stuck at its normal value
+    # nothing is further from the training data and the average has not moved. (A stuck camera-area or scale channel
+    # is caught by the spread monitor, because it breaks the correlation between channels; the light sensor is the
+    # channel that is independent of the others.)
+    features, _ = draw(4000, seed=311)
+    (spread, shift, flat), per_reading = window_alarm_rates(model, sensor.inject_fault(features, "stuck-light"))
+    assert spread < 0.02 and shift < 0.02 and per_reading < 0.02
+    assert flat > 0.95
+
+
+def test_a_mild_gain_loss_is_mostly_not_caught_and_that_limit_is_pinned(model):
+    # Honest limit: at a gain of 0.7 (every channel's departure from normal shrinks by 30%) the flatline monitor is in
+    # alarm about a fifth of the time (measured 21%) and the other monitors never. A fault this mild is not detected.
+    features, _ = draw(4000, seed=311)
+    (spread, shift, flat), _ = window_alarm_rates(model, sensor.inject_fault(features, "gain-loss-0.7"))
+    assert flat < 0.5 and spread < 0.02 and shift < 0.02
+
+
+def test_a_model_from_before_the_flatline_monitor_runs_with_no_flatline_score():
+    old = edge_model.EdgeModel(json.load(open(os.path.join(HERE, "model_store", "plate-waste-edge-regressor", "1.1.0.json"))))
+    assert old.flatline_window is None
+    node = plate_waste.PlateWasteNode(old, rng=random.Random(321))
+    events = [node.next_event()["edge_inference"] for _ in range(80)]
+    assert all(e["flatline_score"] is None for e in events) and events[60]["shift_score"] is not None
+
+
+def test_a_node_with_a_stuck_light_sensor_reports_drift_in_its_own_events_through_the_flatline_score_alone(model):
+    node = plate_waste.PlateWasteNode(model, rng=random.Random(331), sensor_fault="stuck-light")
+    events = [node.next_event()["edge_inference"] for _ in range(120)]
+    alarmed = [i for i, e in enumerate(events) if e["drift_suspected"]]
+    assert alarmed and alarmed[0] < 50
+    late = [e for e in events[60:] if e["flatline_score"] is not None]
+    assert all(e["flatline_score"] < model.flatline_threshold for e in late)
+    assert not any(e["shift_score"] is not None and e["shift_score"] > model.shift_threshold for e in events)  # the others saw nothing
+    healthy = plate_waste.PlateWasteNode(model, rng=random.Random(331))
+    assert not any(healthy.next_event()["edge_inference"]["drift_suspected"] for _ in range(120))
+
+
+def test_an_unknown_sensor_fault_is_refused():
+    with pytest.raises(ValueError, match="unknown sensor fault"):
+        sensor.inject_fault([1.0, 2.0, 3.0, 4.0], "stuck-lunch")
+
+
 # ------------------------------------------------------------------ the contract
 
 def test_every_event_from_the_node_satisfies_the_schema():
@@ -478,7 +586,7 @@ def test_every_event_from_the_node_satisfies_the_schema():
 
 def test_the_event_names_the_exact_model_that_produced_the_estimate(model):
     event = plate_waste.PlateWasteNode(model, rng=random.Random(151)).next_event()
-    assert event["schema_version"] == "1.2.0"
+    assert event["schema_version"] == "1.3.0"
     inference = event["edge_inference"]
     assert (inference["model_id"], inference["model_version"], inference["model_sha256"]) == (
         model.model_id, model.model_version, model.sha256)
@@ -507,10 +615,18 @@ def test_events_without_edge_inference_are_still_valid_for_older_producers():
     jsonschema.validate(event, SCHEMA)
 
 
+def test_an_event_from_before_the_flatline_score_still_validates():
+    # Backward compatibility of the 1.3.0 addition: a 1.2.0 event has no flatline_score.
+    event = plate_waste.PlateWasteNode(edge_model.EdgeModel.from_file(), rng=random.Random(172)).next_event()
+    del event["edge_inference"]["flatline_score"]
+    event["schema_version"] = "1.2.0"
+    jsonschema.validate(event, SCHEMA)
+
+
 def test_an_event_from_before_the_shift_score_still_validates():
     # Backward compatibility of the 1.2.0 addition: a 1.1.0 event has no shift_score.
     event = plate_waste.PlateWasteNode(edge_model.EdgeModel.from_file(), rng=random.Random(173)).next_event()
-    del event["edge_inference"]["shift_score"]
+    del event["edge_inference"]["shift_score"], event["edge_inference"]["flatline_score"]
     event["schema_version"] = "1.1.0"
     jsonschema.validate(event, SCHEMA)
 
@@ -523,9 +639,10 @@ def test_an_event_from_before_the_shift_score_still_validates():
     lambda e: e["edge_inference"].__setitem__("out_of_distribution", "yes"),
     lambda e: e["edge_inference"].__setitem__("surprise", 1),
     lambda e: e["edge_inference"].__setitem__("shift_score", "high"),
+    lambda e: e["edge_inference"].__setitem__("flatline_score", "flat"),
     lambda e: e["edge_inference"].pop("model_id"),
 ], ids=["bad-hash", "bad-version", "negative-distance", "negative-latency", "non-boolean-flag", "unknown-field", "text-shift-score",
-                                  "missing-model-id"])
+                                  "text-flatline-score", "missing-model-id"])
 def test_the_schema_rejects_a_malformed_edge_inference(damage):
     event = plate_waste.PlateWasteNode(edge_model.EdgeModel.from_file(), rng=random.Random(181)).next_event()
     damage(event)

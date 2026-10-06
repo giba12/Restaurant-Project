@@ -34,6 +34,8 @@ itself (the simulator) or a random.Random(seed) (the trainer and the tests).
 
 import math
 
+import numpy as np
+
 FEATURE_NAMES = ("scale_g", "area_frac", "height_mm", "lux")
 
 # One plate in four carries non-food mass on the tray.
@@ -76,3 +78,27 @@ def read_sensors(grams: float, rng, lens_fouling: float = 0.0) -> dict:
 
 def feature_vector(reading: dict) -> list:
     return [reading[name] for name in FEATURE_NAMES]
+
+
+# What a sensor reports when it is stuck: a plausible value, not an absurd one (an absurd one is the easy case, the
+# per-reading guard flags it). These are the simulator's own typical readings.
+NORMAL = {"scale_g": 116.0, "area_frac": 0.50, "height_mm": 3.9, "lux": 450.0}
+FAULTS = ("stuck-light", "stuck-camera-area", "stuck-scale", "gain-loss-0.7", "gain-loss-0.5")
+
+
+def inject_fault(features, fault: str):
+    """The readings (one feature vector, or many) as they would come out of a sensor with the named fault.
+
+    stuck-*     one channel reports its normal value whatever happens (a dead or frozen sensor).
+    gain-loss-g every channel's departure from normal shrinks to g times what it was (a sensor losing sensitivity).
+    """
+    if fault not in FAULTS:
+        raise ValueError(f"unknown sensor fault {fault!r}; the known ones are {', '.join(FAULTS)}")
+    x = np.array(features, dtype=np.float64)
+    centre = np.array([NORMAL[name] for name in FEATURE_NAMES])
+    if fault.startswith("stuck-"):
+        channel = {"stuck-light": "lux", "stuck-camera-area": "area_frac", "stuck-scale": "scale_g"}[fault]
+        x[..., FEATURE_NAMES.index(channel)] = NORMAL[channel]
+    else:
+        x = centre + float(fault.rsplit("-", 1)[1]) * (x - centre)
+    return x

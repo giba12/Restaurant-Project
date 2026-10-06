@@ -28,7 +28,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 
 ## Summary
 
-**157 entries** (141 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-06.
+**160 entries** (144 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-06.
 
 ### By severity
 
@@ -37,20 +37,20 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | S1 Critical | 8 |
 | S2 High | 31 |
 | S3 Medium | 51 |
-| S4 Low | 51 |
+| S4 Low | 54 |
 | Info | 16 |
-| **Total** | **157** |
+| **Total** | **160** |
 
 ### By status
 
 | Status | Count |
 |---|---|
-| Fixed+tested | 47 |
+| Fixed+tested | 51 |
 | Fixed | 79 |
 | Mitigated | 8 |
 | Clarified | 17 |
-| Open | 6 |
-| **Total** | **157** |
+| Open | 5 |
+| **Total** | **160** |
 
 ### By part (project period)
 
@@ -69,8 +69,8 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Part K: Found by the first GitHub runs (2026-10-04) | 2 |
 | Part L: Closing the event-loss gap between sensors and Kafka (2026-10-05) | 4 |
 | Part M: Replacing the ingest path (2026-10-05) | 3 |
-| Part N: Strengthening the edge node's drift monitoring and adding its update path (2026-10-06) | 3 |
-| **Total** | **157** |
+| Part N: Strengthening the edge node's drift monitoring and adding its update path (2026-10-06) | 6 |
+| **Total** | **160** |
 
 ### By how it was found
 
@@ -78,14 +78,14 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 |---|---|
 | Live operation, deployment or manual run | 74 |
 | Review (static or manual) | 21 |
-| Test-regime run or observation | 36 |
+| Test-regime run or observation | 37 |
 | Automated test regime (2026-10-02) | 7 |
 | Chaos test | 5 |
 | Attempting the done condition | 3 |
-| CI or first push | 7 |
+| CI or first push | 9 |
 | User report | 3 |
 | Audit script | 1 |
-| **Total** | **157** |
+| **Total** | **160** |
 
 ### By class
 
@@ -94,7 +94,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Deployment | 22 |
 | Logic | 30 |
 | Environment/tooling | 21 |
-| Test defect | 19 |
+| Test defect | 22 |
 | Observability | 9 |
 | Dependency | 7 |
 | Configuration | 6 |
@@ -109,9 +109,9 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Repository hygiene | 2 |
 | Operator error | 2 |
 | Code quality | 1 |
-| **Total** | **157** |
+| **Total** | **160** |
 
-### Open items (6)
+### Open items (5)
 
 | ID | Summary | Severity |
 |---|---|---|
@@ -120,7 +120,6 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | DEF-093 | `strimzi-cluster-operator` sat at 90% of its memory limit during the investigation. | Info |
 | DEF-123 | Two Compose providers coexist on the development machine (a v1 `docker-compose` via the Podman shim, and the user's own Compose plugin, v5.5.1), so a... | Info |
 | DEF-131 | The gate certifies statistical significance, not causation: it cannot detect an omitted confounder or a mis-specified treatment (for example the staff... | Info |
-| DEF-157 | Neither drift monitor can see a signal that goes quiet (a dead sensor near its normal value, a gain that falls so readings shrink toward their average); no flatline detector is built. | S3 |
 
 ## Part A. Phases 1-3 (before 2026-09-10): recovered lessons
 
@@ -369,13 +368,16 @@ The owner asked for a real fix after DEF-151 showed the gate could shrink the lo
 
 ## Part N. Strengthening the edge node's drift monitoring and adding its update path (2026-10-06)
 
-The owner decided to continue the AI work on the plate-waste node only (see `edge-simulators/MODEL_CARD.md`, "Scope decision"). The first item was the weakness recorded in DEF-133 and RSK-032 (DEF-155); the second was the update path and the cloud-to-edge control path (RSK-033), whose first real use found DEF-156; the third was a check against drift the project did not generate, which found DEF-157.
+The owner decided to continue the AI work on the plate-waste node only (see `edge-simulators/MODEL_CARD.md`, "Scope decision"). The first item was the weakness recorded in DEF-133 and RSK-032 (DEF-155); the second was the update path and the cloud-to-edge control path (RSK-033), whose first real use found DEF-156; the third was a check against drift the project did not generate, which found DEF-157 (fixed by the flatline monitor, in the same part).
 
 | ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
 |---|---|---|---|---|---|---|---|
 | DEF-155 | Edge feature | continuing the AI work (RSK-032, DEF-133) | **The node's drift monitor missed most mild sensor faults, and the fix the risk register proposed did not work.** The rolling mean of squared distance caught fouling of 0.3 and above, but at 0.2 it caught 59.5% of onsets (median 143 readings) and at 0.15 only 22.5%, while the error was already 2.7 and 2.1 times clean. RSK-032 said "a more sensitive statistic (for example CUSUM) would narrow it". That was a guess, never measured. Measured now, at the same 0.1% clean false-alarm time, CUSUM on the squared distance and on three tamer transforms of it (the distance, the squared distance capped at 9 and at 16, its logarithm) caught at best 57.5% at 0.2: no better than the rolling mean. **The root cause is the quantity monitored:** at fouling 0.2 the squared distance moves from 4.0 to 4.6 against a spread of 3.3, so accumulating it more cleverly adds little; what a fouling lens actually does is move the *mean* of the readings, consistently, in one direction. | S3 Medium | Test-regime run or observation | **A second monitor, the shift monitor** (`edge_ai/model.py`, `ShiftMonitor`): a Hotelling T-squared of the mean deviation over the last 30 readings, calibrated on a long clean stream (clean data follows the chi-squared law with four degrees of freedom, and the calibrated threshold, 18.559, sits next to that law's 99.9th percentile, 18.5). The node alarms on **either** monitor (`drift_suspected`) and reports the new `shift_score` (event schema 1.2.0, additive). Measured over 200 onsets each: fouling 0.2 caught in 99.5% with a median of 23 readings (before: 59.5%, 143); 0.15 in 99.5% (before: 22.5%); 0.1 in 94.5% (before: 8.5%). **Costs, stated:** the combined alarm is in alarm 0.27% of clean time on a fresh stream (0.13% and 0.15% for the two), about twice one monitor's; at 0.1 about a quarter of onsets still take over 150 readings; the monitor flags any sustained input change, not only a fouled lens; added noise with no bias is caught far better by the spread monitor (100% against 24%), which is why both stay. **The weights were not retrained:** the trainer gained `--add-shift-monitor`, which adds the monitor to the shipped artifact and changes only the calibration, the version (1.1.0), the hash and the card; the weights, input statistics and guard matrices are identical and the holdout error is unchanged (7.1 g). 16 new tests (12 on the node and monitor, 4 on the trainer and the upgrade); **five deliberate breakages each turned a test red**, and the first round left one alive (a node that ignored the spread alarm passed everything), which produced a sixth test. Edge suite 84 passed; schemas 7, causal engine 16, dashboard API 21. **On the Compose stack, rebuilt from the repository:** end-to-end 66 passed (4 skipped), the same as before the change, with the stored events naming the new model hash and, after one assertion was added (every stored 1.2.0 event carries `shift_score`), the two edge tests passing again. **Not run:** the integration, load, resilience and acceptance layers, a GitHub run, and the live cluster, whose simulator image must be rebuilt and imported. | Fixed+tested |
 | DEF-156 | Edge feature | building the model update path (putting 1.0.0 in the store as a rollback target) | **The 1.1.0 loader could not load the 1.0.0 artifact, so a rollback to the previous version would have failed on every node.** Adding the shift monitor made `EdgeModel` read `ood.shift_window` and `ood.shift_threshold` unconditionally. The 1.0.0 artifact is correct and verifies against its own hash, but has neither key, so loading it raised `KeyError`. Nothing caught it because no test loaded a previous artifact and the upgrade tool only ever read one; it surfaced when 1.0.0 was put in the model store to be a rollback target. | S3 Medium | Test-regime run or observation | The loader accepts artifacts without the shift keys and runs them with a monitor that reports no score and no alarm, as they always behaved. The store holds 1.0.0 byte for byte as first shipped (`test_a_stored_model_is_immutable_the_first_version_is_byte_for_byte_what_was_first_shipped`), `test_a_model_from_before_the_shift_monitor_loads_and_runs_with_no_shift_score` runs it, and a live rollback to 1.0.0 passed end to end on the Compose stack. | Fixed+tested |
-| DEF-157 | Edge feature | the real-data harness (`validation/real_drift_check.py`, building its synthetic test data) | **Neither drift monitor can see a signal that goes quiet.** The spread monitor alarms when readings move further from the training data, the shift monitor when their average moves; a contraction does neither. A sensor that goes dead and reports a value near its normal one, or a gain that falls so readings shrink toward their own average, leaves both at or below their calm level. Found when the first synthetic drift in the harness test (a gain loss on zero-centred readings) produced a classifier wrong 23% of the time by batch 10 while the shift monitor alarmed 8.5% and the spread monitor 0%; with a positive baseline the same drift is caught. The per-reading guard also misses a sensor stuck at a plausible value (it flags one stuck far away). | S3 Medium | Test-regime run or observation | **Not fixed.** Recorded in the model card and RSK-032. The usual remedy is a flatline detector (readings that stop varying within a window), which is small to build and not built; it would need the same calibrate-on-clean-data and measure-on-injected-fault treatment as the other two. | Open |
+| DEF-157 | Edge feature | the real-data harness (`validation/real_drift_check.py`, building its synthetic test data) | **Neither drift monitor can see a signal that goes quiet.** The spread monitor alarms when readings move further from the training data, the shift monitor when their average moves; a contraction does neither. A sensor that goes dead and reports a value near its normal one, or a gain that falls so readings shrink toward their own average, leaves both at or below their calm level. Found when the first synthetic drift in the harness test (a gain loss on zero-centred readings) produced a classifier wrong 23% of the time by batch 10 while the shift monitor alarmed 8.5% and the spread monitor 0%; with a positive baseline the same drift is caught. The per-reading guard also misses a sensor stuck at a plausible value (it flags one stuck far away). | S3 Medium | Test-regime run or observation | **A third monitor, the flatline monitor** (model 1.2.0, `edge_ai/model.py` `FlatlineMonitor`): the smallest per-channel standard deviation over 30 readings, in units of the training spread, alarming when it falls below a threshold calibrated at the lower 0.1% tail of clean windows (0.575; the score sits near 0.9 on clean data). Added without retraining (`--add-flatline-monitor`: weights, holdout error and the other monitors' thresholds unchanged); event schema 1.3.0 adds `flatline_score`; `drift_suspected` is now true when any of the three alarms; `EDGE_SENSOR_FAULT` and `edge_ai/sensor.py` `inject_fault` let a node run with a named fault. **Measured on the plate node, time in alarm over 5,000 readings:** a stuck light sensor 100% (the spread and shift monitors and the per-reading guard 0%); stuck camera-area and scale channels 100% (the spread monitor already caught them); a gain loss to 0.5 99.8% (the others 0%); **a gain loss to 0.7 only 21%, which is the stated limit**: a fault that mild goes unnoticed. Clean false-alarm time of all three together is about 0.24% on a fresh stream (0.06, 0.10 and 0.08% each). 17 new tests and one renamed; **six deliberate breakages (alarm direction, min versus max, a node ignoring the alarm, the wrong stuck channel, no flatline monitor built, an inverted gain) were each caught the first time.** The calibration and rates are for the simulated sensors; the real-data check did not exercise this monitor (RSK-031). | Fixed+tested |
+| DEF-158 | Test regime | GitHub's `tests` workflow, runs 37498640924 and 37513415526 | **An integration test hardcoded the plate-waste schema version and failed when the node moved on.** `test_the_edge_inference_block_is_stored_whole_and_queryable` stored an event from `factory.plate_waste_event()`, which runs the real node's `generate_event()`, and asserted schema `1.1.0`; the node had moved to `1.2.0` the same day. The data was stored correctly; the test's expectation was stale. I had assumed the factory built a fixed event and had not run the integration layer (which needs a container) before pushing, so two `tests` runs failed in `integration` alone. | S4 Low | CI or first push | The test now asserts that storage keeps the version the node sent, and that it is 1.1.0 or later. Integration layer 118 passed locally; the re-run passed all 14 jobs. | Fixed+tested |
+| DEF-159 | Test regime | GitHub's nightly run 37514828632 | **A footprint test's premise depended on how fast the machine was.** `test_a_cpu_quota_pauses_a_burst...` pins that back-to-back inference under a 10% CPU quota is paused, using a burst of a fixed 1,200 calls. On a laptop that is 0.16 s of CPU; on a GitHub runner, about ten times quicker, it is 15 ms, inside one quota period, so the burst took 0.02 s wall against 0.015 s CPU and the assertion (wall time over three times CPU time) failed. Everything else in the nightly run passed. | S4 Low | CI or first push | The probe now runs the burst until it has used a fixed 0.3 s of CPU, whatever the machine's speed (locally 0.34 s of work took 3.3 s, 34 throttled periods). | Fixed+tested |
+| DEF-160 | Test regime | a local end-to-end run | **An end-to-end assertion demanded that no stored estimate ever took over 5 ms, though the budget is a p99.** `test_the_edge_nodes_model_and_inference_reach_the_database_intact` counted events whose recorded inference latency exceeded 5 ms and required zero; on a busy laptop one outlier among many failed it. The same run showed that the live-node update test, which I had changed to read the baked model's version, wrote the variable's *name* into a snippet that runs inside the container (`NameError: name 'BAKED'`), a mistake caught before it was pushed. | S4 Low | Test-regime run or observation | The assertion now allows up to 1% of events over 5 ms (a p99, as the budget is stated); the snippet now carries the version's value. | Fixed+tested |
 
 ## How the defects were found, and what that says about the process
 

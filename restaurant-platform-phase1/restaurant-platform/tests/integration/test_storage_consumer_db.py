@@ -57,7 +57,9 @@ def test_the_edge_inference_block_is_stored_whole_and_queryable(conn):
     store(conn, "plate-waste-events", event)
     stored, version = rows(conn, "SELECT raw_payload -> 'edge_inference', schema_version FROM plate_waste_events")[0]
     assert stored == event["edge_inference"]
-    assert version == "1.1.0"
+    # The factory runs the real node, so this is whatever schema version the node emits now; what matters is that
+    # storage keeps it as sent (and that it is one that carries edge_inference, 1.1.0 or later).
+    assert version == event["schema_version"] and version >= "1.1.0"
     sha = scalar(conn, "SELECT raw_payload #>> '{edge_inference,model_sha256}' FROM plate_waste_events")
     assert sha == event["edge_inference"]["model_sha256"]
 

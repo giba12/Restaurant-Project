@@ -26,7 +26,7 @@
     },
     "schema_version": {
       "type": "string",
-      "description": "Semantic version of this schema, e.g. '1.0.0'. Consumers must reject unknown major versions. 1.1.0 added the optional edge_inference object; events without it remain valid 1.0.0 events."
+      "description": "Semantic version of this schema, e.g. '1.0.0'. Consumers must reject unknown major versions. 1.1.0 added the optional edge_inference object; events without it remain valid 1.0.0 events. 1.2.0 added the optional edge_inference.shift_score; events without it remain valid 1.1.0 events."
     },
     "source_id": {
       "type": "string",
@@ -110,9 +110,13 @@
           "type": ["number", "null"],
           "description": "Rolling mean of squared ood_score over the node's last window of readings. Null until the window has filled (for example just after a restart)."
         },
+        "shift_score": {
+          "type": ["number", "null"],
+          "description": "Hotelling T-squared of the mean deviation of the sensor channels from the training data over the node's last shift window of readings (schema 1.2.0 and later). Near the number of channels when the inputs look like the training data; a sustained bias in any direction (for example a fouled lens) raises it. Null until the window has filled."
+        },
         "drift_suspected": {
           "type": "boolean",
-          "description": "True when drift_score exceeds its calibrated threshold: a sustained shift in the sensor inputs even though no single reading is anomalous (for example a fouled lens). False while drift_score is null."
+          "description": "True when either drift_score or shift_score exceeds its calibrated threshold: a sustained change in the sensor inputs even though no single reading is anomalous (for example a fouled lens). drift_score reacts to added spread, shift_score to a consistent bias. False while both scores are null."
         }
       },
       "additionalProperties": false

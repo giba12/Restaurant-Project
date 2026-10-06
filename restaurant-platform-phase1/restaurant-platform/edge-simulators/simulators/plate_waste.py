@@ -23,8 +23,9 @@ from edge_ai.model import DEFAULT_MODEL_PATH, EdgeModel
 
 PORTION_VARIANTS = ["standard", "standard", "standard", "half", "large", "unknown"]
 
-# 1.1.0: events carry edge_inference. See schemas/PlateWasteEvent.schema.json.
-SCHEMA_VERSION = "1.1.0"
+# 1.1.0: events carry edge_inference. 1.2.0: edge_inference also carries shift_score.
+# See schemas/PlateWasteEvent.schema.json.
+SCHEMA_VERSION = "1.2.0"
 
 # The one fault knob: 0 is a clean lens, 1 a badly fouled one. Set it to see
 # the node's drift monitor react; leave it at 0 in normal operation.
@@ -37,6 +38,7 @@ class PlateWasteNode:
         self.lens_fouling = lens_fouling
         self.rng = rng
         self.drift_monitor = model.new_drift_monitor()
+        self.shift_monitor = model.new_shift_monitor()
         self.last_true_grams = None  # simulator-side ground truth; never published
 
     def next_event(self) -> dict:
@@ -53,7 +55,8 @@ class PlateWasteNode:
 
         # From here on the node uses only its sensor channels.
         inference = self.model.infer(sensor.feature_vector(reading))
-        drift_score, drift_suspected = self.drift_monitor.update(inference.ood_score)
+        drift_score, spread_alarm = self.drift_monitor.update(inference.ood_score)
+        shift_score, shift_alarm = self.shift_monitor.update(inference.deviation)
 
         return {
             "event_id": new_event_id(),
@@ -81,7 +84,8 @@ class PlateWasteNode:
                 "ood_score": inference.ood_score,
                 "out_of_distribution": inference.out_of_distribution,
                 "drift_score": drift_score,
-                "drift_suspected": drift_suspected,
+                "shift_score": shift_score,
+                "drift_suspected": spread_alarm or shift_alarm,
             },
         }
 
@@ -109,8 +113,9 @@ def main():
         mqtt_topic="sensors/plate-waste",
     )
     sim.log.info(
-        "plate-waste node: model %s v%s sha256=%s, drift window %d, lens_fouling=%.2f",
-        node.model.model_id, node.model.model_version, node.model.sha256[:12], node.model.drift_window, LENS_FOULING,
+        "plate-waste node: model %s v%s sha256=%s, drift window %d, shift window %d, lens_fouling=%.2f",
+        node.model.model_id, node.model.model_version, node.model.sha256[:12], node.model.drift_window,
+        node.model.shift_window, LENS_FOULING,
     )
     sim.run_forever(node.next_event)
 

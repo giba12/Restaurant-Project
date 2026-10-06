@@ -77,9 +77,14 @@ def test_the_edge_nodes_model_and_inference_reach_the_database_intact():
     assert sql_int("SELECT count(*) FROM plate_waste_events WHERE raw_payload ? 'edge_inference' "
                    f"AND raw_payload #>> '{{edge_inference,model_sha256}}' <> '{committed}'") == 0, \
         "stored estimates name a model other than the one committed in the repository"
-    assert sql_int("SELECT count(*) FROM plate_waste_events WHERE raw_payload ? 'edge_inference' AND schema_version <> '1.1.0'") == 0
+    assert sql_int("SELECT count(*) FROM plate_waste_events WHERE raw_payload ? 'edge_inference' AND schema_version NOT IN ('1.1.0', '1.2.0')") == 0
     assert sql_int("SELECT count(*) FROM plate_waste_events WHERE raw_payload ? 'edge_inference' "
                    "AND (raw_payload #>> '{edge_inference,inference_latency_ms}')::float > 5") == 0, "inference exceeded its latency budget on the stack"
+    # Schema 1.2.0: every event the current node publishes carries the shift monitor's score (null until its
+    # 30-reading window fills, so the key must exist but its value may not yet).
+    assert sql_int("SELECT count(*) FROM plate_waste_events WHERE schema_version = '1.2.0' "
+                   "AND NOT (raw_payload -> 'edge_inference' ? 'shift_score')") == 0, "a 1.2.0 event has no shift_score"
+    assert sql_int("SELECT count(*) FROM plate_waste_events WHERE schema_version = '1.2.0'") >= 5, "the node is not publishing schema 1.2.0"
 
 
 def test_the_dashboard_api_reports_the_edge_node_as_a_fleet():

@@ -86,10 +86,10 @@ To assure that the system's code, configuration, data contracts and documents me
 
 | Metric | Value |
 |---|---|
-| Entries in the defect log | 154 (138 defects, 16 informational) |
-| By severity | S1 Critical 8; S2 High 31; S3 Medium 48; S4 Low 51; Info 16 |
-| By status | Fixed and guarded by a test 45; fixed 79; mitigated 8; clarified 17; open 5 |
-| Distinct tests | 429, plus the GDScript smoke test (about 80 checks) |
+| Entries in the defect log | 155 (139 defects, 16 informational) |
+| By severity | S1 Critical 8; S2 High 31; S3 Medium 49; S4 Low 51; Info 16 |
+| By status | Fixed and guarded by a test 46; fixed 79; mitigated 8; clarified 17; open 5 |
+| Distinct tests | 445, plus the GDScript smoke test (about 80 checks) |
 | Requirements | 97: 73 verified by automated test, 6 by inspection, 9 live or manual only, 8 partial, 1 not verified, 0 not met |
 | Latest complete test cycle | 2026-10-04: every layer re-run passed on the final code, after repeated failed attempts at the heavy layers (flaky in this environment); the injected scenario's finding is refuted (DEF-141) |
 | Line or branch code coverage | **Not measured** |

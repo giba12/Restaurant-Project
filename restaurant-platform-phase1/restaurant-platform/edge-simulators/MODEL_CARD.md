@@ -2,11 +2,11 @@
 
 | | |
 |---|---|
-| Model | `plate-waste-edge-regressor` version `1.0.0` |
-| SHA-256 | `155f41cd2a84a57d486e1af427ffc042536ac6a154e493a02243ab4d8ff47be3` |
+| Model | `plate-waste-edge-regressor` version `1.1.0` (1.0.0 had the same weights and one drift monitor; 1.1.0 added the shift monitor, 2026-10-06) |
+| SHA-256 | `279d8a64fd02` (full value in the artifact; 1.0.0 was `155f41cd2a84`) |
 | Runs in | `edge-simulators/simulators/plate_waste.py`, on the (simulated) node, through `edge_ai/model.py` |
 | Trained by | `edge-simulators/training/train_plate_waste_model.py` (offline; scikit-learn is not on the node) |
-| Artifact | `edge_ai/plate_waste_edge_model.json`, 3448 bytes |
+| Artifact | `edge_ai/plate_waste_edge_model.json`, 4992 bytes |
 
 All figures below are the ones recorded in the artifact's `card` and re-checked on fresh data by `test_edge_ai.py` and `training/test_training.py`.
 
@@ -41,24 +41,37 @@ Quantizing to int8 costs 0.7% of accuracy; using all four channels instead of th
 
 ## Knowing when not to be trusted
 
-Nothing on the node can tell that an estimate is wrong, because there is no ground truth in the field. What it can tell is that its **inputs have stopped looking like anything it was trained on.** There are two guards, calibrated on held-out clean data.
+Nothing on the node can tell that an estimate is wrong, because there is no ground truth in the field. What it can tell is that its **inputs have stopped looking like anything it was trained on.** There are three guards, calibrated on held-out clean data.
 
 1. **Per reading** (`out_of_distribution`): Mahalanobis distance from the training data above a threshold set at the 99.9th percentile of clean readings (0.10% of clean readings are flagged). It catches gross failures: an impossible weight, a stuck light sensor, a camera that sees nothing while the depth says a heap.
-2. **Over a window** (`drift_suspected`): the rolling mean of the squared distance over the last 50 readings (about six minutes at the simulator's default rate), alarming above 5.658. On clean data it is in alarm 0.11% of the time.
+2. **Spread over a window** (`drift_score`): the rolling mean of the squared distance over the last 50 readings (about six minutes at the simulator's default rate), alarming above 5.658. It reacts to how far readings are from the training data, not to which way.
+3. **Shift over a window** (`shift_score`, added in 1.1.0): a Hotelling T-squared of the *mean* deviation over the last 30 readings (about four minutes), alarming above 18.559. On clean data it follows a chi-squared law with four degrees of freedom (one per channel), so the calibrated threshold sits close to that law's 99.9th percentile (18.5). A sustained bias in any direction adds to it with every reading.
+
+`drift_suspected` is true when **either** window guard alarms. On a fresh clean stream of about 300,000 readings the spread monitor alarmed 0.13% of the time, the shift monitor 0.15% and either 0.27%, so the combined guard costs about twice the false alarms of one.
 
 ### The per-reading guard is not enough on its own
 
-This was measured before shipping, and is why the second guard exists. A fouling lens (`lens_fouling`, 0 clean to 1 badly fouled) leaves every individual reading plausible while the error grows many times over:
+A fouling lens (`lens_fouling`, 0 clean to 1 badly fouled) leaves every individual reading plausible while the error grows many times over. Over 200 onsets each (clean until the window fills, then the lens fouls; readings are counted from the onset, an alarm before it is a false alarm and not a detection):
 
-| Lens fouling | RMSE | Readings flagged individually | Onsets the drift monitor caught (within 300 readings) | Median readings to detect |
+| Lens fouling | RMSE | Readings flagged individually | Spread monitor: caught, median readings | Shift monitor: caught, median readings |
 |---|---|---|---|---|
-| 0.2 | 19.1 g | 0.12% | 60% | 143.0 |
-| 0.3 | 26.62 g | 0.48% | 100% | 48.5 |
-| 0.4 | 33.66 g | 0.84% | 100% | 26.0 |
-| 0.6 | 47.93 g | 5.00% | 100% | 11.5 |
-| 0.8 | 62.18 g | 15.88% | 100% | 7.0 |
+| 0.1 | 11.21 g | 0.20% | 8.5%, 197 | **94.5%, 70** |
+| 0.15 | 14.83 g | 0.20% | 22.5%, 197 | **99.5%, 30** |
+| 0.2 | 19.1 g | 0.12% | 59.5%, 143 | **99.5%, 23** |
+| 0.3 | 26.62 g | 0.48% | 100%, 48.5 | 99.5%, 16 |
+| 0.4 | 33.66 g | 0.84% | 100%, 26 | 99.5%, 12 |
+| 0.6 | 47.93 g | 5.00% | 100%, 11.5 | 99.5%, 8 |
+| 0.8 | 62.18 g | 15.88% | 100%, 7 | 99.5%, 6 |
 
-So: individually, the guard misses almost all of a slow fault (under 1% of readings at fouling 0.4, where the error is already about five times worse than clean). The drift monitor catches fouling of 0.3 and above in every trial, but **at 0.2 it misses about 40% of onsets** within 300 readings (about 37 minutes), while the error is already about 2.7 times the clean figure. A subtle fault can therefore go unnoticed for a long time.
+The 99.5% for the shift monitor from 0.15 upward is one trial of 200 that raised a false alarm *before* the fault began (the same clean stretch in every row), not a miss.
+
+So: individually, the guard misses almost all of a slow fault. The spread monitor alone caught fouling of 0.3 and above in every trial but **missed about 40% of onsets at 0.2 and about three quarters at 0.15**, where the error is already 2.7 and 2.1 times the clean figure. The shift monitor closes most of that gap: a fault that is a small consistent bias is exactly what a test on the window's mean is built for, and it detects 0.2 in about three minutes of readings where the spread monitor took 18.
+
+**What the two monitors are for.** The spread monitor reacts to added noise far more strongly than the shift monitor does (noise with half the sensors' own variance and no bias: spread alarmed on 100% of readings, shift on 24%), and the shift monitor reacts to a small bias the spread monitor mostly misses. They are complementary, which is why the node alarms on either.
+
+**A mistake worth keeping in the record.** The risk register (RSK-032) had recorded that "a more sensitive statistic, for example CUSUM, would narrow" the gap. It was tried first, calibrated to the same 0.1% clean alarm time, on the squared distance and on three tamer transforms of it (the distance, the squared distance capped at 9 and at 16, its logarithm): none beat the rolling mean (best 57.5% at fouling 0.2, against 59.5%). The limit was the quantity being monitored, not the way it was accumulated: at fouling 0.2 the squared distance moves only from 4.0 to 4.6 against a spread of 3.3. Monitoring the mean deviation, which the fault actually moves, was what worked. (The CUSUM experiment is not in the repository; its numbers are from a scratch script and are recorded here as a measurement, not a test.)
+
+**What the shift monitor does not do.** It is not a fault diagnosis. A change in the real mix of plates (a menu change that makes plates heavier) or a change in the room's light would raise it just as a fouling lens does: it says *the inputs have shifted*, and what has shifted needs a person. At fouling 0.1, where the error is already 1.6 times the clean figure, about a quarter of onsets still take more than 150 readings (about 19 minutes) to alarm (7 of 30 in the test's trials), and about 5% (the one early false alarm included) never alarm within 300. And, as everywhere in this card, the fault is the author's own simulation of a fouled lens, a pure bias with a known direction, which is the case this statistic is best at.
 
 ## How the platform uses the node's self-assessment
 
@@ -68,11 +81,11 @@ So: individually, the guard misses almost all of a slow fault (under 1% of readi
 
 ## Known limitations
 
-- State (the drift window) is in memory and starts empty after a restart.
+- State (the spread and shift windows) is in memory and starts empty after a restart: no score and no alarm for the first 30 readings (shift) and 50 (spread).
 - The sensor model is the author's design; the relationships the model learns are ones the author put there.
 - No model-update path exists yet: changing the model means rebuilding the simulator image. A versioned model store with canary and rollback is the natural next slice.
 - Drift is injected by a static `EDGE_LENS_FOULING` setting; it is not yet a scenario the scenario-injection controller can start and stop.
-- The per-reading threshold and the drift threshold are calibrated on the same simulated process they are tested on.
+- The per-reading, spread and shift thresholds are calibrated on the same simulated process they are tested on, and so is the claim that the shift monitor catches mild fouling (RSK-031).
 
 ## Scope decision: on-node inference stays on the plate-waste node only (2026-10-06)
 
@@ -89,6 +102,12 @@ The owner decided not to add models to the POS, ticket-timer or staffing sensors
 ```bash
 pip install -r edge-simulators/training/requirements.txt
 python edge-simulators/training/train_plate_waste_model.py
+```
+
+To add the shift monitor to an artifact **without retraining** (this is how 1.1.0 was made from 1.0.0: the weights are byte for byte the same, only the monitor's calibration, the version, the hash and the card change, and the script refuses an artifact that does not match its own hash):
+
+```bash
+python edge-simulators/training/train_plate_waste_model.py --add-shift-monitor
 ```
 
 Every random choice is seeded. Different scikit-learn versions can differ in the last bits, so the committed artifact and its hash are the source of truth and the tests check that retraining reproduces the quality, not the bytes. A retrained model gets a new hash; bump `MODEL_VERSION` in the trainer when you publish one.

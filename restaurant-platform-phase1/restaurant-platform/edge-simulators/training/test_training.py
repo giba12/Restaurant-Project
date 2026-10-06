@@ -71,3 +71,60 @@ def test_the_committed_card_matches_what_the_committed_artifact_does():
     features, truth = trainer.draw(8_000, seed=424242)
     estimate, _ = model.predict_batch(features)
     assert abs(trainer.rmse(estimate, truth) - artifact["card"]["holdout_rmse_g"]) <= 0.15 * artifact["card"]["holdout_rmse_g"]
+
+
+def test_a_retrained_model_carries_a_calibrated_shift_monitor_that_beats_the_spread_monitor(retrained):
+    card = retrained["card"]
+    assert card["shift_monitor"]["clean_time_in_alarm"] < 0.01
+    assert np.isfinite(retrained["ood"]["shift_threshold"]) and retrained["ood"]["shift_threshold"] > 0
+    mild = card["drift_response"]["0.2"]
+    assert mild["shift_detected_fraction"] >= 0.9
+    assert mild["shift_detected_fraction"] > mild["drift_detected_fraction"]
+
+
+def test_the_committed_card_states_what_the_committed_shift_monitor_measured():
+    artifact = json.load(open(edge_model.DEFAULT_MODEL_PATH))
+    card = artifact["card"]
+    assert card["shift_monitor"]["threshold"] == artifact["ood"]["shift_threshold"]
+    assert card["shift_monitor"]["window"] == artifact["ood"]["shift_window"]
+    assert card["shift_monitor"]["clean_time_in_alarm"] < 0.005
+    assert card["drift_response"]["0.2"]["shift_detected_fraction"] >= 0.9
+    assert card["drift_response"]["0.2"]["drift_detected_fraction"] < 0.7  # the weakness the shift monitor was added for
+
+
+@pytest.fixture
+def small_sizes(monkeypatch):
+    monkeypatch.setattr(trainer, "DRIFT_CALIBRATION_READINGS", 40_000)
+    monkeypatch.setattr(trainer, "DRIFT_ONSET_TRIALS", 20)
+
+
+def legacy_artifact(tmp_path):
+    """The committed artifact as it was before the shift monitor: no shift keys, version 1.0.0, its own hash."""
+    artifact = json.load(open(edge_model.DEFAULT_MODEL_PATH))
+    del artifact["ood"]["shift_window"], artifact["ood"]["shift_threshold"]
+    artifact["model_version"] = "1.0.0"
+    artifact["weights_sha256"] = edge_model.behaviour_hash(artifact)
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps(artifact))
+    return path, artifact
+
+
+def test_adding_the_shift_monitor_changes_the_monitor_and_the_hash_but_not_the_weights(tmp_path, small_sizes):
+    path, legacy = legacy_artifact(tmp_path)
+    upgraded = trainer.add_shift_monitor(path)
+    assert upgraded["layers"] == legacy["layers"]
+    assert upgraded["input_mean"] == legacy["input_mean"] and upgraded["input_std"] == legacy["input_std"]
+    assert upgraded["ood"]["mean"] == legacy["ood"]["mean"] and upgraded["ood"]["precision"] == legacy["ood"]["precision"]
+    assert upgraded["model_version"] == trainer.MODEL_VERSION
+    assert upgraded["weights_sha256"] != legacy["weights_sha256"]
+    loaded = edge_model.EdgeModel(upgraded)  # the new hash verifies
+    committed = json.load(open(edge_model.DEFAULT_MODEL_PATH))["ood"]["shift_threshold"]
+    assert 0.7 * committed < loaded.shift_threshold < 1.4 * committed  # a shorter calibration stream, so only roughly equal
+
+
+def test_the_upgrade_refuses_an_artifact_that_does_not_match_its_own_hash(tmp_path, small_sizes):
+    path, legacy = legacy_artifact(tmp_path)
+    legacy["layers"][0]["bias"][0] += 0.5
+    path.write_text(json.dumps(legacy))
+    with pytest.raises(edge_model.ModelIntegrityError):
+        trainer.add_shift_monitor(path)

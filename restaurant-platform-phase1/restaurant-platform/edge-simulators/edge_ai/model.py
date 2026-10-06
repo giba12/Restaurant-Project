@@ -21,9 +21,19 @@ Three things make this an edge model and not just a function call:
     fault (a fouled lens leaves each reading plausible). So a DriftMonitor
     also keeps a rolling mean of the squared distance over the last
     `window` readings and raises `drift_suspected` when it passes a threshold
-    calibrated on clean data. Nothing on the node can tell an estimate is
-    wrong (there is no ground truth in the field), but it can tell that its
-    inputs have stopped looking like anything it was trained on.
+    calibrated on clean data. That statistic is blunt, though: it reacts to
+    how far readings are from the training data and ignores which way, so it
+    missed about 40% of the onsets of a mild fault. A second monitor, the
+    ShiftMonitor, tests the window's *mean* deviation (a Hotelling T-squared
+    on the last `shift_window` readings), which is the shape a slow sensor
+    fault actually has, and catches the same mild fault in nearly every trial
+    within a few minutes. The two are complementary: the spread monitor
+    reacts to added noise far more strongly than the shift monitor does, the
+    shift monitor to a small consistent bias the spread monitor mostly misses,
+    so the node alarms when either does. Nothing on the node
+    can tell an estimate is wrong (there is no ground truth in the field), but
+    it can tell that its inputs have stopped looking like anything it was
+    trained on.
   * It is accountable. Every estimate carries the model id, version and a
     SHA-256 over everything that determines its behaviour. The loader
     recomputes that hash and refuses to start on a mismatch, so a corrupted
@@ -38,7 +48,7 @@ import collections
 import hashlib
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -71,6 +81,8 @@ class Inference:
     ood_score: float
     out_of_distribution: bool
     latency_ms: float
+    # The reading's standardised distance from the training mean, per channel: what the ShiftMonitor averages.
+    deviation: tuple = field(default=(), compare=False, repr=False)
 
 
 class EdgeModel:
@@ -104,6 +116,8 @@ class EdgeModel:
         self.ood_threshold = float(ood["threshold"])
         self.drift_window = int(ood["drift_window"])
         self.drift_threshold = float(ood["drift_threshold"])
+        self.shift_window = int(ood["shift_window"])
+        self.shift_threshold = float(ood["shift_threshold"])
 
     @classmethod
     def from_file(cls, path=DEFAULT_MODEL_PATH) -> "EdgeModel":
@@ -131,8 +145,15 @@ class EdgeModel:
         z = self._standardise(features)
         return self._forward(z), self._distance(z)
 
+    def deviations(self, features: np.ndarray) -> np.ndarray:
+        """Per-channel standardised deviation from the training mean, for many readings at once."""
+        return self._standardise(features) - self._ood_mean
+
     def new_drift_monitor(self) -> "DriftMonitor":
         return DriftMonitor(self.drift_window, self.drift_threshold)
+
+    def new_shift_monitor(self) -> "ShiftMonitor":
+        return ShiftMonitor(self.shift_window, self.shift_threshold, self._ood_precision)
 
     # ---- the one-reading path the node actually runs
 
@@ -141,12 +162,14 @@ class EdgeModel:
         z = self._standardise(features)
         grams = float(self._forward(z))
         distance = float(self._distance(z))
+        deviation = tuple(float(v) for v in z - self._ood_mean)
         latency_ms = (time.perf_counter() - start) * 1000.0
         return Inference(
             grams=round(grams, 1),
             ood_score=round(distance, 3),
             out_of_distribution=distance > self.ood_threshold,
             latency_ms=round(latency_ms, 4),
+            deviation=deviation,
         )
 
 
@@ -179,3 +202,34 @@ class DriftMonitor:
             return None, False
         score = self._total / self.window
         return round(score, 3), score > self.threshold
+
+
+class ShiftMonitor:
+    """
+    Hotelling T-squared of the mean deviation over the last `window` readings.
+
+    score = window * mean' P mean, where `mean` is the average of the last
+    `window` per-channel deviations from the training data and P is the
+    guard's precision matrix. For in-distribution data it follows a
+    chi-squared distribution with one degree of freedom per channel, so it
+    sits near the number of channels (4) and the calibrated threshold lands
+    close to the chi-squared tail point; a sustained bias in any direction
+    (a fouling lens dims light, area and height together) adds to it with
+    every reading. Until a full window has been seen there is no score and
+    no alarm. State is in memory and starts empty after a restart.
+    """
+
+    def __init__(self, window: int, threshold: float, precision):
+        self.window = window
+        self.threshold = threshold
+        self._precision = np.asarray(precision, dtype=np.float64)
+        self._deviations = collections.deque(maxlen=window)
+
+    def update(self, deviation):
+        """Feed one reading's per-channel deviation; returns (score or None, shift_suspected)."""
+        self._deviations.append(np.asarray(deviation, dtype=np.float64))
+        if len(self._deviations) < self.window:
+            return None, False
+        mean = np.mean(self._deviations, axis=0)
+        score = round(float(self.window * (mean @ self._precision @ mean)), 3)
+        return score, score > self.threshold

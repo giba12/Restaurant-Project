@@ -84,8 +84,11 @@ def test_the_shipped_model_loads_and_reports_the_hash_it_was_published_with(mode
     lambda a: a["input_mean"].__setitem__(0, a["input_mean"][0] + 1.0),
     lambda a: a["ood"].__setitem__("threshold", a["ood"]["threshold"] * 2),
     lambda a: a["ood"].__setitem__("drift_threshold", a["ood"]["drift_threshold"] * 2),
+    lambda a: a["ood"].__setitem__("shift_threshold", a["ood"]["shift_threshold"] * 2),
+    lambda a: a["ood"].__setitem__("shift_window", a["ood"]["shift_window"] + 1),
     lambda a: a.__setitem__("output_scale_g", a["output_scale_g"] * 1.01),
-], ids=["a-weight", "a-bias", "input-statistics", "ood-threshold", "drift-threshold", "output-scale"])
+], ids=["a-weight", "a-bias", "input-statistics", "ood-threshold", "drift-threshold", "shift-threshold", "shift-window",
+        "output-scale"])
 def test_any_change_to_what_determines_behaviour_is_refused_at_load(tamper):
     # The point of the hash: a corrupted or hand-edited model must stop the
     # node, not emit plausible-looking numbers under the old model's name.
@@ -276,14 +279,143 @@ def test_the_drift_monitor_catches_a_fouling_lens(model, fouling, within):
     assert missed == 0, f"{missed} of 30 fouling onsets at {fouling} went unnoticed within {within} readings"
 
 
-def test_a_restarted_node_starts_with_an_empty_drift_window():
+def test_a_restarted_node_starts_with_empty_drift_and_shift_windows():
     # State is in memory and is documented as lost on restart; this pins it.
     node = plate_waste.PlateWasteNode(edge_model.EdgeModel.from_file(), rng=random.Random(121))
     for _ in range(60):
         node.next_event()
-    assert node.next_event()["edge_inference"]["drift_score"] is not None
+    inference = node.next_event()["edge_inference"]
+    assert inference["drift_score"] is not None and inference["shift_score"] is not None
     reborn = plate_waste.PlateWasteNode(edge_model.EdgeModel.from_file(), rng=random.Random(121))
-    assert reborn.next_event()["edge_inference"]["drift_score"] is None
+    inference = reborn.next_event()["edge_inference"]
+    assert inference["drift_score"] is None and inference["shift_score"] is None
+
+
+# ------------------------------------------------------------------ the shift monitor
+
+def test_the_shift_monitor_reports_nothing_until_its_window_is_full():
+    monitor = edge_model.ShiftMonitor(window=5, threshold=1.0, precision=np.eye(4))
+    for _ in range(4):
+        assert monitor.update([1.0, 1.0, 1.0, 1.0]) == (None, False)
+    score, suspected = monitor.update([1.0, 1.0, 1.0, 1.0])
+    assert score == 20.0 and suspected is True  # 5 readings * |mean|^2 (= 4)
+
+
+def test_the_shift_monitor_is_a_true_rolling_hotelling_statistic():
+    rng = np.random.default_rng(211)
+    precision = np.linalg.inv(np.cov(rng.normal(size=(500, 4)) @ rng.normal(size=(4, 4)), rowvar=False))
+    monitor = edge_model.ShiftMonitor(window=6, threshold=1e9, precision=precision)
+    seen = []
+    for _ in range(40):
+        deviation = rng.normal(size=4)
+        seen.append(deviation)
+        score, _ = monitor.update(deviation)
+        if len(seen) >= 6:
+            mean = np.mean(seen[-6:], axis=0)
+            assert score == pytest.approx(round(float(6 * mean @ precision @ mean), 3), abs=1e-3)
+
+
+def test_the_shift_monitor_stays_quiet_through_normal_operation(model):
+    # Calibrated to alarm about 0.1% of the time on clean data (measured 0.10%);
+    # 1% is a loose bound that still fails a monitor set far too tight.
+    features, _ = draw(20000, seed=111)
+    monitor = model.new_shift_monitor()
+    alarms = readings = 0
+    for deviation in model.deviations(features):
+        score, suspected = monitor.update(deviation)
+        if score is not None:
+            readings += 1
+            alarms += suspected
+    assert alarms / readings < 0.01
+
+
+def test_a_clean_streams_shift_score_sits_near_the_number_of_channels(model):
+    # The statistic follows a chi-squared law with one degree of freedom per
+    # channel on in-distribution data, so its average is about 4. A mean far
+    # from 4 means the calibration or the statistic is wrong.
+    features, _ = draw(20000, seed=111)
+    monitor = model.new_shift_monitor()
+    scores = [s for s, _ in (monitor.update(d) for d in model.deviations(features)) if s is not None]
+    assert 3.0 < float(np.mean(scores)) < 5.0
+
+
+def run_onsets(model, fouling, trials, horizon):
+    """(trials already alarming at onset, onsets never alarmed within horizon, delays) for each monitor."""
+    out = {"spread": [0, 0, []], "shift": [0, 0, []]}
+    for trial in range(trials):
+        clean, _ = draw(model.drift_window, seed=1000 + trial)
+        fouled, _ = draw(horizon, seed=2000 + trial, lens_fouling=fouling)
+        features = np.vstack([clean, fouled])
+        _, distance = model.predict_batch(features)
+        deviations = model.deviations(features)
+        monitors = {"spread": model.new_drift_monitor(), "shift": model.new_shift_monitor()}
+        first = {"spread": None, "shift": None}
+        early = {"spread": False, "shift": False}
+        for i, d in enumerate(np.round(distance, 3)):
+            alarms = {"spread": monitors["spread"].update(float(d))[1], "shift": monitors["shift"].update(deviations[i])[1]}
+            for kind, alarm in alarms.items():
+                if alarm and i < model.drift_window:
+                    early[kind] = True
+                if alarm and i >= model.drift_window and first[kind] is None:
+                    first[kind] = i - model.drift_window + 1
+        for kind in out:
+            if early[kind]:
+                out[kind][0] += 1  # a false alarm before the fault: not a detection, reported separately
+            elif first[kind] is None:
+                out[kind][1] += 1
+            else:
+                out[kind][2].append(first[kind])
+    return out
+
+
+@pytest.mark.parametrize("fouling, within", [(0.15, 150), (0.2, 60), (0.4, 40)])
+def test_the_shift_monitor_catches_a_mild_fouling_lens(model, fouling, within):
+    # Measured over 200 onsets: fouling 0.2 detected in 99.5% with a median of
+    # 23 readings (the spread monitor: 59.5%, median 143), 0.15 in 99.5%
+    # (spread: 22.5%), 0.1 in 94.5% (spread: 8.5%). At the default 8 readings a
+    # minute, 23 readings is about three minutes.
+    result = run_onsets(model, fouling, trials=30, horizon=within)["shift"]
+    early, missed, _ = result
+    assert early <= 3, f"{early} of 30 trials alarmed before the fault began; the monitor is too tight"
+    assert missed == 0, f"{missed} of {30 - early} fouling onsets at {fouling} went unnoticed within {within} readings"
+
+
+def test_the_spread_monitor_alone_missed_the_mild_faults_which_is_why_the_shift_monitor_was_added(model):
+    # The honest limit of the first monitor, pinned: at fouling 0.2 it still
+    # misses most onsets within 150 readings (measured 19 of 30 here, 40.5% of
+    # onsets never alarm within 300 over 200 trials), and at 0.15 nearly all.
+    early_spread, missed_spread, _ = run_onsets(model, 0.15, trials=30, horizon=150)["spread"]
+    assert missed_spread >= 20
+    early_spread, missed_spread, _ = run_onsets(model, 0.2, trials=30, horizon=150)["spread"]
+    assert missed_spread >= 10
+
+
+def test_the_shift_monitor_has_a_floor_below_which_it_is_slow(model):
+    # Pinned so the claim is not read as "catches any fault": at fouling 0.1,
+    # where error is already 1.6 times clean, about a quarter of onsets still
+    # take longer than 150 readings (about 19 minutes) to alarm.
+    early, missed, delays = run_onsets(model, 0.1, trials=30, horizon=150)["shift"]
+    assert missed >= 3
+    assert float(np.median(delays)) > 40
+
+
+def test_added_noise_is_caught_by_the_spread_monitor_far_more_than_by_the_shift_monitor(model):
+    # The two monitors are complementary, not redundant. Noise with no bias
+    # raises each reading's distance but mostly averages out of the mean.
+    features, _ = draw(5000, seed=211)
+    noisy = features + np.random.default_rng(5).normal(0.0, np.sqrt(0.5), features.shape) * model._std
+    _, distance = model.predict_batch(noisy)
+    spread, shift = model.new_drift_monitor(), model.new_shift_monitor()
+    spread_alarms, shift_alarms, readings = 0, 0, 0
+    for d, deviation in zip(np.round(distance, 3), model.deviations(noisy)):
+        a = spread.update(float(d))
+        b = shift.update(deviation)
+        if a[0] is not None and b[0] is not None:
+            readings += 1
+            spread_alarms += a[1]
+            shift_alarms += b[1]
+    assert spread_alarms / readings > 0.9   # measured 100%
+    assert shift_alarms / readings < 0.5    # measured 24%
 
 
 def test_a_node_with_a_fouled_lens_reports_drift_in_its_own_events():
@@ -292,6 +424,48 @@ def test_a_node_with_a_fouled_lens_reports_drift_in_its_own_events():
     assert any(e["edge_inference"]["drift_suspected"] for e in events[60:])
     healthy = plate_waste.PlateWasteNode(edge_model.EdgeModel.from_file(), rng=random.Random(131))
     assert not any(healthy.next_event()["edge_inference"]["drift_suspected"] for _ in range(120))
+
+
+def test_a_node_with_a_mildly_fouled_lens_reports_drift_within_a_few_minutes_of_readings():
+    # Fouling 0.2 is a fault the first monitor alone missed in four trials of
+    # ten. Here the node's own event stream must raise drift_suspected, and by
+    # the shift score, within 60 readings of its window filling.
+    model = edge_model.EdgeModel.from_file()
+    node = plate_waste.PlateWasteNode(model, lens_fouling=0.2, rng=random.Random(133))
+    events = [node.next_event()["edge_inference"] for _ in range(120)]
+    alarmed = [i for i, e in enumerate(events) if e["drift_suspected"]]
+    assert alarmed and alarmed[0] < 60
+    assert any(e["shift_score"] is not None and e["shift_score"] > model.shift_threshold for e in events)
+
+
+def test_drift_suspected_is_true_exactly_when_either_score_is_over_its_threshold():
+    model = edge_model.EdgeModel.from_file()
+    for fouling in (0.0, 0.2, 0.6):
+        node = plate_waste.PlateWasteNode(model, lens_fouling=fouling, rng=random.Random(135))
+        for _ in range(150):
+            e = node.next_event()["edge_inference"]
+            over_spread = e["drift_score"] is not None and e["drift_score"] > model.drift_threshold
+            over_shift = e["shift_score"] is not None and e["shift_score"] > model.shift_threshold
+            assert e["drift_suspected"] == (over_spread or over_shift)
+
+
+def test_a_noisy_sensor_is_reported_by_the_node_through_the_spread_alarm_alone(monkeypatch):
+    # The node must alarm when EITHER monitor does. Noise with no bias is the case
+    # where the spread monitor fires and the shift score often stays under its
+    # threshold, so a node that listened only to the shift monitor would miss it.
+    model = edge_model.EdgeModel.from_file()
+    real_read = plate_waste.sensor.read_sensors
+    noise = random.Random(137)
+
+    def noisy(grams, rng, lens_fouling=0.0):
+        reading = real_read(grams, rng, lens_fouling)
+        return {name: value + noise.gauss(0.0, 0.7071) * float(std) for (name, value), std in zip(reading.items(), model._std)}
+
+    monkeypatch.setattr(plate_waste.sensor, "read_sensors", noisy)
+    node = plate_waste.PlateWasteNode(model, rng=random.Random(139))
+    events = [node.next_event()["edge_inference"] for _ in range(300)][model.drift_window:]
+    spread_only = [e for e in events if e["drift_suspected"] and e["shift_score"] <= model.shift_threshold]
+    assert len(spread_only) > 50, "the node did not report drift in readings only the spread monitor flagged"
 
 
 # ------------------------------------------------------------------ the contract
@@ -304,7 +478,7 @@ def test_every_event_from_the_node_satisfies_the_schema():
 
 def test_the_event_names_the_exact_model_that_produced_the_estimate(model):
     event = plate_waste.PlateWasteNode(model, rng=random.Random(151)).next_event()
-    assert event["schema_version"] == "1.1.0"
+    assert event["schema_version"] == "1.2.0"
     inference = event["edge_inference"]
     assert (inference["model_id"], inference["model_version"], inference["model_sha256"]) == (
         model.model_id, model.model_version, model.sha256)
@@ -333,6 +507,14 @@ def test_events_without_edge_inference_are_still_valid_for_older_producers():
     jsonschema.validate(event, SCHEMA)
 
 
+def test_an_event_from_before_the_shift_score_still_validates():
+    # Backward compatibility of the 1.2.0 addition: a 1.1.0 event has no shift_score.
+    event = plate_waste.PlateWasteNode(edge_model.EdgeModel.from_file(), rng=random.Random(173)).next_event()
+    del event["edge_inference"]["shift_score"]
+    event["schema_version"] = "1.1.0"
+    jsonschema.validate(event, SCHEMA)
+
+
 @pytest.mark.parametrize("damage", [
     lambda e: e["edge_inference"].__setitem__("model_sha256", "not-a-hash"),
     lambda e: e["edge_inference"].__setitem__("model_version", "latest"),
@@ -340,8 +522,10 @@ def test_events_without_edge_inference_are_still_valid_for_older_producers():
     lambda e: e["edge_inference"].__setitem__("inference_latency_ms", -0.1),
     lambda e: e["edge_inference"].__setitem__("out_of_distribution", "yes"),
     lambda e: e["edge_inference"].__setitem__("surprise", 1),
+    lambda e: e["edge_inference"].__setitem__("shift_score", "high"),
     lambda e: e["edge_inference"].pop("model_id"),
-], ids=["bad-hash", "bad-version", "negative-distance", "negative-latency", "non-boolean-flag", "unknown-field", "missing-model-id"])
+], ids=["bad-hash", "bad-version", "negative-distance", "negative-latency", "non-boolean-flag", "unknown-field", "text-shift-score",
+                                  "missing-model-id"])
 def test_the_schema_rejects_a_malformed_edge_inference(damage):
     event = plate_waste.PlateWasteNode(edge_model.EdgeModel.from_file(), rng=random.Random(181)).next_event()
     damage(event)

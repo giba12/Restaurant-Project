@@ -107,6 +107,13 @@ def test_a_node_with_no_key_is_reported_with_the_remedy(env):
     assert result.returncode != 0 and "controlKeySecret" in out
 
 
+def test_a_python_without_paho_is_reported_with_the_remedy_before_anything_is_opened(env):
+    # `false -c ...` stands in for an interpreter that cannot import paho.mqtt: the script must say what to do, not trace back.
+    result, out = run(env, PYTHON="false")
+    assert result.returncode == 2 and "paho" in out and "PYTHON=" in out
+    assert "port-forward" not in env["log"].read_text(), "the port-forward was opened before the check"
+
+
 def test_no_credential_is_printed_or_put_on_a_command_line(env):
     _, out = run(env)
     calls = env["log"].read_text()

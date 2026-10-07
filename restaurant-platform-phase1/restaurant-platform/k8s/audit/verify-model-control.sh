@@ -4,6 +4,7 @@
 # "unchanged", and the command signed with the wrong key must be answered "rejected".
 #
 #   bash k8s/audit/verify-model-control.sh              # needs kubectl, python3 with paho-mqtt, and the operator's access to the Secrets
+#   PYTHON=/path/to/venv/bin/python bash k8s/audit/verify-model-control.sh    # if the default python3 has no paho-mqtt
 #
 # What it does (namespace $NS, node $NODE):
 #   1. checks the node's pod holds a control key (prints only its length)
@@ -42,6 +43,13 @@ secret() { kubectl get secret "$1" -n "$NS" -o "jsonpath={.data.$2}" | base64 -d
 operator() { (cd "$TOOLS" && "$PYTHON" -m control.edge_control "$@"); }
 state() { operator status --wait 4 | sed -n "s/^$NODE: \([a-z]*\) - .*/\1/p"; }
 reason() { operator status --wait 4 | sed -n "s/^$NODE: [a-z]* - \(.*\); running .*/\1/p"; }
+
+# The operator tool needs paho-mqtt. Say so before anything is opened, rather than failing with a traceback after the port-forward.
+if ! "$PYTHON" -c 'import paho.mqtt.client' >/dev/null 2>&1; then
+  echo "FAIL  '$PYTHON' cannot import paho.mqtt. Install it (pip install paho-mqtt==2.1.0) or point PYTHON at an environment that has it:" >&2
+  echo "      PYTHON=/path/to/venv/bin/python bash k8s/audit/verify-model-control.sh" >&2
+  exit 2
+fi
 
 echo "== 1. does the node hold a key?"
 length="$(kubectl exec -n "$NS" "deploy/$DEPLOYMENT" -- sh -c 'echo ${#EDGE_CONTROL_KEY}' 2>/dev/null || echo 0)"

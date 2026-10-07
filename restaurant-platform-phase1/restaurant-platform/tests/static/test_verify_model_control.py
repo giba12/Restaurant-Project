@@ -73,10 +73,18 @@ def env(tmp_path):
     (bin_dir / "kubectl").chmod(0o755)
     (tools / "control" / "__init__.py").write_text("")
     (tools / "control" / "edge_control.py").write_text(OPERATOR)
+    # The script checks its interpreter can import paho.mqtt before it starts. The stand-in operator needs no paho (so neither does
+    # this test, and CI's static job has none installed): this wrapper answers that one check and runs everything else for real.
+    python = bin_dir / "python-with-paho-check-answered"
+    python.write_text(f'''#!/usr/bin/env bash
+if [ "$1" = "-c" ] && [[ "$2" == *paho* ]]; then exit 0; fi
+exec "{sys.executable}" "$@"
+''')
+    python.chmod(0o755)
     log = tmp_path / "calls.log"
     log.write_text("")
     environment = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "SECRETS": str(secrets), "LOG": str(log), "EDGE_TOOLS": str(tools),
-                   "NODE_STATE": str(tmp_path / "node.json"), "EXPECTED_MASTER": SECRETS["edge-control-master/key"], "PYTHON": sys.executable}
+                   "NODE_STATE": str(tmp_path / "node.json"), "EXPECTED_MASTER": SECRETS["edge-control-master/key"], "PYTHON": str(python)}
     return {"env": environment, "log": log}
 
 

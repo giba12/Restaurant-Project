@@ -57,6 +57,11 @@ def make_certificate(directory):
     subprocess.run(["docker", "run", "--rm", "-v", f"{public}:/tls-public", "-v", f"{private}:/tls-private",
                     "-v", f"{MOSQUITTO_DIR}/generate-tls.sh:/generate-tls.sh:ro", "--entrypoint", "/bin/sh", OPENSSL_IMAGE, "/generate-tls.sh"],
                    check=True, capture_output=True)
+    # The script (as it must) leaves the key readable by root alone. Under rootful Docker (GitHub's runners) that root is not the
+    # user running these tests, which read the key to compare and copy it; under rootless Podman it is, which hid this. Only
+    # the test's own copy of the key is opened up.
+    subprocess.run(["docker", "run", "--rm", "-v", f"{private}:/tls-private", "--entrypoint", "/bin/sh", OPENSSL_IMAGE, "-c", "chmod 0644 /tls-private/tls.key"],
+                   check=True, capture_output=True)
     return public, private
 
 

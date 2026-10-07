@@ -358,3 +358,57 @@ def test_the_live_broker_refuses_anonymous_clients_and_wrong_passwords_and_accep
         "                  'operator': attempt('edge-operator', 'changeme-local-dev-only'), 'plaintext_port_open': plaintext_port_open()}))\n")
     result = json.loads(out.strip().splitlines()[-1])
     assert result == {"anonymous": True, "wrong": True, "unknown": True, "operator": False, "plaintext_port_open": False}, result
+
+
+# ------------------------------------------------------------------ a master-secret rotation, on the live stack
+
+NODE = "sim-plate-cam-01"
+ROTATED_MASTER = "rotated-master-for-the-e2e-test"
+
+
+def derive(master, monkeypatch):
+    monkeypatch.setenv("EDGE_CONTROL_MASTER_KEY", master)
+    return operator("derive-key", "--node", NODE).strip().splitlines()[-1]
+
+
+def recreate_plate_node():
+    compose("up", "-d", "--no-deps", "--no-build", "--force-recreate", "edge-sim-plate-waste", timeout=180)
+    wait_for(lambda: edge_status().get("state") in ("ready", "unchanged", "applied", "rejected"), 120, description="the recreated node to report a status")
+
+
+def command_as(master, monkeypatch):
+    """Roll the model the node already runs out as an operator holding `master`; returns the node's answer to exactly that command."""
+    monkeypatch.setenv("EDGE_CONTROL_MASTER_KEY", master)
+    request = re.search(r"request ([0-9a-f-]{36})", operator("rollout", "--version", BAKED, "--nodes", NODE)).group(1)
+    wait_for(lambda: edge_status().get("request_id") == request, 60, description="the node to answer that command")
+    return edge_status()
+
+
+def test_a_live_node_is_rotated_to_a_new_master_obeys_both_during_the_window_and_refuses_the_old_one_afterwards(monkeypatch):
+    # The procedure of provision-mqtt-auth.sh rotate-master, on the running stack: a real node container restarted with its key
+    # under the NEW master as current and its key under the OLD master as previous, commanded by the real operator tool as each
+    # master in turn; then restarted again without the previous key, which is what finish-rotation and the chart upgrade do.
+    old_master = "dev-only-edge-control-master-key"
+    old_key, new_key = derive(old_master, monkeypatch), derive(ROTATED_MASTER, monkeypatch)
+    assert old_key != new_key
+    try:
+        monkeypatch.setenv("EDGE_CONTROL_MASTER_KEY", old_master)
+        operator("clear", "--nodes", NODE)
+
+        monkeypatch.setenv("EDGE_CONTROL_KEY", new_key)
+        monkeypatch.setenv("EDGE_CONTROL_KEY_PREVIOUS", old_key)
+        recreate_plate_node()
+        assert command_as(old_master, monkeypatch)["state"] == "unchanged", "the window did not accept the old master"
+        assert command_as(ROTATED_MASTER, monkeypatch)["state"] == "unchanged", "the window did not accept the new master"
+
+        monkeypatch.delenv("EDGE_CONTROL_KEY_PREVIOUS")
+        recreate_plate_node()
+        refused = command_as(old_master, monkeypatch)
+        assert refused["state"] == "rejected" and "bad signature" in refused["reason"], refused
+        assert command_as(ROTATED_MASTER, monkeypatch)["state"] == "unchanged", "the new master stopped working"
+    finally:
+        monkeypatch.delenv("EDGE_CONTROL_KEY", raising=False)
+        monkeypatch.delenv("EDGE_CONTROL_KEY_PREVIOUS", raising=False)
+        monkeypatch.setenv("EDGE_CONTROL_MASTER_KEY", old_master)
+        operator("clear", "--nodes", NODE)
+        recreate_plate_node()

@@ -192,6 +192,8 @@ services:
       # for local use only; for anything shared set both EDGE_CONTROL_MASTER_KEY and this (derive-key prints it).
       # A node with no key takes no commands at all. During a key rotation add EDGE_CONTROL_KEY_PREVIOUS.
       EDGE_CONTROL_KEY: ${EDGE_CONTROL_KEY:-c5eac9823b3aa0b98f1618ca37a086207b59cb4adf3979a18cb4dc3f1d374e78}
+      # Only while a key is being rotated: the key being replaced, which the node accepts as well as the new one (empty: none).
+      EDGE_CONTROL_KEY_PREVIOUS: ${EDGE_CONTROL_KEY_PREVIOUS:-}
 
   edge-sim-pos-transaction:
     <<: *edge-sim

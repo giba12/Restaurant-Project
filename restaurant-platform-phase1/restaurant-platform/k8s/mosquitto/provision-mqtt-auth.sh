@@ -179,7 +179,7 @@ else
   # "user password" lines on standard input, so no password appears in this machine's process list.
   for user in "${USERS[@]}"; do printf '%s %s\n' "$user" "$(field "mqtt-$user" password)"; done |
     "$ENGINE" run --rm -i -v "$work:/w" --entrypoint /bin/ash "$IMAGE" -c \
-      ': > /w/passwd; while read -r user password; do mosquitto_passwd -b /w/passwd "$user" "$password" >/dev/null; done; chmod 0644 /w/passwd'
+      'umask 077; : > /w/passwd; while read -r user password; do mosquitto_passwd -b /w/passwd "$user" "$password" >/dev/null; done; chmod 0644 /w/passwd'
   kubectl create secret generic mosquitto-auth -n "$NS" "--from-file=passwd=$work/passwd" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   say "wrote secret mosquitto-auth"
 fi

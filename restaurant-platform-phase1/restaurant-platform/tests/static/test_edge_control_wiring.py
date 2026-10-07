@@ -46,6 +46,12 @@ def test_the_compose_key_can_be_set_from_the_environment_and_has_a_local_default
     assert re.fullmatch(r"\$\{EDGE_CONTROL_KEY:-[^}]+\}", key), key
 
 
+def test_the_compose_previous_key_is_empty_by_default_and_only_the_plate_node_can_have_one():
+    services = compose()
+    assert services["edge-sim-plate-waste"]["environment"]["EDGE_CONTROL_KEY_PREVIOUS"] == "${EDGE_CONTROL_KEY_PREVIOUS:-}"
+    assert [n for n in EDGE_SERVICES if "EDGE_CONTROL_KEY_PREVIOUS" in services[n]["environment"]] == ["edge-sim-plate-waste"]
+
+
 def test_the_four_simulators_still_share_their_connection_settings():
     # The shared environment moved to a top-level extension field so the key stays on one node; nothing else may change.
     services = compose()

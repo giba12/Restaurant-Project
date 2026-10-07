@@ -13,8 +13,9 @@
 # the moment the broker requires them: (a) Mosquitto is upgraded with auth.enabled=false (as before, anonymous), (b)
 # k8s/mosquitto/provision-mqtt-auth.sh creates every credential as a Secret, (c) the simulators and the bridge are upgraded so each
 # carries its own (they work against an anonymous broker too), and (d) only then is Mosquitto upgraded with auth.enabled=true. Until
-# (d) the broker is exactly as open as before, and after it nothing can connect without a login. Nothing here enables model control on
-# a node: that stays an explicit choice (controlKeySecret in k8s/edge-simulators/values.yaml).
+# (d) the broker is exactly as open as before, and after it nothing can connect without a login. Model control for the plate node
+# is switched on in k8s/edge-simulators/values.yaml (controlKeySecret names the Secret step (b) makes), so the chart upgrade in (c)
+# gives the node its own key; k8s/audit/verify-model-control.sh is the live check.
 #
 # 2026-10-05 update (DEF-152). Kafka Connect and its four MQTT connectors are replaced by the
 # mqtt-kafka-bridge (services/mqtt-kafka-bridge): a persistent MQTT session, and a message

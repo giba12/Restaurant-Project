@@ -14,7 +14,8 @@
 # node can add its own settings without the other three inheriting them.
 x-edge-sim-env: &edge-sim-env
   MQTT_HOST: mosquitto
-  MQTT_PORT: "1883"
+  MQTT_PORT: "8883"
+  MQTT_TLS_ENABLED: "true"  # the broker listens for TLS only; the certificate is in the `mosquitto-tls` volume, mounted below
   SCENARIO_CONTROL_ENABLED: "true"
   KAFKA_BOOTSTRAP_SERVERS: kafka:9092
 
@@ -29,6 +30,9 @@ services:
     # entrypoint builds the password file from these variables at start-up; unset means the local-development
     # placeholder, like the database passwords. Set them for anything shared.
     entrypoint: ["/bin/ash", "/usr/local/bin/mosquitto-auth-entrypoint.sh"]
+    depends_on:
+      mqtt-tls-init:
+        condition: service_completed_successfully
     environment:
       MQTT_PASSWORD_SIM_PLATE_CAM_01: ${MQTT_PASSWORD_SIM_PLATE_CAM_01:-changeme-local-dev-only}
       MQTT_PASSWORD_SIM_POS_01: ${MQTT_PASSWORD_SIM_POS_01:-changeme-local-dev-only}
@@ -40,9 +44,23 @@ services:
       - ./docker-compose/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./docker-compose/mosquitto/acl:/etc/mosquitto/acl.source:ro
       - ./docker-compose/mosquitto/mosquitto-auth-entrypoint.sh:/usr/local/bin/mosquitto-auth-entrypoint.sh:ro
+      # The certificate (public) and its private key, made once by mqtt-tls-init. The key is in a volume no client mounts.
+      - mosquitto-tls:/tls-public:ro
+      - mosquitto-tls-private:/tls-private:ro
       # The bridge's persistent session and the messages queued for it live here, so
       # they survive a restart of Mosquitto itself (DEF-152).
       - mosquitto-data:/mosquitto/data
+
+  # Makes the broker's TLS certificate the first time the stack starts (and again when it is within 30 days of expiring), then
+  # exits. The certificate goes to a volume every client mounts read-only; the private key goes to one only the broker mounts.
+  mqtt-tls-init:
+    image: docker.io/alpine/openssl:3.5.9
+    restart: "no"
+    entrypoint: ["/bin/sh", "/generate-tls.sh"]
+    volumes:
+      - ./docker-compose/mosquitto/generate-tls.sh:/generate-tls.sh:ro
+      - mosquitto-tls:/tls-public
+      - mosquitto-tls-private:/tls-private
 
   kafka:
     image: docker.io/apache/kafka:4.3.1
@@ -99,10 +117,13 @@ services:
         condition: service_healthy
     environment:
       MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
+      MQTT_PORT: "8883"
+      MQTT_TLS_ENABLED: "true"
       MQTT_USERNAME: rp-mqtt-kafka-bridge
       MQTT_PASSWORD: ${MQTT_PASSWORD_RP_MQTT_KAFKA_BRIDGE:-changeme-local-dev-only}
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    volumes:
+      - mosquitto-tls:/etc/mosquitto-tls:ro  # the broker's certificate, which is what this client trusts
     healthcheck:
       # Healthy once it is connected to MQTT (and so subscribed).
       test: ["CMD", "python", "bridge.py", "--check"]
@@ -155,6 +176,8 @@ services:
       # The bridge's persistent session must exist before the first event is published.
       mqtt-kafka-bridge:
         condition: service_healthy
+    volumes:
+      - mosquitto-tls:/etc/mosquitto-tls:ro  # the broker's certificate, which every simulator trusts
     environment:
       <<: *edge-sim-env
       SENSOR_TYPE: plate-waste
@@ -227,10 +250,13 @@ services:
     command: ["list"]
     environment:
       MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
+      MQTT_PORT: "8883"
+      MQTT_TLS_ENABLED: "true"
       MQTT_USERNAME: edge-operator
       MQTT_PASSWORD: ${MQTT_PASSWORD_EDGE_OPERATOR:-changeme-local-dev-only}
       EDGE_CONTROL_MASTER_KEY: ${EDGE_CONTROL_MASTER_KEY:-dev-only-edge-control-master-key}
+    volumes:
+      - mosquitto-tls:/etc/mosquitto-tls:ro
 
   # -------------------------------------------------------------------
   # Phase 4/5/6 application services -- same images/entry points as the
@@ -410,6 +436,8 @@ services:
     restart: "no"
 
 volumes:
+  mosquitto-tls:
+  mosquitto-tls-private:
   mosquitto-data:
   kafka-data:
   timescaledb-data:

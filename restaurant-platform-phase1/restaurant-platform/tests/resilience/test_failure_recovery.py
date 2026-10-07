@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import stack_fixture as stack
-from helpers import compose, inspect, restart_count, run, sql, sql_int, wait_for
+from helpers import PROJECT, compose, inspect, restart_count, run, sql, sql_int, wait_for
 
 SIMULATORS = ["edge-sim-plate-waste", "edge-sim-pos-transaction", "edge-sim-service-timing", "edge-sim-staff-shift"]
 TOPIC_TABLE = {
@@ -276,6 +276,77 @@ def test_a_mosquitto_that_is_killed_hard_loses_nothing():
     wait_for(stack.bridge_connected, 120, interval=2, description="the bridge to reconnect")
     pipeline_is_flowing()
     assert_every_published_event_was_stored(since)
+
+
+# ------------------------------------------------------------------ a disk is lost (the Compose version of losing a PVC)
+
+def volume_of(name):
+    """The real name of the project's volume `name`, found by the labels Compose puts on it."""
+    found = run(["docker", "volume", "ls", "-q", "--filter", f"label=com.docker.compose.project={PROJECT}",
+                 "--filter", f"label=com.docker.compose.volume={name}"]).stdout.split()
+    assert len(found) == 1, f"expected one volume {name} in project {PROJECT}, found {found}"
+    return found[0]
+
+
+def lose_the_disk_of(service, volume_name):
+    """Remove the service's container and then its volume, as losing a node's local volume does: nothing is stopped politely."""
+    volume = volume_of(volume_name)
+    compose("rm", "-sf", service, timeout=120)
+    run(["docker", "volume", "rm", "-f", volume])
+    assert not run(["docker", "volume", "ls", "-q", "--filter", f"name=^{volume}$"]).stdout.split(), "the volume is still there"
+
+
+def test_a_mosquitto_that_loses_its_disk_comes_back_empty_and_from_then_on_loses_nothing():
+    # Mosquitto's volume holds the bridge's persistent session and whatever was queued for it. Losing it is the case the other
+    # tests do not reach (a node or volume loss; RSK-035). What cannot be promised: the messages the broker held at that moment,
+    # and any published while the new broker had no session to queue them for. What must hold: the new broker accepts the
+    # bridge, which subscribes afresh, and from the moment it is subscribed again every event is stored.
+    pipeline_is_flowing()
+    lose_the_disk_of("mosquitto", "mosquitto-data")
+    compose("up", "-d", "--no-build", "mosquitto", timeout=180)
+    wait_for(stack.bridge_connected, 240, interval=2, description="the bridge to connect to the empty broker and subscribe again")
+    resubscribed = utc_now() + timedelta(seconds=5)
+    pipeline_is_flowing()
+    assert_every_published_event_was_stored(resubscribed)
+
+
+def test_a_database_that_loses_its_disk_is_rebuilt_from_kafka_to_exactly_what_was_there():
+    # The database is not the record of what the sensors said; Kafka is. With the producers stopped and the consumer caught up,
+    # lose the database's volume: the schema is recreated empty by the image's own start-up scripts, the consumer group is
+    # rewound to the start of every topic, and the event tables must refill to exactly what Kafka holds (storage is
+    # idempotent on event_id, so a replay can only restore, never duplicate). Tables derived from the events (summaries,
+    # findings, the twin) are not rebuilt by this and are not claimed.
+    pipeline_is_flowing()
+    compose("stop", *SIMULATORS, timeout=120)
+    try:
+        def drained():
+            if stack.consumer_lag("storage-consumer") != 0:
+                return False
+            before = {t: stack.end_offset(t) for t in TOPIC_TABLE}
+            time.sleep(8)
+            return before == {t: stack.end_offset(t) for t in TOPIC_TABLE} and stack.consumer_lag("storage-consumer") == 0
+
+        wait_for(drained, 300, interval=2, description="every event to be stored before the disk is lost")
+        offsets = {t: stack.end_offset(t) for t in TOPIC_TABLE}
+        assert all(count > 0 for count in offsets.values()), f"nothing in Kafka for some topic, so this proves nothing: {offsets}"
+        compose("stop", "storage-consumer", timeout=120)
+
+        lose_the_disk_of("timescaledb", "timescaledb-data")
+        compose("up", "-d", "--no-build", "timescaledb", timeout=180)
+        wait_for(lambda: stack.healthy("timescaledb"), 240, description="the new, empty database to be healthy")
+        assert {t: sql_int(f"SELECT count(*) FROM {table}") for t, table in TOPIC_TABLE.items()} == {t: 0 for t in TOPIC_TABLE}, \
+            "the new database was not empty, so the disk was not really lost"
+
+        compose("exec", "-T", "kafka", f"{stack.KAFKA_BIN}/kafka-consumer-groups.sh", "--bootstrap-server", "localhost:9092",
+                "--group", "storage-consumer", "--reset-offsets", "--to-earliest", "--all-topics", "--execute", timeout=120)
+        compose("start", "storage-consumer", timeout=120)
+        wait_for(lambda: {t: sql_int(f"SELECT count(*) FROM {table}") for t, table in TOPIC_TABLE.items()} == offsets, 300, interval=5,
+                 description="the event tables to refill to exactly what Kafka holds")
+        for table in TOPIC_TABLE.values():
+            assert sql_int(f"SELECT count(*) - count(DISTINCT event_id) FROM {table}") == 0
+    finally:
+        compose("start", *SIMULATORS, timeout=120)
+    pipeline_is_flowing()
 
 
 def test_sensor_events_are_not_lost_while_the_bridge_is_down():

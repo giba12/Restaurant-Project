@@ -7,12 +7,11 @@ image:
 
 mqtt:
   host: mosquitto.kafka.svc.cluster.local
-  port: 1883
-  # PLAINTEXT/1883 for now -- flip to true + port 8883 once ready to cut
-  # this over (edge-simulators/common/runtime.py's own MQTT_TLS_ENABLED).
-  # The CA cert is already mounted below either way, so cutover is a
-  # values-only change, no template edit needed.
-  tlsEnabled: false
+  # TLS on 8883, as the live cluster has run since the 2026-09-25 cutover (k8s/mosquitto-tls). The defaults used to say
+  # plaintext 1883 while the live release overrode them, so a plain `helm upgrade` would have sent the simulators' logins in the
+  # clear again; the broker's plaintext listener on 1883 is one nothing should use. The CA is mounted below either way.
+  port: 8883
+  tlsEnabled: true
   # Broker login. true: each simulator logs in as its own `sourceId` (the user name the broker's access rules know) with
   # the password in the Secret `mqtt-<sourceId>` (key `password`), made by k8s/mosquitto/provision-mqtt-auth.sh. false only
   # for the step of a cutover where clients get credentials before the broker requires them (k8s/realign).
@@ -66,11 +65,11 @@ simulators:
     eventRatePerMin: 8
     sourceId: sim-plate-cam-01
     # Name of a Secret holding THIS node's own control key under the key `key` (edge-simulators/edge_ai/updater.py).
-    # Empty means the node takes NO model commands, which is the safe default. Each node has its own key, derived from the
-    # operator's master secret, so a key taken from one node cannot command another. To enable: run
-    # k8s/mosquitto/provision-mqtt-auth.sh (it makes edge-control-<sourceId> and the master), then set this to
-    # edge-control-sim-plate-cam-01 and upgrade the chart. The broker also requires a login (mqtt.authEnabled above).
-    controlKeySecret: ""
+    # Empty would mean the node takes NO model commands. Each node has its own key, derived from the operator's master
+    # secret, so a key taken from one node cannot command another. The Secret is made by k8s/mosquitto/provision-mqtt-auth.sh
+    # (which k8s/realign runs), and the broker only lets the `edge-operator` login publish to this node's control topic.
+    # Switched on 2026-10-07. Only this node is given a key: the other three have no model and no updater.
+    controlKeySecret: edge-control-sim-plate-cam-01
     # Only while rotating this node's key: a Secret (key `key`) holding the key being replaced, which the node then accepts
     # as well as the new one (edge-simulators/control/edge_control.py describes the procedure).
     controlKeyPreviousSecret: ""

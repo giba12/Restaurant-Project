@@ -415,3 +415,12 @@ def test_the_real_kafka_producer_accepts_the_bridges_settings():
         assert producer.config["acks"] == -1 or producer.config["acks"] == "all"
     finally:
         producer.close(timeout=0)
+
+
+def test_every_routed_topic_has_a_forwarded_series_from_the_start_so_an_alert_can_see_one_that_never_forwards():
+    # A counter that has not counted has no series; a "nothing arrived in 10 minutes" alert cannot see a series that is absent.
+    from prometheus_client import REGISTRY
+    topics = ["never-forwarded-a", "never-forwarded-b"]
+    bridge.Bridge({"sensors/a": topics[0], "sensors/b": topics[1], "sensors/c": topics[1]}, lambda: None)
+    for topic in topics:
+        assert REGISTRY.get_sample_value("bridge_messages_forwarded_total", {"kafka_topic": topic}) == 0.0

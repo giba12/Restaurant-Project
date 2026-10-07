@@ -263,3 +263,69 @@ def test_a_rerun_of_the_realign_script_does_not_reopen_a_broker_that_already_req
     script = (ROOT / "k8s" / "realign" / "realign-live-cluster.sh").read_text()
     assert "helm get values mosquitto" in script and 'BROKER_AUTH=true' in script
     assert script.index("helm get values mosquitto") < script.index('--set auth.enabled="$BROKER_AUTH"')
+
+
+# ------------------------------------------------------------------ TLS on the Compose broker
+
+def _compose():
+    return yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+
+
+BROKER_CLIENTS = ["edge-sim-plate-waste", "edge-sim-pos-transaction", "edge-sim-service-timing", "edge-sim-staff-shift", "mqtt-kafka-bridge", "edge-operator"]
+
+
+def test_the_compose_broker_listens_for_tls_only():
+    conf = (MOSQUITTO / "mosquitto.conf").read_text()
+    listeners = re.findall(r"^listener (\d+)\s*$", conf, flags=re.M)
+    assert listeners == ["8883"], f"listeners: {listeners}"
+    for setting in ("certfile /mosquitto/auth/tls.crt", "keyfile /mosquitto/auth/tls.key"):
+        assert re.search(rf"^{re.escape(setting)}\s*$", conf, flags=re.M), setting
+    assert not re.search(r"^tls_version", conf, flags=re.M), "tls_version pins one protocol version, and would exclude TLS 1.3"
+
+
+def test_every_compose_client_of_the_broker_uses_tls_and_trusts_the_certificate_volume():
+    services = _compose()["services"]
+    for name in BROKER_CLIENTS:
+        env = services[name]["environment"]
+        assert env["MQTT_PORT"] == "8883" and env["MQTT_TLS_ENABLED"] == "true", name
+        assert "mosquitto-tls:/etc/mosquitto-tls:ro" in services[name]["volumes"], f"{name} does not mount the certificate read-only"
+
+
+def test_only_the_broker_and_the_certificate_generator_can_see_the_private_key():
+    services = _compose()["services"]
+    holders = sorted(n for n, svc in services.items() if any(str(v).startswith("mosquitto-tls-private:") for v in svc.get("volumes", [])))
+    assert holders == ["mosquitto", "mqtt-tls-init"], holders
+    broker_mount = next(v for v in services["mosquitto"]["volumes"] if str(v).startswith("mosquitto-tls-private:"))
+    assert broker_mount.endswith(":ro")
+
+
+def test_the_broker_waits_for_its_certificate_to_exist():
+    broker = _compose()["services"]["mosquitto"]
+    assert broker["depends_on"]["mqtt-tls-init"]["condition"] == "service_completed_successfully"
+    init = _compose()["services"]["mqtt-tls-init"]
+    assert init["restart"] == "no" and ":" in init["image"].rsplit("/", 1)[-1] and not init["image"].endswith(":latest")
+
+
+def test_the_entrypoint_copies_the_key_to_a_file_only_the_broker_can_read():
+    text = (MOSQUITTO / "mosquitto-auth-entrypoint.sh").read_text()
+    assert "cp /tls-private/tls.key /mosquitto/auth/tls.key" in text
+    assert re.search(r"chmod 0600 [^\n]*/mosquitto/auth/tls\.key", text)
+    assert re.search(r"chown mosquitto:mosquitto [^\n]*/mosquitto/auth/tls\.key", text)
+
+
+def test_the_certificate_script_is_executable_parses_and_makes_the_names_the_clients_use():
+    script = MOSQUITTO / "generate-tls.sh"
+    assert os.access(script, os.X_OK)
+    assert subprocess.run(["sh", "-n", str(script)], capture_output=True).returncode == 0
+    text = script.read_text()
+    assert "DNS:mosquitto" in text and "DNS:localhost" in text
+    assert re.search(r'chmod 0600 "\$private"', text), "the private key must be private"
+
+
+@needs_helm
+def test_the_chart_simulators_use_tls_by_default_as_the_live_release_does_so_a_plain_upgrade_cannot_send_logins_in_the_clear():
+    deployments = [d for d in render("edge-simulators") if d["kind"] == "Deployment"]
+    assert len(deployments) == 4
+    for deployment in deployments:
+        env = {e["name"]: e.get("value") for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
+        assert env["MQTT_PORT"] == "8883" and env["MQTT_TLS_ENABLED"] == "true", deployment["metadata"]["name"]

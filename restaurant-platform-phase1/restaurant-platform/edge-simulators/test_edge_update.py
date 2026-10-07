@@ -766,3 +766,23 @@ def test_the_footprint_probe_runs_to_the_end_and_its_update_is_promoted(monkeypa
     assert out["update_checks_state"] == "shadowing" and out["update_final_state"] == "applied"
     assert out["artifact_bytes"] <= edge_model.MAX_ARTIFACT_BYTES
     assert out["inference_ms_paced"]["p99"] < 5.0
+
+
+def test_a_master_rotation_never_leaves_the_operator_locked_out_and_ends_with_the_old_master_useless():
+    # The procedure of k8s/mosquitto/provision-mqtt-auth.sh rotate-master, played through one node: the pod restarts holding
+    # its key under the NEW master as current and its key under the OLD master as previous; the operator switches masters
+    # when it likes; finishing takes the old key away and the pod restarts again.
+    old_key, new_key = control.derive_node_key("master-before-rotation", NODE, 1), control.derive_node_key("master-after-rotation", NODE, 1)
+    assert old_key != new_key
+
+    n, statuses = node(OLD, key=new_key, previous_key=old_key)
+    send(n, command(NEW, key=old_key, shadow_readings=0, now=1000.0))                     # an operator still on the old master
+    assert last(statuses)["state"] == "applied" and n.updater.active.model_version == "1.1.0"
+    send(n, command(OLD, key=new_key, shadow_readings=0, force=True, now=2000.0))         # and one that has moved on
+    assert last(statuses)["state"] == "applied" and n.updater.active.model_version == "1.0.0"
+
+    n, statuses = node(OLD, key=new_key)                                                  # finish-rotation, pod restarted
+    send(n, command(NEW, key=old_key, shadow_readings=0, now=3000.0))
+    rejected(n, statuses, "bad signature")                                                # a leaked old master commands nothing
+    send(n, command(NEW, key=new_key, shadow_readings=0, now=3001.0))
+    assert last(statuses)["state"] == "applied"

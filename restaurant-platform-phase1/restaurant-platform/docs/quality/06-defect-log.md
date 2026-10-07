@@ -28,7 +28,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 
 ## Summary
 
-**165 entries** (149 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-06.
+**168 entries** (152 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-07.
 
 ### By severity
 
@@ -36,21 +36,21 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 |---|---|
 | S1 Critical | 8 |
 | S2 High | 31 |
-| S3 Medium | 53 |
-| S4 Low | 57 |
+| S3 Medium | 55 |
+| S4 Low | 58 |
 | Info | 16 |
-| **Total** | **165** |
+| **Total** | **168** |
 
 ### By status
 
 | Status | Count |
 |---|---|
-| Fixed+tested | 56 |
+| Fixed+tested | 58 |
 | Fixed | 79 |
 | Mitigated | 8 |
 | Clarified | 17 |
-| Open | 5 |
-| **Total** | **165** |
+| Open | 6 |
+| **Total** | **168** |
 
 ### By part (project period)
 
@@ -71,22 +71,23 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Part M: Replacing the ingest path (2026-10-05) | 3 |
 | Part N: Strengthening the edge node's drift monitoring and adding its update path (2026-10-06) | 6 |
 | Part O: Authenticating the broker and giving each node its own key (2026-10-06) | 5 |
-| **Total** | **165** |
+| Part P: Closing the remaining gaps in the broker and the edge control path (2026-10-07) | 3 |
+| **Total** | **168** |
 
 ### By how it was found
 
 | Found by | Count |
 |---|---|
 | Live operation, deployment or manual run | 74 |
-| Review (static or manual) | 21 |
-| Test-regime run or observation | 42 |
+| Review (static or manual) | 23 |
+| Test-regime run or observation | 43 |
 | Automated test regime (2026-10-02) | 7 |
 | Chaos test | 5 |
 | Attempting the done condition | 3 |
 | CI or first push | 9 |
 | User report | 3 |
 | Audit script | 1 |
-| **Total** | **165** |
+| **Total** | **168** |
 
 ### By class
 
@@ -94,25 +95,25 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 |---|---|
 | Deployment | 23 |
 | Logic | 31 |
-| Environment/tooling | 21 |
+| Environment/tooling | 22 |
 | Test defect | 24 |
-| Observability | 9 |
+| Observability | 10 |
 | Dependency | 7 |
 | Configuration | 6 |
 | Documentation | 7 |
 | Portability | 6 |
 | Integration | 8 |
 | Contract | 4 |
-| Security | 5 |
+| Security | 6 |
 | Supply chain | 3 |
 | Process | 3 |
 | Test infrastructure | 3 |
 | Repository hygiene | 2 |
 | Operator error | 2 |
 | Code quality | 1 |
-| **Total** | **165** |
+| **Total** | **168** |
 
-### Open items (5)
+### Open items (6)
 
 | ID | Summary | Severity |
 |---|---|---|
@@ -120,6 +121,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | DEF-091 | Whether `PodCrashLooping` had notified continuously during those 10 hours could not be established afterwards; Kubernetes' restart backoff may have pu... | Info |
 | DEF-093 | `strimzi-cluster-operator` sat at 90% of its memory limit during the investigation. | Info |
 | DEF-123 | Two Compose providers coexist on the development machine (a v1 `docker-compose` via the Podman shim, and the user's own Compose plugin, v5.5.1), so a... | Info |
+| DEF-168 | The service-timing simulator stamps events with the wall clock but measures each stage's elapsed time on a monotonic clock, so a wall-clock step (WSL2's time resync did one of 1.2 to 1.5 s backwards during a test run) leaves every later event of an open ticket stamped earlier than its own elapsed time implies; the aggregator then leaves that ticket's durations empty (it logs "timestamps went backwards"), and an end-to-end test that wants none empty fails. | S4 Low |
 | DEF-131 | The gate certifies statistical significance, not causation: it cannot detect an omitted confounder or a mis-specified treatment (for example the staff... | Info |
 
 ## Part A. Phases 1-3 (before 2026-09-10): recovered lessons
@@ -391,6 +393,16 @@ The owner asked for per-node control keys and broker authentication (RSK-036). B
 | DEF-163 | Test regime | a local end-to-end run | **Two end-to-end faults of mine.** The tests ran the operator tool through `docker compose run edge-operator`, an image nothing had built, so the first `run` spent its whole 120 s limit building it and two tests timed out. And the edge latency assertion, already loosened once, demanded that under 1% of stored estimates exceed 5 ms and failed at 1.1% (4 of 352) on a laptop running seventeen containers and a long test. | S4 Low | Test-regime run or observation | The runner builds the operator image with the stack; the assertion now allows up to 5% over 5 ms, since it exists to catch a model that is slow in general and the p99 itself is checked at the chart's CPU limit by the footprint tests. | Fixed+tested |
 | DEF-164 | Edge feature | the live-node end-to-end test | **The operator's tool crashed on every publish.** `control/edge_control.py`'s `Link` used the attribute `_refused` for two different things, the publishes the broker refused (a dict, set first) and the reason a login was refused (set to `None` a few lines later in the constructor), so `publish` failed with `'NoneType' object has no attribute 'pop'`. Every unit test of the tool used a fake link, so none could see it; the live-node end-to-end test on the real stack did. | S3 Medium | Test-regime run or observation | The two are separate attributes. Three tests drive the real `Link` against the real broker (a publish the node receives and a status it discovers, a refused login, a refused publish) and fail when the clash is put back. | Fixed+tested |
 | DEF-165 | Test regime | a local run of the load layer | **The footprint probe crashed, so four footprint tests errored.** `footprint_probe.py` builds a model-update command with `build_set_model`, which gained a required node-id parameter with the per-node keys; the probe, which only runs inside the node's image under a CPU and memory limit (needing the whole stack), was not updated and nothing fast ran it. | S4 Low | Test-regime run or observation | The probe passes the node id. A smoke test runs the probe in-process with its pacing switched off and checks it finishes with its update promoted; it fails on the old call. | Fixed+tested |
+
+## Part P. Closing the remaining gaps in the broker and the edge control path (2026-10-07)
+
+After the cluster cutover the owner asked for model control to be switched on for the cluster and for the gaps recorded against the broker and the control path to be closed (an arrival alarm per sensor topic, a master-secret rotation procedure, TLS on the Compose broker, a volume-loss trial). Doing them found three things.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-166 | Observability | review of what RSK-036 left open | **A sensor that stopped arriving raised no alert.** Mosquitto enforces its access rules silently, so a revoked or mistyped login, a misnamed topic or a stuck pod looks like quiet, not like an error, and every existing alert watched Kafka, the bridge and the pods, all of which stayed healthy. Two flaws in the first draft of the fix were caught by the rule's own tests (run with `promtool test rules`): it fired after three minutes of silence instead of ten right after a bridge restart, because a series only a minute old at 0 reads as ten flat minutes; and a topic that has not forwarded anything since the bridge started had no series at all, so the rule could not see it. | S3 Medium | Review (static or manual) | The `SensorTopicSilent` alert (ten silent minutes while the bridge is connected and Kafka is keeping up), requiring the series to be a full window old, and the bridge creating each route's counter at 0 when it starts. Seven rule tests and a bridge test; removing each guard clause turned exactly its test red. **Not yet deployed on the cluster**: it needs a `helm upgrade observability` and a bridge image import (`sudo`), which the owner runs. | Fixed+tested |
+| DEF-167 | Security | review of RSK-013 | **The Compose broker carried every login in clear text.** Since broker authentication every client sends a password, and the Compose broker listened only on plaintext 1883, so any process on the network path could read the passwords, the sensor events and the model commands. | S3 Medium | Review (static or manual) | A TLS-only listener on 8883 with a self-signed certificate made once by a one-shot `mqtt-tls-init` service (the private key in a volume only the broker mounts), every client trusting it, no plaintext listener. Six tests on the real broker and six wiring tests; the whole e2e layer ran on it. | Fixed+tested |
+| DEF-168 | Environment/tooling | an end-to-end run on the author's machine | **Two end-to-end tests failed on a wall-clock step in WSL2.** `test_completed_ticket_summaries_are_internally_consistent` found seven completed tickets with an empty duration, and the aggregator's log showed a Kafka connection time-out at start-up under load. The stored events were in the order they were sent and the ledger found 5,370 published and 0 missing, so the transport was not at fault: every event after `cook_started` in the affected tickets was stamped 1.2 to 1.5 s earlier than its own `elapsed_since_previous_stage_ms` implies, which a step of the VM's wall clock explains and nothing else does. | S4 Low | Test-regime run or observation | Diagnosed, not changed: the aggregator behaves as designed (it leaves a duration empty rather than invent a negative one), and GitHub's runners do not step their clocks. A simulator that stamped events from one monotonic anchor would not be affected, and the test could skip tickets the aggregator itself flagged. | Open |
 
 ## How the defects were found, and what that says about the process
 

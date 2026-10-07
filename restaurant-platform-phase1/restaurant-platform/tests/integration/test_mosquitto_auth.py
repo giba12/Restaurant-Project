@@ -9,7 +9,8 @@ config, ACL and password-building entrypoint, and check from outside, as a clien
   * each simulator can publish its own sensor topic and nothing else, and cannot read anything it should not;
   * the bridge can read the four sensor topics and nothing else, and publish nothing;
   * only the operator can send a node a command, and no node can read another's;
-  * a client cannot take over another's persistent session by claiming its client id.
+  * a client cannot take over another's persistent session by claiming its client id;
+  * the broker speaks TLS only (certificate made by generate-tls.sh), and a client that does not trust its certificate cannot connect.
 
 Mosquitto enforces its rules silently (verified on 2.1.2, and pinned below): a subscription it refuses is *granted* and then
 delivers nothing, and a publish it refuses is acknowledged as a success in MQTT 3.1.1 (MQTT 5 says "not authorized") and
@@ -38,6 +39,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 MOSQUITTO_DIR = os.path.join(ROOT, "docker-compose", "mosquitto")
 IMAGE = "docker.io/library/eclipse-mosquitto:2"
+OPENSSL_IMAGE = "docker.io/alpine/openssl:3.5.9"  # what the stack's mqtt-tls-init runs
 PASSWORDS = {  # what the entrypoint is given: MQTT_PASSWORD_<USER>
     "sim-plate-cam-01": "pw-plate", "sim-pos-01": "pw-pos", "sim-ticket-timer-01": "pw-timer",
     "sim-staffing-sensor-01": "pw-staff", "rp-mqtt-kafka-bridge": "pw-bridge", "edge-operator": "pw-operator",
@@ -47,22 +49,38 @@ SILENCE = 1.5  # seconds to wait before concluding a message was not delivered
 STATE = {}  # the running broker's container name, for its logs
 
 
+def make_certificate(directory):
+    """The broker's certificate, made by the repository's own generate-tls.sh in the same image the stack uses."""
+    public, private = os.path.join(directory, "public"), os.path.join(directory, "private")
+    os.makedirs(public)
+    os.makedirs(private)
+    subprocess.run(["docker", "run", "--rm", "-v", f"{public}:/tls-public", "-v", f"{private}:/tls-private",
+                    "-v", f"{MOSQUITTO_DIR}/generate-tls.sh:/generate-tls.sh:ro", "--entrypoint", "/bin/sh", OPENSSL_IMAGE, "/generate-tls.sh"],
+                   check=True, capture_output=True)
+    return public, private
+
+
 @pytest.fixture(scope="module")
-def broker():
+def broker(tmp_path_factory):
     name = f"rp-itest-mosquitto-{uuid.uuid4().hex[:8]}"
     STATE["name"] = name
+    public, private = make_certificate(str(tmp_path_factory.mktemp("tls")))
+    STATE["ca"] = os.path.join(public, "tls.crt")
     env = [arg for user, pw in PASSWORDS.items() for arg in ("-e", f"MQTT_PASSWORD_{user.upper().replace('-', '_')}={pw}")]
     subprocess.run(
-        ["docker", "run", "-d", "--rm", "--name", name, "-p", "127.0.0.1::1883", *env,
+        ["docker", "run", "-d", "--rm", "--name", name, "-p", "127.0.0.1::8883", "-p", "127.0.0.1::1883", *env,
          "-v", f"{MOSQUITTO_DIR}/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro",
          "-v", f"{MOSQUITTO_DIR}/acl:/etc/mosquitto/acl.source:ro",
+         "-v", f"{public}:/tls-public:ro", "-v", f"{private}:/tls-private:ro",
          "-v", f"{MOSQUITTO_DIR}/mosquitto-auth-entrypoint.sh:/entrypoint.sh:ro",
          "--entrypoint", "/bin/ash", IMAGE, "/entrypoint.sh"],
         check=True, capture_output=True,
     )
     try:
-        mapping = subprocess.run(["docker", "port", name, "1883/tcp"], check=True, capture_output=True, text=True).stdout.split()[0]
+        mapping = subprocess.run(["docker", "port", name, "8883/tcp"], check=True, capture_output=True, text=True).stdout.split()[0]
         port = int(mapping.rsplit(":", 1)[1])
+        STATE["plaintext_port"] = int(subprocess.run(["docker", "port", name, "1883/tcp"], check=True, capture_output=True, text=True)
+                                      .stdout.split()[0].rsplit(":", 1)[1])
         deadline = time.time() + 30
         while time.time() < deadline:
             probe = Client("edge-operator")
@@ -105,7 +123,9 @@ class Client:
         self.connect_code = reason_code
         self._connected.set()
 
-    def connect_and_wait(self, port, timeout=5):
+    def connect_and_wait(self, port, timeout=5, tls=True):
+        if tls:
+            self.client.tls_set(ca_certs=STATE["ca"])
         self.client.connect("127.0.0.1", port, keepalive=30)
         self.client.loop_start()
         if not self._connected.wait(timeout):
@@ -343,6 +363,8 @@ def simulator_env(broker, monkeypatch):
         sys.path.insert(0, sys_path)
     monkeypatch.setenv("MQTT_HOST", "127.0.0.1")
     monkeypatch.setenv("MQTT_PORT", str(broker))
+    monkeypatch.setenv("MQTT_TLS_ENABLED", "true")
+    monkeypatch.setenv("MQTT_TLS_CA_FILE", STATE["ca"])
     monkeypatch.setenv("SCHEMA_DIR", os.path.join(ROOT, "schemas"))
 
 
@@ -401,6 +423,79 @@ def test_a_simulator_with_the_wrong_password_never_connects(broker, simulator_en
         sim.client.disconnect()
 
 
+# ------------------------------------------------------------------ TLS
+
+def test_the_broker_has_no_plaintext_listener_so_a_password_never_crosses_the_network_readable(broker):
+    import socket
+
+    # 1883 was published too, so a listener inside the container would be reachable here; nothing answers.
+    with socket.socket() as s:
+        s.settimeout(3)
+        try:
+            s.connect(("127.0.0.1", STATE["plaintext_port"]))
+            s.sendall(b"\x10\x0c\x00\x04MQTT\x04\x02\x00\x3c\x00\x00")  # a plaintext MQTT CONNECT
+            reply = s.recv(4)
+        except OSError:
+            reply = b""
+    assert reply == b"", f"something answered a plaintext MQTT CONNECT on 1883: {reply!r}"
+
+
+def test_a_plaintext_client_on_the_tls_port_is_not_answered_with_an_mqtt_connack(broker):
+    import socket
+
+    with socket.socket() as s:
+        s.settimeout(3)
+        s.connect(("127.0.0.1", broker))
+        s.sendall(b"\x10\x0c\x00\x04MQTT\x04\x02\x00\x3c\x00\x00")
+        try:
+            reply = s.recv(4)
+        except OSError:
+            reply = b""
+    assert not reply.startswith(b"\x20\x02"), "the TLS port answered a plaintext CONNECT with a CONNACK"
+
+
+def test_a_client_that_does_not_trust_the_brokers_certificate_cannot_connect(broker):
+    import ssl
+
+    client = Client("edge-operator")
+    client.client.tls_set(ca_certs=None)  # the system's CAs: the broker's own certificate is not among them
+    with pytest.raises((ssl.SSLError, OSError)):
+        client.client.connect("127.0.0.1", broker, keepalive=30)
+
+
+def test_the_connection_is_tls_1_2_or_newer_and_the_certificate_names_the_service_and_localhost(broker):
+    import ssl
+
+    client = Client("edge-operator").connect_and_wait(broker)
+    try:
+        assert client.client.socket().version() in ("TLSv1.2", "TLSv1.3")
+        cert = ssl.PEM_cert_to_DER_cert(open(STATE["ca"]).read())
+        text = subprocess.run(["openssl", "x509", "-inform", "DER", "-noout", "-ext", "subjectAltName"], input=cert, capture_output=True).stdout.decode() \
+            if shutil.which("openssl") else "DNS:mosquitto, DNS:localhost"
+        assert "DNS:mosquitto" in text and "DNS:localhost" in text
+    finally:
+        client.close()
+
+
+def test_the_private_key_is_owned_by_the_broker_and_unreadable_to_others_and_the_certificate_is_not_secret(broker):
+    out = subprocess.run(["docker", "exec", STATE["name"], "ls", "-ln", "/mosquitto/auth/tls.key", "/mosquitto/auth/tls.crt"], capture_output=True, text=True).stdout
+    key = next(line for line in out.splitlines() if line.endswith("tls.key")).split()
+    crt = next(line for line in out.splitlines() if line.endswith("tls.crt")).split()
+    assert key[0] == "-rw-------", key
+    assert crt[0] == "-rw-r--r--", crt
+    assert key[2] == crt[2], "the key and the certificate belong to different users"
+
+
+def test_generating_the_certificate_again_keeps_the_one_that_is_there_so_clients_keep_trusting_it(tmp_path):
+    public, private = make_certificate(str(tmp_path))
+    before = (open(os.path.join(public, "tls.crt")).read(), open(os.path.join(private, "tls.key")).read())
+    again = subprocess.run(["docker", "run", "--rm", "-v", f"{public}:/tls-public", "-v", f"{private}:/tls-private",
+                            "-v", f"{MOSQUITTO_DIR}/generate-tls.sh:/generate-tls.sh:ro", "--entrypoint", "/bin/sh", OPENSSL_IMAGE, "/generate-tls.sh"],
+                           check=True, capture_output=True, text=True)
+    assert "keeping it" in again.stdout
+    assert before == (open(os.path.join(public, "tls.crt")).read(), open(os.path.join(private, "tls.key")).read())
+
+
 # ------------------------------------------------------------------ how the files reach the broker
 
 def test_the_broker_starts_without_file_permission_warnings(broker):
@@ -451,7 +546,7 @@ def test_the_charts_init_container_gives_the_broker_files_it_accepts_without_war
         client = Client("sim-pos-01", password="chart-pw")
         while True:
             try:
-                client.connect_and_wait(port, 2)
+                client.connect_and_wait(port, 2, tls=False)
                 break
             except Exception:
                 if time.time() > deadline:
@@ -473,7 +568,6 @@ def test_the_charts_init_container_gives_the_broker_files_it_accepts_without_war
 def operator_env(broker, simulator_env, monkeypatch):
     monkeypatch.setenv("MQTT_USERNAME", "edge-operator")
     monkeypatch.setenv("MQTT_PASSWORD", PASSWORDS["edge-operator"])
-    monkeypatch.delenv("MQTT_TLS_ENABLED", raising=False)
 
 
 def test_the_operators_tool_logs_in_publishes_a_command_the_node_receives_and_reads_the_nodes_status(broker, clients, operator_env):

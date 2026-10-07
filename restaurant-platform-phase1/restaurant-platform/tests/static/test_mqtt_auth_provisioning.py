@@ -47,6 +47,8 @@ case "$1 $2" in
     for f in "${files[@]}"; do k="${f%%=*}"; p="${f#*=}"; cp "$p" "$target/$k"; done
     [ "$dry" = 1 ] && echo "pending $name" > "$STATE/.pending/.name" && echo "kind: Secret"
     exit 0 ;;
+  "delete secret")
+    rm -rf "$STATE/$3"; exit 0 ;;
   "apply -f")
     cat > /dev/null
     name="$(cat "$STATE/.pending/.name")"; rm -f "$STATE/.pending/.name"
@@ -201,3 +203,79 @@ def test_the_users_it_provisions_are_exactly_the_users_the_broker_acl_names():
 def test_it_is_executable_and_parses():
     assert os.access(SCRIPT, os.X_OK)
     assert subprocess.run(["bash", "-n", str(SCRIPT)], capture_output=True).returncode == 0
+
+
+def snapshot(env):
+    return {p.name: {f.name: f.read_text() for f in p.iterdir()} for p in env["state"].iterdir()}
+
+
+def derived(master, node, generation=1):
+    return hmac.new(master.encode(), f"edge-control/v1/{node}/{generation}".encode(), hashlib.sha256).hexdigest()
+
+
+def test_rotating_the_master_keeps_the_old_master_and_every_old_node_key_and_derives_the_new_keys_from_the_new_master(env):
+    run(env)
+    old_master, old_key = secret(env, "edge-control-master", "key"), secret(env, "edge-control-sim-plate-cam-01", "key")
+    run(env, "rotate-master")
+    new_master = secret(env, "edge-control-master", "key")
+    assert new_master != old_master and len(new_master) == 64
+    assert secret(env, "edge-control-master-previous", "key") == old_master
+    assert secret(env, "edge-control-sim-plate-cam-01-previous", "key") == old_key
+    new_key = secret(env, "edge-control-sim-plate-cam-01", "key")
+    assert new_key == derived(new_master, "sim-plate-cam-01") and new_key != old_key
+    # the generation does not move: the operator needs no flag, and the node's key differs because the master does
+    assert secret(env, "edge-control-sim-plate-cam-01-generation", "generation") == "1"
+
+
+def test_rotating_the_master_leaves_the_brokers_logins_alone(env):
+    run(env)
+    before = snapshot(env)
+    run(env, "rotate-master")
+    after = snapshot(env)
+    for name in [f"mqtt-{u}" for u in USERS] + ["mosquitto-auth"]:
+        assert before[name] == after[name], f"{name} changed: a master rotation is about control keys, not broker logins"
+
+
+def test_a_second_master_rotation_is_refused_until_the_first_is_finished(env):
+    run(env)
+    run(env, "rotate-master")
+    before = snapshot(env)
+    result = subprocess.run(["bash", str(SCRIPT), "rotate-master"], env=env["env"], capture_output=True, text=True)
+    assert result.returncode != 0 and "finish-rotation" in result.stderr
+    assert snapshot(env) == before, "the refused rotation still changed something"
+
+
+def test_finishing_a_rotation_deletes_every_old_key_and_keeps_the_new_ones(env):
+    run(env)
+    run(env, "rotate-master")
+    new = {n: snapshot(env)[n] for n in ("edge-control-master", "edge-control-sim-plate-cam-01", "edge-control-sim-plate-cam-01-generation")}
+    run(env, "finish-rotation")
+    after = snapshot(env)
+    assert "edge-control-master-previous" not in after and "edge-control-sim-plate-cam-01-previous" not in after
+    assert {n: after[n] for n in new} == new
+    run(env, "rotate-master")  # and a new rotation may begin
+    assert "edge-control-master-previous" in snapshot(env)
+
+
+def test_finishing_when_no_rotation_is_in_progress_changes_nothing(env):
+    run(env)
+    before = snapshot(env)
+    run(env, "finish-rotation")
+    assert snapshot(env) == before
+
+
+def test_a_dry_run_of_a_master_rotation_changes_nothing(env):
+    run(env)
+    before = snapshot(env)
+    out = run(env, "rotate-master", "--dry-run")
+    assert snapshot(env) == before and "would replace secret edge-control-master" in out.stdout
+
+
+def test_the_master_rotation_never_puts_a_key_on_a_command_line_or_prints_one(env):
+    run(env)
+    out = run(env, "rotate-master")
+    secrets = [p.read_text() for p in env["state"].rglob("*") if p.is_file() and p.name == "key"]
+    assert len(secrets) >= 4
+    calls = env["log"].read_text()
+    assert not [x for x in secrets if x in calls], "a key was passed on a command line"
+    assert not [x for x in secrets if x in out.stdout + out.stderr], "a key was printed"

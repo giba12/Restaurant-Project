@@ -51,7 +51,7 @@ def test_the_four_simulators_still_share_their_connection_settings():
     services = compose()
     for name in EDGE_SERVICES:
         env = services[name]["environment"]
-        assert env["MQTT_HOST"] == "mosquitto" and env["MQTT_PORT"] == "1883"
+        assert env["MQTT_HOST"] == "mosquitto" and env["MQTT_PORT"] == "8883" and env["MQTT_TLS_ENABLED"] == "true"
         assert env["SCENARIO_CONTROL_ENABLED"] == "true" and env["KAFKA_BOOTSTRAP_SERVERS"] == "kafka:9092"
 
 
@@ -65,11 +65,18 @@ def render(values_file=None):
 
 
 @needs_helm
-def test_the_chart_gives_no_node_a_control_key_unless_a_secret_is_named():
-    # The cluster's broker allows anonymous clients: a node with no key takes no commands, and that is the default.
+def test_the_chart_gives_only_the_plate_waste_node_its_own_key_from_the_secret_the_provisioning_script_makes():
+    # Model control is on for the plate-waste node (2026-10-07) and for no other node: the others have no model to update.
+    found = {}
     for deployment in render():
-        env = [e["name"] for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]]
-        assert "EDGE_CONTROL_KEY" not in env
+        for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]:
+            if e["name"] == "EDGE_CONTROL_KEY":
+                found[deployment["metadata"]["name"]] = e["valueFrom"]["secretKeyRef"]
+    assert list(found) == ["edge-sim-plate-waste"], f"the key reached {sorted(found)}"
+    assert found["edge-sim-plate-waste"] == {"name": "edge-control-sim-plate-cam-01", "key": "key"}
+    # and it is the Secret provision-mqtt-auth.sh creates (it names a node's Secret edge-control-<node>)
+    script = (ROOT / "k8s" / "mosquitto" / "provision-mqtt-auth.sh").read_text()
+    assert 'NODES=(sim-plate-cam-01)' in script and '"edge-control-$node"' in script
 
 
 @needs_helm

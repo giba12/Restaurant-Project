@@ -343,11 +343,18 @@ def test_the_live_broker_refuses_anonymous_clients_and_wrong_passwords_and_accep
         "def attempt(user, pw):\n"
         "    r = {}\n"
         "    c = m.Client(client_id=user or 'anon-probe', protocol=m.MQTTv5, callback_api_version=m.CallbackAPIVersion.VERSION2)\n"
+        "    c.tls_set(ca_certs='/etc/mosquitto-tls/tls.crt')\n"
         "    if user: c.username_pw_set(user, pw)\n"
         "    c.on_connect = lambda cl, u, f, rc, p=None: r.update(code=str(rc), failed=bool(rc.is_failure))\n"
-        "    c.connect('mosquitto', 1883); c.loop_start(); time.sleep(1.5); c.loop_stop(); c.disconnect()\n"
+        "    c.connect('mosquitto', 8883); c.loop_start(); time.sleep(1.5); c.loop_stop(); c.disconnect()\n"
         "    return r.get('failed')\n"
+        "def plaintext_port_open():\n"
+        "    import socket\n"
+        "    try:\n"
+        "        socket.create_connection(('mosquitto', 1883), timeout=3).close(); return True\n"
+        "    except OSError:\n"
+        "        return False\n"
         "print(json.dumps({'anonymous': attempt(None, None), 'wrong': attempt('sim-pos-01', 'not-the-password'), 'unknown': attempt('intruder', 'x'),\n"
-        "                  'operator': attempt('edge-operator', 'changeme-local-dev-only')}))\n")
+        "                  'operator': attempt('edge-operator', 'changeme-local-dev-only'), 'plaintext_port_open': plaintext_port_open()}))\n")
     result = json.loads(out.strip().splitlines()[-1])
-    assert result == {"anonymous": True, "wrong": True, "unknown": True, "operator": False}, result
+    assert result == {"anonymous": True, "wrong": True, "unknown": True, "operator": False, "plaintext_port_open": False}, result

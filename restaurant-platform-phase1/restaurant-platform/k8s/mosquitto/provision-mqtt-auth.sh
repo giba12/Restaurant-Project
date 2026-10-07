@@ -5,6 +5,8 @@
 #   bash k8s/mosquitto/provision-mqtt-auth.sh                       # create what is missing
 #   bash k8s/mosquitto/provision-mqtt-auth.sh --dry-run             # say what it would do, touch nothing
 #   bash k8s/mosquitto/provision-mqtt-auth.sh rotate-node NODE      # a new key generation for one node (see below)
+#   bash k8s/mosquitto/provision-mqtt-auth.sh rotate-master         # a new MASTER secret, and every node's key under it
+#   bash k8s/mosquitto/provision-mqtt-auth.sh finish-rotation       # end a rotation: delete the old keys and the old master
 #
 # What it makes (namespace $NS, default kafka); it never prints a password or a key:
 #   mqtt-<user>               one per broker user: keys `username`, `password`. The simulators and the bridge read their
@@ -24,6 +26,17 @@
 # (`edge_control rollout ... --generation N`, or set EDGE_CONTROL_GENERATION); (3) remove controlKeyPreviousSecret and upgrade
 # again, so the old key is no longer accepted. The generation lives in the Secret `edge-control-<node>-generation`.
 #
+# ROTATING the MASTER (rotate-master): do it when the master may have been seen by someone who should not have it, or on a
+# schedule. It cannot be a flag day, because the nodes only learn a new key when their pod restarts, so it is the node procedure
+# above applied to every node at once: the old master moves to edge-control-master-previous, a new one is written to
+# edge-control-master, and each node's current key moves to edge-control-<node>-previous while its new key (derived from the
+# new master, same generation) is written to edge-control-<node>. Then, in this order: (1) set controlKeyPreviousSecret for
+# every node in values.yaml and upgrade k8s/edge-simulators, so each node holds both its new and its old key; (2) run
+# k8s/audit/verify-model-control.sh, which signs with the NEW master and must see the node answer; (3) finish-rotation, then
+# remove controlKeyPreviousSecret and upgrade the chart again, so a key derived from the old master no longer commands anything.
+# Until step 3 the old master still works: a rotation is not finished, and a leaked master not contained, before it. A second
+# rotate-master is refused while one is unfinished.
+#
 # Order matters on a live cluster: clients must carry credentials BEFORE the broker starts requiring them. k8s/realign does it
 # in that order (broker with auth off, secrets, clients, broker with auth on); do not `helm upgrade mosquitto` with the default
 # values on a cluster whose clients have no credentials yet.
@@ -42,6 +55,8 @@ for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY=1 ;;
     rotate-node) ACTION=rotate ;;
+    rotate-master) ACTION=rotate-master ;;
+    finish-rotation) ACTION=finish ;;
     -*) echo "unknown option: $arg" >&2; exit 2 ;;
     *) NODE="$arg" ;;
   esac
@@ -102,6 +117,40 @@ if [ "$ACTION" = rotate ]; then
   replace_secret "edge-control-$NODE-generation" generation "$next"
   say "node $NODE is now at key generation $next; its previous key is in edge-control-$NODE-previous."
   say "next: set controlKeyPreviousSecret for $NODE, upgrade k8s/edge-simulators, then command it with --generation $next, then remove it (see the header)."
+  exit 0
+fi
+
+if [ "$ACTION" = rotate-master ]; then
+  exists edge-control-master || { echo "no edge-control-master secret: run this script without arguments first" >&2; exit 1; }
+  if exists edge-control-master-previous; then
+    echo "a master rotation is already in progress (edge-control-master-previous exists): finish it with '$0 finish-rotation' first" >&2
+    exit 1
+  fi
+  replace_secret edge-control-master-previous key "$(field edge-control-master key)"
+  new_master="$(random 32)"
+  replace_secret edge-control-master key "$new_master"
+  for node in "${NODES[@]}"; do
+    generation=1
+    exists "edge-control-$node-generation" && generation="$(field "edge-control-$node-generation" generation)"
+    if exists "edge-control-$node" && [ "$DRY" = 0 ]; then
+      replace_secret "edge-control-$node-previous" key "$(field "edge-control-$node" key)"
+    fi
+    replace_secret "edge-control-$node" key "$(if [ "$DRY" = 1 ]; then echo dry-run; else derive "$new_master" "$node" "$generation"; fi)"
+  done
+  say "the master is rotated; every node's previous key is in edge-control-<node>-previous, the old master in edge-control-master-previous."
+  say "next, in order: set controlKeyPreviousSecret for each node and upgrade k8s/edge-simulators; run k8s/audit/verify-model-control.sh; then '$0 finish-rotation', remove controlKeyPreviousSecret and upgrade again (see the header)."
+  exit 0
+fi
+
+if [ "$ACTION" = finish ]; then
+  names=(edge-control-master-previous)
+  for node in "${NODES[@]}"; do names+=("edge-control-$node-previous"); done
+  for name in "${names[@]}"; do
+    if exists "$name"; then
+      if [ "$DRY" = 1 ]; then say "+ would delete secret $name"; else kubectl delete secret "$name" -n "$NS" >/dev/null; say "deleted secret $name"; fi
+    fi
+  done
+  say "the old keys are gone from the cluster. Remove controlKeyPreviousSecret from k8s/edge-simulators/values.yaml and upgrade the chart, so no pod still holds one."
   exit 0
 fi
 

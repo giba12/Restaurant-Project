@@ -21,9 +21,15 @@ done
 # The ACL comes from the repository (mounted read-only, owned by whoever checked it out); copy it beside the password file.
 cp /etc/mosquitto/acl.source /mosquitto/auth/acl
 
+# The certificate and its private key, from the volumes the `mqtt-tls-init` service filled: copied beside the other files so
+# the broker's own user owns them and nobody else can read the key.
+cp /tls-public/tls.crt /mosquitto/auth/tls.crt
+cp /tls-private/tls.key /mosquitto/auth/tls.key
+
 # The broker drops to this user, and warns that a future version will refuse a password or ACL file it does not own
 # or that others can read.
-chown mosquitto:mosquitto "$passwd" /mosquitto/auth/acl
-chmod 0600 "$passwd" /mosquitto/auth/acl
+chown mosquitto:mosquitto "$passwd" /mosquitto/auth/acl /mosquitto/auth/tls.crt /mosquitto/auth/tls.key
+chmod 0600 "$passwd" /mosquitto/auth/acl /mosquitto/auth/tls.key
+chmod 0644 /mosquitto/auth/tls.crt
 
 exec /docker-entrypoint.sh /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf

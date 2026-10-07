@@ -250,6 +250,31 @@ data:
             annotations:
               summary: "the oldest message the bridge has handed to Kafka has been unconfirmed for {{ `{{ $value }}` }}s"
 
+      - name: sensors
+        rules:
+          # A sensor can stop arriving without anything else being wrong: its login revoked or mistyped (the broker
+          # refuses it quietly), its topic misnamed, its pod running but stuck. The pipeline is healthy and the bridge
+          # connected, so none of the alerts above fires; only the count of what each topic delivered shows it.
+          # Window picked from the rates (events per minute, Poisson): the slowest, staff-shift at 3, has no event in
+          # 10 minutes with probability e^-30, so ten silent minutes is a stopped sensor, not a quiet one. Lower the
+          # simulators' rates and this window must grow with them. Not raised while the bridge is disconnected or
+          # Kafka is holding messages up (BridgeNotConnectedToMqtt / BridgeWaitingOnKafka say that): then every topic
+          # is silent and that is already known. The series exists from the bridge's start (it creates one per
+          # route), so a topic silent since a restart is seen too; `offset 10m` asks for a series that has been
+          # there a full window, because a series that is only a minute old at 0 would otherwise read as ten
+          # silent minutes (the rule's unit tests pin both).
+          - alert: SensorTopicSilent
+            expr: |
+              increase(bridge_messages_forwarded_total[10m]) == 0
+                and bridge_messages_forwarded_total offset 10m
+                and on() (bridge_mqtt_connected == 1)
+                and on() (bridge_oldest_unconfirmed_seconds < 60)
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "nothing has arrived for {{ `{{ $labels.kafka_topic }}` }} in 10m while the bridge is connected and forwarding: that sensor has stopped, or cannot publish"
+
       - name: resources
         rules:
           # container_spec_memory_limit_bytes > 0 excludes containers with

@@ -93,6 +93,11 @@ class Bridge:
         self._lock = threading.Lock()
         self._unconfirmed = {}  # id(message) -> time handed to Kafka
         self._stopping = threading.Event()
+        # One series per routed topic from the start, at 0. A counter that has never counted has no series at all, and an
+        # alert that asks "did this topic forward anything in the last 10 minutes" cannot see a series that does not exist:
+        # a sensor silent since the bridge restarted would be invisible, which is the very case it is there for.
+        for kafka_topic in sorted(set(routes.values())):
+            FORWARDED.labels(kafka_topic)
 
     # ------------------------------------------------------------------ MQTT callbacks (the network thread)
 

@@ -27,7 +27,7 @@ COMPOSE = yaml.safe_load(COMPOSE_FILE.read_text())
 SERVICES = COMPOSE["services"]
 
 # Run-once helpers: they pull a model, then exit.
-ONE_SHOT = {"ollama-init"}
+ONE_SHOT = {"ollama-init", "mqtt-tls-init"}
 # Images deliberately not pinned to an exact tag. ollama publishes no stable
 # tag series for the CPU image this project uses; the model itself is pinned
 # separately (OLLAMA_MODEL).

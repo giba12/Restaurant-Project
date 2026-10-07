@@ -75,7 +75,7 @@ for v in vectors:
     start = time.perf_counter()
     node.model.infer(v)
     paced.append((time.perf_counter() - start) * 1000.0)
-    time.sleep(0.03)
+    time.sleep(float(os.environ.get("PROBE_PACE_SECONDS", "0.03")))  # the node's real pace; a test sets it to 0
 out["inference_ms_paced"] = percentiles(paced)
 
 # The same call back to back: this is where a CPU quota shows, as the container is paused until the next period.
@@ -102,7 +102,7 @@ from control import edge_control as control  # noqa: E402
 store = control.ModelStore()
 statuses = []
 node.updater.on_status = statuses.append
-command = control.build_set_model(store, "1.0.0", "probe-key", shadow_readings=20, now=time.time())
+command = control.build_set_model(store, "1.0.0", "probe-key", "probe", shadow_readings=20, now=time.time())
 raw = json.dumps(command).encode()
 rss_before = rss_mib()
 start = time.perf_counter()

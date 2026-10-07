@@ -26,6 +26,31 @@ spec:
     spec:
       securityContext:
         fsGroup: 1883  # the mosquitto user, so it can write the volume whatever the provisioner made it
+      {{- if .Values.auth.enabled }}
+      initContainers:
+        - name: auth-files
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          command:
+            - /bin/ash
+            - -c
+            - cp /source/passwd/passwd /auth/passwd && cp /source/acl/acl /auth/acl && chown mosquitto:mosquitto /auth/passwd /auth/acl && chmod 0600 /auth/passwd /auth/acl
+          volumeMounts:
+            - name: passwd-source
+              mountPath: /source/passwd
+              readOnly: true
+            - name: acl-source
+              mountPath: /source/acl
+              readOnly: true
+            - name: auth
+              mountPath: /auth
+          resources:
+            requests:
+              cpu: 10m
+              memory: 8Mi
+            limits:
+              cpu: 50m
+              memory: 16Mi
+      {{- end }}
       containers:
         - name: mosquitto
           image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
@@ -39,6 +64,11 @@ spec:
             - name: tls
               mountPath: /mosquitto/certs
               readOnly: true
+            {{- if .Values.auth.enabled }}
+            - name: auth
+              mountPath: /mosquitto/auth
+              readOnly: true
+            {{- end }}
             - name: data
               mountPath: /mosquitto/data
           resources:
@@ -57,3 +87,20 @@ spec:
             # generated: a plain self-signed openssl cert, since nothing
             # outside the cluster ever talks to Mosquitto either.
             secretName: mosquitto-tls
+        {{- if .Values.auth.enabled }}
+        - name: acl-source
+          configMap:
+            name: mosquitto-config
+            items:
+              - key: acl
+                path: acl
+        - name: passwd-source
+          secret:
+            secretName: {{ .Values.auth.secretName }}
+        # The broker's own private copy: Mosquitto drops to its own user before reading these, and warns that a future
+        # version will refuse a password or ACL file it does not own. A Secret or ConfigMap mount is always owned by root,
+        # so the init container copies both here and gives them to the broker's user.
+        - name: auth
+          emptyDir:
+            medium: Memory
+        {{- end }}

@@ -8,6 +8,14 @@
 #   bash k8s/realign/realign-live-cluster.sh           # do it
 #   bash k8s/realign/realign-live-cluster.sh --dry-run # print the steps only
 #
+# 2026-10-06 update (RSK-036). The MQTT broker now requires a login and limits each user to its own topics, and every edge
+# node has its own control key. A live cluster must be cut over in this order, because a client that has no credentials is refused
+# the moment the broker requires them: (a) Mosquitto is upgraded with auth.enabled=false (as before, anonymous), (b)
+# k8s/mosquitto/provision-mqtt-auth.sh creates every credential as a Secret, (c) the simulators and the bridge are upgraded so each
+# carries its own (they work against an anonymous broker too), and (d) only then is Mosquitto upgraded with auth.enabled=true. Until
+# (d) the broker is exactly as open as before, and after it nothing can connect without a login. Nothing here enables model control on
+# a node: that stays an explicit choice (controlKeySecret in k8s/edge-simulators/values.yaml).
+#
 # 2026-10-05 update (DEF-152). Kafka Connect and its four MQTT connectors are replaced by the
 # mqtt-kafka-bridge (services/mqtt-kafka-bridge): a persistent MQTT session, and a message
 # acknowledged only after Kafka has confirmed it, so no sensor event is lost to a restart of
@@ -114,7 +122,18 @@ run helm upgrade --install phase5-schemas k8s/phase5-schemas -n "$NS" --wait
 # undeployed for ten hours, DEF-090).
 # Mosquitto gets a persistent volume and persistence settings (DEF-152). Its pod is recreated, so
 # every client reconnects: the simulators at once, the Kafka Connect connectors on Paho's backoff.
-run helm upgrade mosquitto k8s/mosquitto -n "$NS" --reset-then-reuse-values --wait --timeout 5m
+# auth.enabled=false here, deliberately, on a cluster whose broker is not yet protected: the clients get their credentials in step 6
+# and the broker starts requiring them in 6c. But a re-run after the cutover must NOT open the broker again for the length of the
+# script, so if the live release already has auth on, it stays on.
+BROKER_AUTH=false
+if [ "$DRY" = 0 ] && helm get values mosquitto -n "$NS" -a -o json 2>/dev/null \
+     | python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin).get("auth", {}).get("enabled") else 1)'; then
+  BROKER_AUTH=true
+  echo "the broker already requires a login; it stays that way"
+fi
+run helm upgrade mosquitto k8s/mosquitto -n "$NS" --reset-then-reuse-values --set auth.enabled="$BROKER_AUTH" --wait --timeout 5m
+echo "== 4b. MQTT credentials (Secrets; nothing is printed)"
+run bash k8s/mosquitto/provision-mqtt-auth.sh
 # Prometheus scrapes the bridge and alerts on it; its config is a ConfigMap, so restart it to load it.
 run helm upgrade observability k8s/observability -n "$NS" --reset-then-reuse-values
 run kubectl rollout restart deploy/prometheus -n "$NS"
@@ -126,6 +145,8 @@ for img in storage-consumer finding-narrator dashboard-web ticket-timing-aggrega
 done
 
 echo "== 6. restart workloads on the new images"
+# The simulators' chart now gives each one its own broker login (the Secrets of step 4b); they work against the still-anonymous broker.
+run helm upgrade --install edge-simulators k8s/edge-simulators -n "$NS" --reset-then-reuse-values --wait --timeout 5m
 for d in $DB_CLIENTS; do run kubectl scale "deploy/$d" -n "$NS" --replicas=1; done
 # Not database clients, but they run the rebuilt images: the dashboard, the four edge
 # simulators (the plate-waste node now runs a model; staff and kitchen are coupled) and
@@ -148,6 +169,15 @@ else
   echo "kafka-connect-mqtt is already gone"
 fi
 
+echo "== 6c. the broker now requires a login"
+# Every client carries its credentials by now; only the broker's setting changes. Its pod is replaced, so every client reconnects
+# (with the login). --set auth.enabled=true is explicit because --reset-then-reuse-values would keep step 4's auth.enabled=false.
+run helm upgrade mosquitto k8s/mosquitto -n "$NS" --reset-then-reuse-values --set auth.enabled=true --wait --timeout 5m
+[ "$DRY" = 1 ] || sleep 20
+for d in edge-sim-plate-waste edge-sim-pos-transaction edge-sim-service-timing edge-sim-staff-shift mqtt-kafka-bridge; do
+  run kubectl rollout status "deploy/$d" -n "$NS" --timeout=180s
+done
+
 echo "== 7. check"
 if [ "$DRY" = 0 ]; then
   echo "waiting 60s for events to flow..."
@@ -167,6 +197,8 @@ SQL
   kubectl exec -n "$NS" deploy/mqtt-kafka-bridge -- python bridge.py --check || true
   kubectl exec -n "$NS" deploy/mqtt-kafka-bridge -- python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/metrics').read().decode())" 2>/dev/null \
     | grep -E "^bridge_(messages_forwarded_total|mqtt_connected|unconfirmed_messages|kafka_errors_total)" || true
+  echo "--- the broker refuses anonymous clients (expect a refusal) and the bridge still reads (connected above):"
+  kubectl exec -n "$NS" deploy/mosquitto -- mosquitto_sub -h localhost -p 1883 -t 'sensors/#' -W 3 2>&1 | head -2 || true
   echo "--- Mosquitto's persistent volume (Bound), and nothing left of Kafka Connect (expect no output below):"
   kubectl get pvc mosquitto-data -n "$NS" || true
   kubectl get kafkaconnect,kafkaconnector,pods -n "$NS" 2>/dev/null | grep -i connect || echo "  (nothing)"

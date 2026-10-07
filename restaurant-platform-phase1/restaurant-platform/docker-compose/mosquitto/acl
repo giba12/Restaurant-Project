@@ -1,0 +1,35 @@
+# Who may publish and subscribe to what. Anything not listed here is refused. No secrets in this file: it names
+# users and topics only (passwords are built from the environment at start-up, mosquitto-auth-entrypoint.sh).
+# The same rules are in k8s/mosquitto/templates/configmap.yaml; a test compares them.
+
+# The four sensor simulators: each publishes only its own sensor topic.
+user sim-pos-01
+topic write sensors/pos-transaction
+
+user sim-ticket-timer-01
+topic write sensors/service-timing
+# It reads the simulated world's staffing level, which the staff-shift sensor publishes.
+topic read sim/world/staffing
+
+user sim-staffing-sensor-01
+topic write sensors/staff-shift
+topic write sim/world/staffing
+
+# The plate-waste node also takes model commands on its own control topic and reports on its own status topic.
+user sim-plate-cam-01
+topic write sensors/plate-waste
+topic read control/edge/plate-waste/sim-plate-cam-01
+topic write edge/status/plate-waste/sim-plate-cam-01
+
+# The MQTT-Kafka bridge reads the four sensor topics and nothing else.
+user rp-mqtt-kafka-bridge
+topic read sensors/pos-transaction
+topic read sensors/service-timing
+topic read sensors/staff-shift
+topic read sensors/plate-waste
+
+# The operator: the only identity that may send a node a command, and it reads the nodes' statuses. A node also
+# checks a command's signature with its own key, so this login alone cannot change a model.
+user edge-operator
+topic write control/edge/plate-waste/+
+topic read edge/status/plate-waste/+

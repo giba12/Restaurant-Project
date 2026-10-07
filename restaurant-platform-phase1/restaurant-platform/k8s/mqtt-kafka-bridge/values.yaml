@@ -17,6 +17,15 @@ env:
   KAFKA_BOOTSTRAP_SERVERS: "restaurant-platform-kafka-kafka-bootstrap.kafka.svc.cluster.local:9093"
   KAFKA_SECURITY_PROTOCOL: "SSL"
 
+# The bridge's broker login. true: it logs in as `rp-mqtt-kafka-bridge`, the only user that may read the four sensor topics,
+# with the password in the Secret `mqtt-rp-mqtt-kafka-bridge` (key `password`), made by k8s/mosquitto/provision-mqtt-auth.sh.
+# The client id must equal the user name (the broker enforces it) and names the persistent session.
+# false only for the step of a cutover where clients get credentials before the broker requires them (k8s/realign).
+mqtt:
+  authEnabled: true
+  username: "rp-mqtt-kafka-bridge"
+  credentialsSecret: "mqtt-rp-mqtt-kafka-bridge"
+
 mosquittoTlsSecretName: "mosquitto-tls"
 # Strimzi's auto-generated cluster CA ("<Kafka CR name>-cluster-ca-cert"), as every other Kafka client here mounts.
 kafkaTlsSecretName: "restaurant-platform-kafka-cluster-ca-cert"

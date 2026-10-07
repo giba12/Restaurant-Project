@@ -44,7 +44,8 @@ STATUS_TOPIC = "edge/status/plate-waste/{}"
 
 class PlateWasteNode:
     def __init__(self, model: EdgeModel, lens_fouling: float = 0.0, rng=random,
-                 node_id: str = DEFAULT_NODE_ID, control_key: str | None = None, sensor_fault: str = ""):
+                 node_id: str = DEFAULT_NODE_ID, control_key: str | None = None, sensor_fault: str = "",
+                 previous_control_key: str | None = None):
         self.model = model
         self.node_id = node_id
         self.lens_fouling = lens_fouling
@@ -52,7 +53,7 @@ class PlateWasteNode:
         self.rng = rng
         # Owns which model is in service: a command from the cloud can change it between two readings
         # (edge_ai/updater.py). The monitors are tied to a model's own calibration, so a swap restarts them.
-        self.updater = ModelUpdater(model, node_id=node_id, key=control_key)
+        self.updater = ModelUpdater(model, node_id=node_id, key=control_key, previous_key=previous_control_key)
         self._adopt(model)
         self.last_true_grams = None  # simulator-side ground truth; never published
 
@@ -121,10 +122,15 @@ class PlateWasteNode:
 
 
 def attach_control(sim, node: PlateWasteNode) -> None:
-    """Wire the node to the control topics: commands in (its own topic and the fleet-wide one), status out (retained)."""
-    for target in (node.node_id, "all"):
-        sim.subscribe(CONTROL_TOPIC.format(target), node.updater.handle)
+    """Wire the node to its own control topic (commands in) and its status topic (retained, out).
+
+    There is no fleet-wide topic: every command is signed for one node with that node's key, so it goes to that node's
+    topic. The node announces itself with a retained status whenever it connects, which is how the operator finds the
+    live nodes."""
+    sim.subscribe(CONTROL_TOPIC.format(node.node_id), node.updater.handle)
     node.updater.on_status = lambda status: sim.publish_state(STATUS_TOPIC.format(node.node_id), json.dumps(status))
+    if hasattr(sim, "on_connected"):
+        sim.on_connected(node.updater.announce)
 
 
 _default_node = None
@@ -146,7 +152,7 @@ def main():
     node = PlateWasteNode(
         EdgeModel.from_file(os.environ.get("EDGE_MODEL_PATH", DEFAULT_MODEL_PATH)), LENS_FOULING,
         node_id=os.environ.get("SOURCE_ID", DEFAULT_NODE_ID), control_key=os.environ.get("EDGE_CONTROL_KEY"),
-        sensor_fault=SENSOR_FAULT,
+        sensor_fault=SENSOR_FAULT, previous_control_key=os.environ.get("EDGE_CONTROL_KEY_PREVIOUS"),
     )
     sim = Simulator(
         sensor_type="plate-waste",

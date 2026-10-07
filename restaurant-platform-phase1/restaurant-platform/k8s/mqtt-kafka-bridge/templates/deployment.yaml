@@ -26,6 +26,17 @@ spec:
             - name: {{ $name }}
               value: {{ $value | quote }}
             {{- end }}
+            {{- if .Values.mqtt.authEnabled }}
+            - name: MQTT_USERNAME
+              value: {{ .Values.mqtt.username | quote }}
+            - name: BRIDGE_CLIENT_ID
+              value: {{ .Values.mqtt.username | quote }}
+            - name: MQTT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mqtt.credentialsSecret | quote }}
+                  key: password
+            {{- end }}
           ports:
             - name: metrics
               containerPort: 8000

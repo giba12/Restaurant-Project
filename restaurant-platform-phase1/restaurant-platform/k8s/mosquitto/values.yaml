@@ -21,3 +21,11 @@ persistence:
   size: 512Mi
   storageClass: ""   # the cluster default (k3s: local-path)
 maxQueuedMessages: 500000
+
+# Broker authentication. true (the default): clients must log in and each user may touch only its own topics (the acl
+# in templates/configmap.yaml). The password file is the Secret `secretName`, key `passwd`, made by
+# k8s/mosquitto/provision-mqtt-auth.sh together with each client's own credentials Secret. false is only for the step of a
+# cutover where clients get their credentials before the broker starts requiring them (k8s/realign).
+auth:
+  enabled: true
+  secretName: mosquitto-auth

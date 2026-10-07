@@ -306,6 +306,76 @@ def test_tls_is_switched_on_by_the_environment_with_the_mounted_ca(monkeypatch):
     assert client.tls == "/etc/mosquitto-tls/tls.crt" and port == 8883
 
 
+def recorder(login_calls):
+    class Recorder:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def tls_set(self, ca_certs=None):
+            pass
+
+        def username_pw_set(self, username, password=None):
+            login_calls.append((username, password))
+
+        def reconnect_delay_set(self, min_delay, max_delay):
+            pass
+
+    return Recorder
+
+
+def test_the_bridge_logs_in_to_the_broker_with_the_username_and_password_from_its_environment(monkeypatch):
+    calls = []
+    monkeypatch.setattr(bridge.mqtt, "Client", recorder(calls))
+    monkeypatch.setenv("MQTT_USERNAME", "rp-mqtt-kafka-bridge")
+    monkeypatch.setenv("MQTT_PASSWORD", "from-a-secret")
+    bridge.build_client(bridge.Bridge(ROUTES, lambda: None))
+    assert calls == [("rp-mqtt-kafka-bridge", "from-a-secret")]
+
+
+def test_with_no_username_set_the_bridge_sends_no_login_at_all(monkeypatch):
+    # An anonymous connection, which only a broker that still allows anonymous clients accepts (the staged cutover).
+    calls = []
+    monkeypatch.setattr(bridge.mqtt, "Client", recorder(calls))
+    monkeypatch.delenv("MQTT_USERNAME", raising=False)
+    monkeypatch.delenv("MQTT_PASSWORD", raising=False)
+    bridge.build_client(bridge.Bridge(ROUTES, lambda: None))
+    assert calls == []
+
+
+def test_a_subscription_the_broker_refuses_takes_the_bridge_out_of_the_connected_state_so_the_probe_and_alert_see_it():
+    # Mosquitto does not report a refused subscription (it grants it and delivers nothing; see
+    # tests/integration/test_mosquitto_auth.py), but a broker that does must not leave the bridge looking healthy.
+    b = bridge.Bridge(ROUTES, lambda: None)
+    bridge.MQTT_CONNECTED.set(1)
+    granted = types.SimpleNamespace(is_failure=False)
+    refused = types.SimpleNamespace(is_failure=True)
+    b.on_subscribe(None, None, 1, [granted, granted])
+    assert bridge.MQTT_CONNECTED._value.get() == 1
+    b.on_subscribe(None, None, 2, [granted, refused])
+    assert bridge.MQTT_CONNECTED._value.get() == 0
+
+
+def test_the_client_is_given_the_subscription_handler(monkeypatch):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def reconnect_delay_set(self, min_delay, max_delay):
+            pass
+
+        def __setattr__(self, name, value):
+            seen[name] = value
+
+    monkeypatch.setattr(bridge.mqtt, "Client", Recorder)
+    monkeypatch.delenv("MQTT_USERNAME", raising=False)
+    monkeypatch.delenv("MQTT_TLS_ENABLED", raising=False)
+    b = bridge.Bridge(ROUTES, lambda: None)
+    bridge.build_client(b)
+    assert seen["on_subscribe"] == b.on_subscribe
+
+
 # ------------------------------------------------------------------ the health probe
 
 def test_the_check_passes_only_when_the_running_bridge_reports_it_is_connected(monkeypatch, capsys):

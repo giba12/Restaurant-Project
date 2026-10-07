@@ -43,6 +43,10 @@ for path in ("edge-simulators", "services", "services/digital-twin", "services/t
     sys.path.insert(0, os.path.join(ROOT, path))
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "no_db: needs a container of its own (the broker) but not the database, so it is not skipped without TEST_PG_DSN")
+
+
 def pytest_collection_modifyitems(config, items):
     if DSN:
         return
@@ -50,7 +54,8 @@ def pytest_collection_modifyitems(config, items):
         raise pytest.UsageError("REQUIRE_DB is set but TEST_PG_DSN is not -- refusing to skip the database tests")
     skip = pytest.mark.skip(reason="TEST_PG_DSN not set; run via tests/integration/run_db_tests.sh")
     for item in items:
-        item.add_marker(skip)
+        if "no_db" not in item.keywords:
+            item.add_marker(skip)
 
 
 def _connect(dsn, attempts=30):

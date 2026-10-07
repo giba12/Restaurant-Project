@@ -4,8 +4,12 @@ How the plate-waste node takes a new model from the cloud, and refuses a bad one
 The cloud sends a signed `set_model` command (see control/edge_control.py) carrying the whole model artifact
 (about 5 KB). The node never swaps a model it has not checked, in this order:
 
-  1. The command is signed with the node's shared control key (HMAC-SHA256). With no key configured the node
-     takes no commands at all: the MQTT broker is open, so an unsigned command is just anyone's.
+  1. The command is addressed to THIS node and signed with THIS node's own control key (HMAC-SHA256). Each node
+     has its own key, derived by the cloud from a master secret it keeps (control/edge_control.py), so a key taken
+     from one node cannot command another, and the command names its target as well as being signed for it. During a
+     key rotation a node holds two keys, the new and the previous, and accepts either. With no key configured the
+     node takes no commands at all. (The broker itself also requires a login and limits who may publish control
+     topics; the key is the second lock, and the one that covers a compromised broker login.)
   2. It is newer than the last command acted on (`issued_at`), so a retained old command cannot undo a newer one.
   3. The artifact is for this model (same id, same input channels), within the size budget, and passes the
      loader's own hash check; the hash the command declares is the hash the artifact computes.
@@ -53,8 +57,14 @@ def signature(command: dict, key: str) -> str:
     return hmac.new(key.encode("utf-8"), canonical(body).encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def key_id(key: str) -> str:
+    """A short public fingerprint of a key: lets a rotation be followed without ever printing a key."""
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
+
+
 def sign(command: dict, key: str) -> dict:
-    return {**{k: v for k, v in command.items() if k != "hmac"}, "hmac": signature(command, key)}
+    body = {**{k: v for k, v in command.items() if k not in ("hmac", "key_id")}, "key_id": key_id(key)}
+    return {**body, "hmac": signature(body, key)}
 
 
 def verified(command: dict, key: str) -> bool:
@@ -71,15 +81,17 @@ def describe(model) -> dict:
 
 
 class ModelUpdater:
-    def __init__(self, model, node_id: str, key: str | None = None, on_status=None):
+    def __init__(self, model, node_id: str, key: str | None = None, on_status=None, previous_key: str | None = None):
         self._active = model
         self.node_id = node_id
-        self._key = key or None
+        # The node's own key, and, only while a rotation is in progress, the one it replaces.
+        self._keys = [k for k in (key, previous_key) if k]
         self.on_status = on_status or (lambda status: None)
         self._lock = threading.Lock()
         self._last_issued = 0.0
         self._candidate = None
         self._shadow = None
+        self._last_status = None
 
     @property
     def active(self):
@@ -112,10 +124,12 @@ class ModelUpdater:
             self._report("rejected", request_id, reason=f"could not read the command: {type(exc).__name__}: {exc}")
 
     def _process(self, command: dict) -> None:
-        if self._key is None:
+        if not self._keys:
             raise Rejected("control is disabled on this node: no EDGE_CONTROL_KEY is set")
-        if not verified(command, self._key):
-            raise Rejected("bad signature")
+        if not any(verified(command, key) for key in self._keys):
+            raise Rejected("bad signature (not signed with a key this node holds)")
+        if command.get("node_id") != self.node_id:
+            raise Rejected(f"this command is addressed to {command.get('node_id')!r}, not to this node ({self.node_id!r})")
         if command.get("version") != CONTROL_VERSION:
             raise Rejected(f"unsupported control version {command.get('version')!r}")
         if command.get("command") != "set_model":
@@ -243,6 +257,19 @@ class ModelUpdater:
         self._shadow = None
         self._report_locked("rejected", request_id, reason=reason, shadow=shadow)
 
+    def announce(self) -> None:
+        """Publish a retained status so the operator can discover this node. Called on every connect.
+
+        A reconnect repeats the last status (a rejection, say) rather than overwriting it with "ready"."""
+        with self._lock:
+            if self._last_status is not None:
+                try:
+                    self.on_status({**self._last_status, "active": describe(self._active)})
+                except Exception:
+                    pass
+            else:
+                self._report_locked("ready", None, reason="connected; no command received yet")
+
     def _report(self, state: str, request_id, reason: str) -> None:
         with self._lock:
             self._report_locked(state, request_id, reason=reason)
@@ -260,6 +287,7 @@ class ModelUpdater:
                 "mean_abs_diff_g": round(shadow["diff_total"] / shadow["seen"], 3) if shadow["seen"] else None,
                 "max_abs_diff_g": round(shadow["diff_max"], 3),
             }
+        self._last_status = status
         try:
             self.on_status(status)
         except Exception:

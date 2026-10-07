@@ -43,14 +43,26 @@ from edge_ai import updater  # noqa: E402
 from simulators import plate_waste  # noqa: E402
 
 SCHEMA = json.load(open(os.path.join(os.environ["SCHEMA_DIR"], "PlateWasteEvent.schema.json")))
-KEY = "test-control-key"
+NODE = "sim-plate-cam-01"
+MASTER = "test-master-secret"
+
+
+def key_for(node_id, generation=1):
+    """The node's own key, derived from the operator's master secret: no two nodes share one."""
+    return control.derive_node_key(MASTER, node_id, generation)
+
+
+KEY = key_for(NODE)
+_DERIVED = object()
 STORE = control.ModelStore()
 OLD, NEW = STORE.load("1.0.0")[0], STORE.load("1.1.0")[0]
 NEWEST = STORE.load(STORE.versions()[-1])[0]  # the model baked into the image
 
 
-def node(artifact=NEW, key=KEY, node_id="sim-plate-cam-01", seed=1):
-    n = plate_waste.PlateWasteNode(edge_model.EdgeModel(copy.deepcopy(artifact)), rng=random.Random(seed), node_id=node_id, control_key=key)
+def node(artifact=NEW, key=_DERIVED, node_id=NODE, seed=1, previous_key=None):
+    key = key_for(node_id) if key is _DERIVED else key  # None means a node that was given no key
+    n = plate_waste.PlateWasteNode(edge_model.EdgeModel(copy.deepcopy(artifact)), rng=random.Random(seed), node_id=node_id,
+                                   control_key=key, previous_control_key=previous_key)
     statuses = []
     n.updater.on_status = statuses.append
     return n, statuses
@@ -60,8 +72,9 @@ def send(n, command):
     n.updater.handle(json.dumps(command).encode())
 
 
-def command(artifact, **options):
-    return control.command_from_artifact(copy.deepcopy(artifact), options.pop("key", KEY), **options)
+def command(artifact, node_id=NODE, key=None, **options):
+    """A signed command for `node_id`; by default signed with that node's own key."""
+    return control.command_from_artifact(copy.deepcopy(artifact), key or key_for(node_id), node_id, **options)
 
 
 def readings(n, count):
@@ -372,7 +385,7 @@ class Sim:
 def fleet(broker, ids, artifact=OLD):
     nodes = {}
     for i, node_id in enumerate(ids):
-        n, _ = node(artifact, node_id=node_id, seed=10 + i)
+        n, _ = node(artifact, node_id=node_id, seed=10 + i)  # each with its own key
         plate_waste.attach_control(Sim(broker), n)
         nodes[node_id] = n
     return nodes
@@ -382,14 +395,20 @@ def running(nodes):
     return {i: n.updater.active.model_version for i, n in nodes.items()}
 
 
-def test_a_canary_reaches_one_node_first_and_the_rest_follow_when_the_whole_fleet_is_told():
+def tell(broker, node_id, artifact, **options):
+    """What the operator does for one node: sign for it with its own key, publish retained on its own topic."""
+    broker.publish(control.CONTROL_TOPIC.format(node_id), json.dumps(command(artifact, node_id=node_id, **options)), retain=True)
+
+
+def test_a_canary_reaches_one_node_first_and_the_rest_follow_when_each_is_told():
     broker = Broker()
     nodes = fleet(broker, ["cam-a", "cam-b", "cam-c"])
-    broker.publish(control.CONTROL_TOPIC.format("cam-a"), json.dumps(command(NEW, shadow_readings=10, now=1000.0)), retain=True)
+    tell(broker, "cam-a", NEW, shadow_readings=10, now=1000.0)
     for n in nodes.values():
         readings(n, 12)
     assert running(nodes) == {"cam-a": "1.1.0", "cam-b": "1.0.0", "cam-c": "1.0.0"}
-    broker.publish(control.CONTROL_TOPIC.format("all"), json.dumps(command(NEW, shadow_readings=10, now=2000.0)), retain=True)
+    for name in ("cam-a", "cam-b", "cam-c"):
+        tell(broker, name, NEW, shadow_readings=10, now=2000.0)
     for n in nodes.values():
         readings(n, 12)
     assert running(nodes) == {"cam-a": "1.1.0", "cam-b": "1.1.0", "cam-c": "1.1.0"}
@@ -400,7 +419,7 @@ def test_a_canary_reaches_one_node_first_and_the_rest_follow_when_the_whole_flee
 def test_a_canary_that_is_rejected_leaves_the_rest_of_the_fleet_untouched():
     broker = Broker()
     nodes = fleet(broker, ["cam-a", "cam-b"])
-    broker.publish(control.CONTROL_TOPIC.format("cam-a"), json.dumps(command(biased(NEW, 40.0), shadow_readings=10)), retain=True)
+    tell(broker, "cam-a", biased(NEW, 40.0), shadow_readings=10)
     for n in nodes.values():
         readings(n, 12)
     assert running(nodes) == {"cam-a": "1.0.0", "cam-b": "1.0.0"}
@@ -411,7 +430,7 @@ def test_a_canary_that_is_rejected_leaves_the_rest_of_the_fleet_untouched():
 def test_a_node_that_restarts_is_told_again_because_the_desired_state_is_retained():
     broker = Broker()
     first = fleet(broker, ["cam-a"])["cam-a"]
-    broker.publish(control.CONTROL_TOPIC.format("all"), json.dumps(command(NEW, shadow_readings=5)), retain=True)
+    tell(broker, "cam-a", NEW, shadow_readings=5)
     readings(first, 6)
     assert first.updater.active.model_version == "1.1.0"
     reborn = fleet(broker, ["cam-a"])["cam-a"]  # the pod restarted onto the model baked into its image
@@ -420,20 +439,88 @@ def test_a_node_that_restarts_is_told_again_because_the_desired_state_is_retaine
     assert reborn.updater.active.model_version == "1.1.0"
 
 
-def test_the_newest_command_wins_when_a_node_is_told_by_both_its_own_topic_and_the_fleets():
+def test_there_is_no_fleet_wide_topic_a_node_listens_only_to_its_own():
+    # A command is signed for one node with that node's key, so a topic every node reads could not carry one.
     broker = Broker()
-    broker.publish(control.CONTROL_TOPIC.format("all"), json.dumps(command(NEW, shadow_readings=0, force=True, now=1000.0)), retain=True)
-    broker.publish(control.CONTROL_TOPIC.format("cam-a"), json.dumps(command(OLD, shadow_readings=0, force=True, now=2000.0)), retain=True)
-    n = fleet(broker, ["cam-a"], artifact=NEW)["cam-a"]
-    assert n.updater.active.model_version == "1.0.0"
+    fleet(broker, ["cam-a"])
+    assert set(broker.subscribers) == {"control/edge/plate-waste/cam-a"}
 
 
-def test_attaching_control_subscribes_to_the_nodes_own_topic_and_the_fleets_and_reports_on_a_retained_status():
+def test_attaching_control_reports_on_a_retained_status_and_announces_the_node_when_it_connects():
     broker = Broker()
     n = fleet(broker, ["cam-a"])["cam-a"]
-    assert set(broker.subscribers) == {"control/edge/plate-waste/cam-a", "control/edge/plate-waste/all"}
+    n.updater.announce()  # what the runtime does on every successful connect
+    ready = json.loads(broker.retained[control.STATUS_TOPIC.format("cam-a")])
+    assert ready["state"] == "ready" and ready["node_id"] == "cam-a"
     n.updater.handle(b"garbage")
-    assert control.STATUS_TOPIC.format("cam-a") in broker.retained
+    assert json.loads(broker.retained[control.STATUS_TOPIC.format("cam-a")])["state"] == "rejected"
+
+
+def test_a_reconnect_repeats_the_last_status_instead_of_overwriting_a_rejection_with_ready():
+    broker = Broker()
+    n = fleet(broker, ["cam-a"])["cam-a"]
+    n.updater.handle(b"garbage")
+    n.updater.announce()
+    again = json.loads(broker.retained[control.STATUS_TOPIC.format("cam-a")])
+    assert again["state"] == "rejected" and "could not read the command" in again["reason"]
+
+
+# ------------------------------------------------------------------ one key per node, and rotating it
+
+def test_a_command_signed_with_another_nodes_key_is_refused():
+    n, statuses = node(OLD, node_id="cam-a")
+    send(n, command(NEW, node_id="cam-a", key=key_for("cam-b"), shadow_readings=0))
+    rejected(n, statuses, "bad signature")
+
+
+def test_a_command_for_another_node_is_refused_even_if_it_is_signed_with_this_nodes_own_key():
+    # The key would verify, but the command says it is for somebody else: replayed, or sent to the wrong topic.
+    n, statuses = node(OLD, node_id="cam-a")
+    send(n, command(NEW, node_id="cam-b", key=key_for("cam-a"), shadow_readings=0))
+    assert last(statuses)["state"] == "rejected" and "addressed to 'cam-b'" in last(statuses)["reason"]
+    assert n.updater.active.sha256 == edge_model.EdgeModel(OLD).sha256
+
+
+def test_a_command_with_no_target_is_refused():
+    n, statuses = node(OLD)
+    body = command(NEW, shadow_readings=0)
+    del body["node_id"]
+    send(n, updater.sign(body, KEY))
+    assert last(statuses)["state"] == "rejected" and "addressed to None" in last(statuses)["reason"]
+
+
+def test_the_derived_keys_differ_by_node_and_by_generation_and_are_stable():
+    assert key_for("cam-a") != key_for("cam-b")
+    assert key_for("cam-a", 1) != key_for("cam-a", 2)
+    assert key_for("cam-a") == control.derive_node_key(MASTER, "cam-a", 1)
+    assert control.derive_node_key("another-master", "cam-a") != key_for("cam-a")
+
+
+def test_during_a_rotation_a_node_accepts_both_its_new_key_and_the_one_it_replaces():
+    n, statuses = node(OLD, key=key_for(NODE, 2), previous_key=key_for(NODE, 1))
+    send(n, command(NEW, key=key_for(NODE, 1), shadow_readings=0, now=1000.0))  # signed with the old generation
+    assert last(statuses)["state"] == "applied"
+    send(n, command(OLD, key=key_for(NODE, 2), shadow_readings=0, force=True, now=2000.0))  # and the new one
+    assert last(statuses)["state"] == "applied" and n.updater.active.model_version == "1.0.0"
+
+
+def test_once_the_previous_key_is_taken_away_a_command_signed_with_it_is_refused():
+    n, statuses = node(OLD, key=key_for(NODE, 2))  # rotation finished: only the new key
+    send(n, command(NEW, key=key_for(NODE, 1), shadow_readings=0))
+    rejected(n, statuses, "bad signature")
+
+
+def test_the_key_derivation_matches_the_known_answers_the_provisioning_scripts_tests_also_pin():
+    # tests/static/test_mqtt_auth_provisioning.py asserts the same two literals against the shell script's derivation, so the
+    # key the cloud derives and the key provisioned into a Secret cannot drift apart.
+    assert control.derive_node_key("known-master", "known-node", 1) == "a148734f7efb5158df9f19510920ff38bcf07570c36c29324963375b1fd757fa"
+    assert control.derive_node_key("known-master", "known-node", 2) == "d5c51e025da156674e36620045d53ec41080b955abf1335d0bf378816d32f5b4"
+
+
+def test_a_signed_command_carries_the_public_fingerprint_of_its_key_and_never_the_key():
+    built = command(NEW)
+    assert built["key_id"] == updater.key_id(KEY) and len(built["key_id"]) == 8
+    assert KEY not in json.dumps(built)
 
 
 # ------------------------------------------------------------------ the model store and the cloud's commands
@@ -486,8 +573,8 @@ def test_a_stored_model_is_immutable_the_first_version_is_byte_for_byte_what_was
 
 
 def test_a_built_command_is_signed_and_carries_sixteen_known_answers_the_node_can_check():
-    built = control.build_set_model(STORE, "1.1.0", KEY)
-    assert updater.verified(built, KEY) and not updater.verified(built, "another-key")
+    built = control.build_set_model(STORE, "1.1.0", KEY, NODE)
+    assert updater.verified(built, KEY) and not updater.verified(built, "another-key") and built["node_id"] == NODE
     assert len(built["probe"]) == 16 and built["force"] is False
     model = edge_model.EdgeModel(STORE.load("1.1.0")[0])
     assert all(abs(model.infer(p["features"]).grams - p["grams"]) < 1e-9 for p in built["probe"])
@@ -511,6 +598,10 @@ class FakeLink:
         self.closed = True
 
 
+def status_payload(node_id, state="ready"):
+    return json.dumps({"node_id": node_id, "state": state, "reason": "x", "active": {"model_version": "1.1.0", "sha256": "a" * 64}, "candidate": None}).encode()
+
+
 def cli(argv, monkeypatch, replies=None):
     link = FakeLink()
     link.replies = replies or {}
@@ -518,40 +609,95 @@ def cli(argv, monkeypatch, replies=None):
     return code, link
 
 
-def test_rollout_publishes_a_retained_signed_shadowed_command_to_each_named_node(monkeypatch):
-    monkeypatch.setenv("EDGE_CONTROL_KEY", KEY)
+@pytest.fixture
+def operator(monkeypatch):
+    """An operator holding the master secret, with two live nodes."""
+    monkeypatch.setenv("EDGE_CONTROL_MASTER_KEY", MASTER)
+    monkeypatch.delenv("EDGE_CONTROL_KEY", raising=False)
+    monkeypatch.delenv("SOURCE_ID", raising=False)
+    monkeypatch.delenv("EDGE_CONTROL_GENERATION", raising=False)
+    return {"edge/status/plate-waste/cam-a": status_payload("cam-a"), "edge/status/plate-waste/cam-b": status_payload("cam-b")}
+
+
+def test_rollout_signs_a_separate_command_for_each_named_node_with_that_nodes_own_key(monkeypatch, operator):
     code, link = cli(["rollout", "--version", "1.1.0", "--nodes", "cam-a, cam-b", "--shadow-readings", "12"], monkeypatch)
     assert code == 0 and link.closed
     assert [t for t, _, _ in link.published] == ["control/edge/plate-waste/cam-a", "control/edge/plate-waste/cam-b"]
     assert all(retain for _, _, retain in link.published)
-    sent = json.loads(link.published[0][1])
-    assert updater.verified(sent, KEY) and sent["shadow_readings"] == 12 and sent["force"] is False
+    sent = [json.loads(payload) for _, payload, _ in link.published]
+    assert [c["node_id"] for c in sent] == ["cam-a", "cam-b"]
+    assert updater.verified(sent[0], key_for("cam-a")) and not updater.verified(sent[0], key_for("cam-b"))
+    assert updater.verified(sent[1], key_for("cam-b")) and sent[0]["request_id"] != sent[1]["request_id"]
+    assert sent[0]["shadow_readings"] == 12 and sent[0]["force"] is False
 
 
-def test_rollback_is_a_forced_rollout_of_an_older_version_with_no_shadow(monkeypatch):
-    monkeypatch.setenv("EDGE_CONTROL_KEY", KEY)
-    code, link = cli(["rollback", "--to", "1.0.0", "--nodes", "all"], monkeypatch)
-    sent = json.loads(link.published[0][1])
-    assert code == 0 and link.published[0][0] == "control/edge/plate-waste/all"
-    assert sent["force"] is True and sent["shadow_readings"] == 0 and sent["model"]["model_version"] == "1.0.0"
+def test_all_means_every_node_that_has_reported_a_status(monkeypatch, operator):
+    code, link = cli(["rollout", "--version", "1.1.0", "--nodes", "all"], monkeypatch, replies=operator)
+    assert code == 0 and [t for t, _, _ in link.published] == ["control/edge/plate-waste/cam-a", "control/edge/plate-waste/cam-b"]
 
 
-def test_a_rollout_without_a_key_publishes_nothing(monkeypatch, capsys):
-    monkeypatch.delenv("EDGE_CONTROL_KEY", raising=False)
-    code, link = cli(["rollout", "--version", "1.1.0", "--nodes", "all"], monkeypatch)
-    assert code == 2 and link.published == []
-    assert "EDGE_CONTROL_KEY is not set" in capsys.readouterr().err
-
-
-def test_a_rollout_of_a_version_that_is_not_in_the_store_publishes_nothing(monkeypatch):
-    monkeypatch.setenv("EDGE_CONTROL_KEY", KEY)
+def test_all_with_no_node_reporting_publishes_nothing_and_says_so(monkeypatch, operator):
     link = FakeLink()
-    with pytest.raises(FileNotFoundError):
-        control.main(["rollout", "--version", "7.7.7", "--nodes", "all"], link_factory=lambda: link)
+    with pytest.raises(LookupError, match="no node has reported"):
+        control.main(["rollout", "--version", "1.1.0", "--nodes", "all"], link_factory=lambda: link)
     assert link.published == [] and link.closed
 
 
-def test_clear_publishes_an_empty_retained_message_which_removes_the_desired_state(monkeypatch):
+def test_all_cannot_be_mixed_with_names(monkeypatch, operator):
+    link = FakeLink()
+    with pytest.raises(ValueError, match="cannot be mixed"):
+        control.main(["rollout", "--version", "1.1.0", "--nodes", "all,cam-a"], link_factory=lambda: link)
+    assert link.published == []
+
+
+def test_a_new_key_generation_signs_with_a_different_key(monkeypatch, operator):
+    code, link = cli(["rollout", "--version", "1.1.0", "--nodes", "cam-a", "--generation", "2"], monkeypatch)
+    sent = json.loads(link.published[0][1])
+    assert code == 0 and updater.verified(sent, key_for("cam-a", 2)) and not updater.verified(sent, key_for("cam-a", 1))
+
+
+def test_rollback_is_a_forced_rollout_of_an_older_version_with_no_shadow(monkeypatch, operator):
+    code, link = cli(["rollback", "--to", "1.0.0", "--nodes", "cam-a"], monkeypatch)
+    sent = json.loads(link.published[0][1])
+    assert code == 0 and link.published[0][0] == "control/edge/plate-waste/cam-a"
+    assert sent["force"] is True and sent["shadow_readings"] == 0 and sent["model"]["model_version"] == "1.0.0"
+
+
+def test_without_the_master_secret_a_tool_can_command_only_the_node_whose_own_key_it_holds(monkeypatch):
+    monkeypatch.delenv("EDGE_CONTROL_MASTER_KEY", raising=False)
+    monkeypatch.setenv("EDGE_CONTROL_KEY", key_for("cam-a"))
+    monkeypatch.setenv("SOURCE_ID", "cam-a")
+    code, link = cli(["rollout", "--version", "1.1.0", "--nodes", "cam-a"], monkeypatch)
+    assert code == 0 and updater.verified(json.loads(link.published[0][1]), key_for("cam-a"))
+    code, link = cli(["rollout", "--version", "1.1.0", "--nodes", "cam-a,cam-b"], monkeypatch)  # cam-b's key is not here
+    assert code == 2 and link.published == [], "nothing may be published when any target's key is missing"
+
+
+def test_a_rollout_without_any_key_publishes_nothing(monkeypatch, capsys):
+    for name in ("EDGE_CONTROL_MASTER_KEY", "EDGE_CONTROL_KEY", "SOURCE_ID"):
+        monkeypatch.delenv(name, raising=False)
+    code, link = cli(["rollout", "--version", "1.1.0", "--nodes", "cam-a"], monkeypatch)
+    assert code == 2 and link.published == []
+    assert "no key for node 'cam-a'" in capsys.readouterr().err
+
+
+def test_a_rollout_of_a_version_that_is_not_in_the_store_publishes_nothing(monkeypatch, operator):
+    link = FakeLink()
+    with pytest.raises(FileNotFoundError):
+        control.main(["rollout", "--version", "7.7.7", "--nodes", "cam-a"], link_factory=lambda: link)
+    assert link.published == [] and link.closed
+
+
+def test_derive_key_prints_a_nodes_key_and_only_to_whoever_holds_the_master_secret(monkeypatch, capsys):
+    monkeypatch.setenv("EDGE_CONTROL_MASTER_KEY", MASTER)
+    assert control.main(["derive-key", "--node", "cam-a", "--generation", "2"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == key_for("cam-a", 2) and updater.key_id(key_for("cam-a", 2)) in captured.err
+    monkeypatch.delenv("EDGE_CONTROL_MASTER_KEY")
+    assert control.main(["derive-key", "--node", "cam-a"]) == 2 and capsys.readouterr().out == ""
+
+
+def test_clear_publishes_an_empty_retained_message_which_removes_the_desired_state(monkeypatch, operator):
     code, link = cli(["clear", "--nodes", "cam-a"], monkeypatch)
     assert code == 0 and link.published == [("control/edge/plate-waste/cam-a", "", True)]
 
@@ -603,3 +749,20 @@ def test_the_advise_command_reads_the_api_answer_and_never_opens_a_connection_to
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"window_minutes": 60, "nodes": [row(drifting_now=True)]})))
     assert control.main(["advise"], link_factory=no_broker) == 0
     assert "DRIFT" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------------ the footprint probe
+
+def test_the_footprint_probe_runs_to_the_end_and_its_update_is_promoted(monkeypatch, capsys):
+    # The probe is normally piped into the node's image under a CPU and memory limit (tests/load/test_edge_footprint.py), which
+    # takes a stack. It once crashed there because the command builder gained a parameter and nothing fast ran the probe.
+    import json
+    import runpy
+
+    monkeypatch.setenv("PROBE_PACE_SECONDS", "0")
+    monkeypatch.chdir(HERE)
+    runpy.run_path(os.path.join(HERE, "footprint_probe.py"), run_name="__main__")
+    out = json.loads(capsys.readouterr().out)
+    assert out["update_checks_state"] == "shadowing" and out["update_final_state"] == "applied"
+    assert out["artifact_bytes"] <= edge_model.MAX_ARTIFACT_BYTES
+    assert out["inference_ms_paced"]["p99"] < 5.0

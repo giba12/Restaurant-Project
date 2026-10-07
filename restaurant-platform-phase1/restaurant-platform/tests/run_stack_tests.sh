@@ -45,6 +45,10 @@ mkdir -p "$ARTIFACTS"
 "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true   # start from a clean slate
 
 echo "== building and starting the stack ($LAYER) =="
+# The operator's tool (a profile, so not part of the stack below) is run on demand by the end-to-end tests; build it first, or the
+# first test to run it spends its whole time limit building. BEFORE the stack starts, not after: a build running while the services
+# are joining Kafka competes for the CPU at exactly the moment they are most likely to time out and restart.
+"${COMPOSE[@]}" build edge-operator || { echo "the edge-operator image failed to build" >&2; exit 2; }
 # shellcheck disable=SC2086
 "${COMPOSE[@]}" up -d --build $SERVICES || { echo "stack failed to start" >&2; exit 2; }
 

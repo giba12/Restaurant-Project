@@ -25,8 +25,21 @@ services:
   mosquitto:
     image: docker.io/library/eclipse-mosquitto:2
     restart: unless-stopped
+    # Anonymous clients are refused and each user may touch only its own topics (docker-compose/mosquitto/acl). The
+    # entrypoint builds the password file from these variables at start-up; unset means the local-development
+    # placeholder, like the database passwords. Set them for anything shared.
+    entrypoint: ["/bin/ash", "/usr/local/bin/mosquitto-auth-entrypoint.sh"]
+    environment:
+      MQTT_PASSWORD_SIM_PLATE_CAM_01: ${MQTT_PASSWORD_SIM_PLATE_CAM_01:-changeme-local-dev-only}
+      MQTT_PASSWORD_SIM_POS_01: ${MQTT_PASSWORD_SIM_POS_01:-changeme-local-dev-only}
+      MQTT_PASSWORD_SIM_TICKET_TIMER_01: ${MQTT_PASSWORD_SIM_TICKET_TIMER_01:-changeme-local-dev-only}
+      MQTT_PASSWORD_SIM_STAFFING_SENSOR_01: ${MQTT_PASSWORD_SIM_STAFFING_SENSOR_01:-changeme-local-dev-only}
+      MQTT_PASSWORD_RP_MQTT_KAFKA_BRIDGE: ${MQTT_PASSWORD_RP_MQTT_KAFKA_BRIDGE:-changeme-local-dev-only}
+      MQTT_PASSWORD_EDGE_OPERATOR: ${MQTT_PASSWORD_EDGE_OPERATOR:-changeme-local-dev-only}
     volumes:
       - ./docker-compose/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./docker-compose/mosquitto/acl:/etc/mosquitto/acl.source:ro
+      - ./docker-compose/mosquitto/mosquitto-auth-entrypoint.sh:/usr/local/bin/mosquitto-auth-entrypoint.sh:ro
       # The bridge's persistent session and the messages queued for it live here, so
       # they survive a restart of Mosquitto itself (DEF-152).
       - mosquitto-data:/mosquitto/data
@@ -87,6 +100,8 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
+      MQTT_USERNAME: rp-mqtt-kafka-bridge
+      MQTT_PASSWORD: ${MQTT_PASSWORD_RP_MQTT_KAFKA_BRIDGE:-changeme-local-dev-only}
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     healthcheck:
       # Healthy once it is connected to MQTT (and so subscribed).
@@ -146,10 +161,14 @@ services:
       MQTT_TOPIC: sensors/plate-waste
       SOURCE_ID: sim-plate-cam-01
       EVENT_RATE_PER_MIN: "8"
+      MQTT_USERNAME: sim-plate-cam-01
+      MQTT_PASSWORD: ${MQTT_PASSWORD_SIM_PLATE_CAM_01:-changeme-local-dev-only}
       # Only this node runs a model, so only this node takes model commands from the cloud (edge_ai/updater.py).
-      # Signed with this key; a node with no key takes no commands at all. The default is for local use only:
-      # set EDGE_CONTROL_KEY in the environment (or .env) for anything shared.
-      EDGE_CONTROL_KEY: ${EDGE_CONTROL_KEY:-dev-only-edge-control-key}
+      # This is the node's OWN key: HMAC-SHA256 of its id under the operator's master secret (see `edge-operator`
+      # below and control/edge_control.py). The default is the key derived from the local-development master secret,
+      # for local use only; for anything shared set both EDGE_CONTROL_MASTER_KEY and this (derive-key prints it).
+      # A node with no key takes no commands at all. During a key rotation add EDGE_CONTROL_KEY_PREVIOUS.
+      EDGE_CONTROL_KEY: ${EDGE_CONTROL_KEY:-c5eac9823b3aa0b98f1618ca37a086207b59cb4adf3979a18cb4dc3f1d374e78}
 
   edge-sim-pos-transaction:
     <<: *edge-sim
@@ -158,6 +177,8 @@ services:
       SENSOR_TYPE: pos-transaction
       MQTT_TOPIC: sensors/pos-transaction
       SOURCE_ID: sim-pos-01
+      MQTT_USERNAME: sim-pos-01
+      MQTT_PASSWORD: ${MQTT_PASSWORD_SIM_POS_01:-changeme-local-dev-only}
       EVENT_RATE_PER_MIN: "12"
 
   edge-sim-service-timing:
@@ -167,6 +188,8 @@ services:
       SENSOR_TYPE: service-timing
       MQTT_TOPIC: sensors/service-timing
       SOURCE_ID: sim-ticket-timer-01
+      MQTT_USERNAME: sim-ticket-timer-01
+      MQTT_PASSWORD: ${MQTT_PASSWORD_SIM_TICKET_TIMER_01:-changeme-local-dev-only}
       EVENT_RATE_PER_MIN: "20"
 
   edge-sim-staff-shift:
@@ -176,7 +199,38 @@ services:
       SENSOR_TYPE: staff-shift
       MQTT_TOPIC: sensors/staff-shift
       SOURCE_ID: sim-staffing-sensor-01
+      MQTT_USERNAME: sim-staffing-sensor-01
+      MQTT_PASSWORD: ${MQTT_PASSWORD_SIM_STAFFING_SENSOR_01:-changeme-local-dev-only}
       EVENT_RATE_PER_MIN: "3"
+
+  # -------------------------------------------------------------------
+  # The operator's tool for the edge nodes' model update path (control/edge_control.py). Not started with the
+  # stack (a profile): run it on demand,
+  #
+  #   docker compose run --rm edge-operator list
+  #   docker compose run --rm edge-operator rollout --version 1.2.0 --nodes all
+  #   docker compose run --rm edge-operator status
+  #
+  # It logs in to the broker as the `edge-operator` user (the only one that may publish control topics) and holds the
+  # MASTER secret, from which it derives each node's own key. No node container has either, so a compromised node can
+  # neither command another node nor mint a key. The master default is for local use only.
+  # -------------------------------------------------------------------
+  edge-operator:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: edge-simulators/Dockerfile
+    depends_on:
+      mosquitto:
+        condition: service_started
+    entrypoint: ["python", "-m", "control.edge_control"]
+    command: ["list"]
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      MQTT_USERNAME: edge-operator
+      MQTT_PASSWORD: ${MQTT_PASSWORD_EDGE_OPERATOR:-changeme-local-dev-only}
+      EDGE_CONTROL_MASTER_KEY: ${EDGE_CONTROL_MASTER_KEY:-dev-only-edge-control-master-key}
 
   # -------------------------------------------------------------------
   # Phase 4/5/6 application services -- same images/entry points as the

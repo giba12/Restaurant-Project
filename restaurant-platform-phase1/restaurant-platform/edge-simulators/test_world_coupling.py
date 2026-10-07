@@ -255,6 +255,8 @@ class FakeClient:
 def bare_simulator():
     sim = Simulator.__new__(Simulator)
     sim._handlers = {}
+    sim._connected_callbacks = []
+    sim._refused_publishes = {}
     sim._connected_event = threading.Event()
     sim.client = FakeClient()
     sim.log = types.SimpleNamespace(error=lambda *a, **k: None, exception=lambda *a, **k: None)
@@ -269,6 +271,27 @@ def test_subscriptions_are_established_on_every_connect_not_only_the_first():
     sim._on_connect(sim.client, None, None, ok)
     sim._on_connect(sim.client, None, None, ok)  # a reconnect with a clean session starts with no subscriptions
     assert sim.client.subscribed == [("sim/x", 1), ("sim/x", 1)]
+
+
+def test_connect_callbacks_run_on_every_successful_connect_and_a_failing_one_does_not_stop_the_others():
+    sim = bare_simulator()
+    calls = []
+    sim.on_connected(lambda: calls.append("first"))
+    sim.on_connected(lambda: 1 / 0)  # must not stop the next one, nor the connection
+    sim.on_connected(lambda: calls.append("third"))
+    ok = types.SimpleNamespace(is_failure=False)
+    sim._on_connect(sim.client, None, None, ok)
+    sim._on_connect(sim.client, None, None, ok)  # a reconnect
+    assert calls == ["first", "third", "first", "third"]
+    assert sim._connected_event.is_set()
+
+
+def test_a_refused_connection_runs_no_connect_callbacks():
+    sim = bare_simulator()
+    calls = []
+    sim.on_connected(lambda: calls.append("called"))
+    sim._on_connect(sim.client, None, None, types.SimpleNamespace(is_failure=True))
+    assert calls == [] and not sim._connected_event.is_set()
 
 
 def test_a_subscription_made_after_connecting_takes_effect_at_once():

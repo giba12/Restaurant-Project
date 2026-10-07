@@ -27,7 +27,7 @@ On the final code, every layer was re-run and passed: static 191 (3 skipped), un
 
 | | |
 |---|---|
-| Requirements | 99 identified: 74 verified by automated test, 6 by inspection, 9 live or manual only, 9 partial, 1 not verified, **0 not met** |
+| Requirements | 100 identified: 74 verified by automated test, 6 by inspection, 9 live or manual only, 10 partial, 1 not verified, **0 not met** |
 | Open defects | 5, all informational (DEF-015, DEF-091, DEF-093, DEF-123, DEF-131) |
 | Recommendation | **Ready to show, with caveats; not "released"** (`10-release-readiness-and-known-issues.md`) |
 
@@ -42,6 +42,8 @@ On the final code, every layer was re-run and passed: static 191 (3 skipped), un
 **Eighth step (2026-10-06): the last two items on the list, with the results as they came.** *Constrained device.* With no real hardware, the real node image was run under the limits its chart already imposes (100m CPU, 96Mi): 41-43 MiB resident (31 MiB of it the Python libraries, the model 5 KB), a floor between 24 and 28 MiB, inference p99 0.88 ms at the node's real pace, and a back-to-back p99 near 90 ms because a CPU quota pauses a container. Four load-layer tests keep it. It says nothing about a microcontroller or a slow ARM core. *Real data.* No public dataset has the plate model's channels, so the model could not be validated. The drift-monitoring method was checked on a public chemical-sensor drift dataset: the shift monitor caught large drift in every batch (the spread monitor missed two), **but the 0.1% false-alarm calibration did not transfer (0.66% and 4.5%) and mild drift was not reliably caught**, so the simulated figures for those do not generalise. The harness also exposed a gap neither monitor covers (DEF-157, open). Five offline tests of the harness; the real check needs the network and is not in CI.
 
 **Ninth step (2026-10-06): GitHub, and the gap the real-data harness left open.** GitHub's `tests` workflow failed twice in the `integration` job on one test that hardcoded a schema version the node had moved past (the other 117 integration tests and every other job passed); it was fixed, run locally (118 passed) and passed on GitHub in all 14 jobs, including the new `dashboard-web` job and the edge tests. The open defect from the real-data harness (DEF-157: neither monitor sees a signal that goes quiet) was first confirmed on the plate node itself (a stuck light sensor: spread, shift and per-reading guard all 0%) and then closed with a third monitor, the flatline monitor (model 1.2.0, schema 1.3.0): stuck sensors caught 100%, a gain loss to 0.5 99.8%, **a gain loss to 0.7 only 21%**, all three monitors in alarm about 0.24% of clean time. 17 new tests, six deliberate breakages each caught; 526 distinct tests in all. **GitHub's nightly run on that commit** (Docker Engine) passed end-to-end 67 (4 skipped), acceptance 4, resilience 11 of 11, statistical and security, and 7 of 8 load tests; the eighth was my own footprint test, whose fixed burst was too small to be throttled on a faster machine (DEF-159), now fixed. DEF-158 and DEF-160 record the integration-test and latency-assertion faults. **The re-run on the fix commit (nightly 37522200991) passed every layer on GitHub:** statistical 14, end-to-end 67 (4 skipped), acceptance 4, load 8 of 8, resilience 11 of 11, security 12, and the `tests` workflow in all 14 jobs. The footprint figures on GitHub: 41 MiB resident, inference p99 0.21 ms under 100m CPU (about four times quicker than on the laptop), cgroup peak 25 MiB.
+
+**Tenth step (2026-10-06): per-node control keys and broker authentication, built against the real broker.** The MQTT broker now refuses anonymous clients and limits each login to its own topics, and every edge node has its own control key. 41 tests run the real Mosquitto image (refused logins; each simulator publishing only its own topic; the bridge reading four topics and publishing nothing; only the operator sending a command; no session hijack by claiming a client id; the operator's tool against the real broker), 22 static tests pin the cross-file facts and the cutover order, 13 test the provisioning script against recording stand-ins for `kubectl`; broken on purpose seven, eight and five ways, each caught (one anonymous-access mutant only once a second lock was removed too). **Measured on the way, and the design rests on it:** Mosquitto grants a subscription its ACL refuses and delivers nothing, and acknowledges a refused publish as a success in MQTT 3.1.1, so reads and publishes are tested by delivery and the simulators and the operator tool moved to MQTT 5 (DEF-161). It also found the broker will refuse root-owned password and ACL files in a future version (DEF-162), and four faults of mine that only the real stack showed (DEF-163 to DEF-165, including a name clash that crashed every publish of the operator's tool). **On the authenticated stack locally:** end-to-end 68 passed (4 skipped), resilience 11 of 11 with no loss allowed (the Mosquitto restart and the hard kill included; 1 h 21 min on an overloaded laptop), footprint 4 of 4. 612 distinct tests. **Not done:** the cutover on the k3s cluster (its broker is anonymous until `k8s/realign/realign-live-cluster.sh` is run), a GitHub run of this change, broker TLS on the Compose path, a master-secret rotation procedure.
 
 **The limits that matter most:** one machine and one container engine; the two e2e fixes from the first GitHub run were re-run there, and the full nightly workflow passed every layer on 2026-10-05 after two new ledger checks first failed (DEF-151); the heavy layers are flaky in this environment (the resilience layer needed six runs in the second cycle to produce one clean pass), so their stability is unmeasured; the staffing effect and the edge sensors are designs of the simulation, so passing shows the pipeline works, not that the real world behaves so; there is no independent reviewer.
 
@@ -60,7 +62,7 @@ On the final code, every layer was re-run and passed: static 191 (3 skipped), un
 | 8 | Security | **11 passed** | 27 s | 2026-10-04 | One case per requirements file, now including the edge trainer's pins; no known vulnerabilities |
 | - | Godot client smoke test | Not re-run | - | 2026-09-30 (CI) | About 80 checks; passed on GitHub on 2026-09-30 |
 
-**Totals:** 526 distinct test names across the Python suites, plus the GDScript smoke test.
+**Totals:** 612 distinct test names across the Python suites, plus the GDScript smoke test.
 
 ## 3. Measured results
 
@@ -151,10 +153,10 @@ From `03-requirements-traceability-matrix.md`:
 | Verified (automated) | 74 |
 | Verified by inspection | 6 |
 | Verified (live or manual only) | 9 |
-| Partially verified | 9 |
+| Partially verified | 10 |
 | Not verified | 1 |
 | **Not met** | 0 |
-| **Total** | **99** |
+| **Total** | **100** |
 
 **Not met:** none. FR-TWN-03 (twin counts correct under redelivery) was the last, and was fixed on 2026-10-04 (DEF-107); FR-CAU-06 (the gate rejects noise) was fixed on 2026-10-03. **Not verified:** NFR-POR-03 (the Codespaces devcontainer). Four requirements were added on 2026-10-04 and verified at once: FR-ING-07 (staffing is a real driver), FR-ANA-05 (robust control limits), FR-CAU-07 (the scenario's finding passes refutation) and NFR-REL-05 (self-healing connectors). The traceability matrix lists the weakly verified requirements and what would close each.
 

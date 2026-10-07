@@ -54,13 +54,23 @@ def test_the_bridge_is_restarted_by_a_probe_when_it_is_up_but_not_connected():
 @needs_helm
 def test_the_bridge_reaches_both_brokers_over_tls_with_their_cas_mounted():
     spec = one(render("mqtt-kafka-bridge"), "Deployment")["spec"]["template"]["spec"]
-    env = {e["name"]: e["value"] for e in spec["containers"][0]["env"]}
+    entries = {e["name"]: e for e in spec["containers"][0]["env"]}
+    env = {name: e["value"] for name, e in entries.items() if "value" in e}  # the password is a Secret reference, not a value
     assert env["MQTT_TLS_ENABLED"] == "true" and env["MQTT_PORT"] == "8883"
     assert env["KAFKA_SECURITY_PROTOCOL"] == "SSL" and env["KAFKA_BOOTSTRAP_SERVERS"].endswith(":9093")
     mounts = {m["mountPath"] for m in spec["containers"][0]["volumeMounts"]}
     assert {"/etc/kafka-tls", "/etc/mosquitto-tls"} <= mounts
     secrets = {v["secret"]["secretName"] for v in spec["volumes"]}
     assert secrets == {"restaurant-platform-kafka-cluster-ca-cert", "mosquitto-tls"}
+
+
+@needs_helm
+def test_the_bridge_logs_in_as_its_own_user_with_its_password_from_a_secret_and_its_session_id_is_its_username():
+    # The broker makes a client's id its username, so the id that names the persistent session must be the username.
+    entries = {e["name"]: e for e in one(render("mqtt-kafka-bridge"), "Deployment")["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert entries["MQTT_USERNAME"]["value"] == "rp-mqtt-kafka-bridge" == entries["BRIDGE_CLIENT_ID"]["value"]
+    assert entries["MQTT_PASSWORD"]["valueFrom"]["secretKeyRef"] == {"name": "mqtt-rp-mqtt-kafka-bridge", "key": "password"}
+    assert "value" not in entries["MQTT_PASSWORD"], "the password must not sit in the manifest"
 
 
 @needs_helm

@@ -114,6 +114,8 @@ def test_every_long_running_service_restarts_on_failure():
     # With no policy a transient crash (a Kafka rebalance timeout under load)
     # leaves the service down forever, unlike a k8s Deployment's self-healing.
     for name, svc in SERVICES.items():
+        if svc.get("profiles"):
+            continue  # a tool run on demand (`docker compose run`), not started with the stack, so there is nothing to restart
         if name in ONE_SHOT:
             assert str(svc.get("restart")) == "no", f"{name} is run-once and must be restart: 'no'"
         else:

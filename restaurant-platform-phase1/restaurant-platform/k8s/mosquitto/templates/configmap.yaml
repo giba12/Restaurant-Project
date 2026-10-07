@@ -5,7 +5,23 @@ metadata:
 data:
   mosquitto.conf: |
     listener 1883
+{{- if .Values.auth.enabled }}
+
+    # Every client logs in, and each user may touch only its own topics (the acl key below). Anonymous clients are
+    # refused: on an open broker anyone who could reach it could publish sensor events, read them, or send a node a
+    # command. use_username_as_clientid makes a client's id its username, so nobody else can take over the bridge's
+    # persistent session by connecting under its id. The password file is the Secret made by
+    # k8s/mosquitto/provision-mqtt-auth.sh; nothing secret is in this repository. These settings are global, so they
+    # cover the TLS listener below as well.
+    allow_anonymous false
+    password_file /mosquitto/auth/passwd
+    acl_file /mosquitto/auth/acl
+    use_username_as_clientid true
+{{- else }}
+    # auth.enabled is false: anonymous clients are allowed. This exists only for the step of a cutover in which the
+    # clients are given their credentials before the broker starts requiring them; leave it true.
     allow_anonymous true
+{{- end }}
 
     # Persistence is what makes the MQTT-to-Kafka bridge's guarantee survive a restart of
     # Mosquitto itself (DEF-152). The bridge keeps a persistent session and acknowledges a
@@ -34,3 +50,42 @@ data:
     cafile /mosquitto/certs/tls.crt
     certfile /mosquitto/certs/tls.crt
     keyfile /mosquitto/certs/tls.key
+{{- if .Values.auth.enabled }}
+  # The same rules as docker-compose/mosquitto/acl; a test compares them.
+  acl: |
+    # Who may publish and subscribe to what. Anything not listed here is refused. No secrets in this file: it names
+    # users and topics only (passwords are built from the environment at start-up, mosquitto-auth-entrypoint.sh).
+    # The same rules are in k8s/mosquitto/templates/configmap.yaml; a test compares them.
+
+    # The four sensor simulators: each publishes only its own sensor topic.
+    user sim-pos-01
+    topic write sensors/pos-transaction
+
+    user sim-ticket-timer-01
+    topic write sensors/service-timing
+    # It reads the simulated world's staffing level, which the staff-shift sensor publishes.
+    topic read sim/world/staffing
+
+    user sim-staffing-sensor-01
+    topic write sensors/staff-shift
+    topic write sim/world/staffing
+
+    # The plate-waste node also takes model commands on its own control topic and reports on its own status topic.
+    user sim-plate-cam-01
+    topic write sensors/plate-waste
+    topic read control/edge/plate-waste/sim-plate-cam-01
+    topic write edge/status/plate-waste/sim-plate-cam-01
+
+    # The MQTT-Kafka bridge reads the four sensor topics and nothing else.
+    user rp-mqtt-kafka-bridge
+    topic read sensors/pos-transaction
+    topic read sensors/service-timing
+    topic read sensors/staff-shift
+    topic read sensors/plate-waste
+
+    # The operator: the only identity that may send a node a command, and it reads the nodes' statuses. A node also
+    # checks a command's signature with its own key, so this login alone cannot change a model.
+    user edge-operator
+    topic write control/edge/plate-waste/+
+    topic read edge/status/plate-waste/+
+{{- end }}

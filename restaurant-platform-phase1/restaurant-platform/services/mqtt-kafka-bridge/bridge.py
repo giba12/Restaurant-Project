@@ -107,6 +107,16 @@ class Bridge:
         MQTT_CONNECTED.set(1)
         log.info("connected to MQTT; subscribed (QoS 1, persistent session) to %s", ", ".join(self.routes))
 
+    def on_subscribe(self, client, userdata, mid, reason_codes, properties=None):
+        # Some brokers answer a subscription their access rules refuse with a failure code; treat that as not
+        # connected, so the health check and the alert see it. Mosquitto does NOT: it grants the subscription and
+        # then delivers nothing (verified on 2.1.2, tests/integration/test_mosquitto_auth.py), so for Mosquitto a
+        # wrong ACL shows as silence, which the tests and the pipeline's arrival checks are what catch.
+        if any(code.is_failure for code in reason_codes):
+            MQTT_CONNECTED.set(0)
+            log.error("MQTT subscription refused by the broker (%s): the bridge's user is not allowed to read these topics",
+                      ", ".join(str(code) for code in reason_codes))
+
     def on_disconnect(self, client, userdata, flags, reason_code, properties=None):
         MQTT_CONNECTED.set(0)
         log.warning("disconnected from MQTT (%s); Mosquitto keeps everything not yet acknowledged", reason_code)
@@ -254,7 +264,10 @@ def build_client(bridge: Bridge):
     )
     if os.environ.get("MQTT_TLS_ENABLED", "false").lower() == "true":
         client.tls_set(ca_certs=os.environ.get("MQTT_TLS_CA_FILE", "/etc/mosquitto-tls/tls.crt"))
+    if os.environ.get("MQTT_USERNAME"):
+        client.username_pw_set(os.environ["MQTT_USERNAME"], os.environ.get("MQTT_PASSWORD", ""))
     client.on_connect = bridge.on_connect
+    client.on_subscribe = bridge.on_subscribe
     client.on_disconnect = bridge.on_disconnect
     client.on_message = bridge.on_message
     client.reconnect_delay_set(min_delay=1, max_delay=10)

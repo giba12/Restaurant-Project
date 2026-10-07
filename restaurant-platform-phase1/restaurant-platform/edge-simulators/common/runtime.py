@@ -61,12 +61,22 @@ class Simulator:
             self.schema = json.load(f)
         self.validator = jsonschema.Draft202012Validator(self.schema)
 
+        # MQTT 5, not 3.1.1, so the broker can say "not authorized": with 3.1.1 a publish the broker's access rules refuse
+        # is acknowledged as a success and silently dropped, and this simulator would log an event as published that
+        # never left it (the loss ledger, tests/resilience, trusts that log line).
         self.client = mqtt.Client(
             client_id=self.source_id,
+            protocol=mqtt.MQTTv5,
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         )
+        self._refused_publishes = {}
         if self.mqtt_tls_enabled:
             self.client.tls_set(ca_certs=self.mqtt_tls_ca_file)
+        # Broker credentials (the broker refuses anonymous clients and limits each user to its own topics). Unset
+        # means an anonymous connection, which only a broker still allowing anonymous clients will accept.
+        if os.environ.get("MQTT_USERNAME"):
+            self.client.username_pw_set(os.environ["MQTT_USERNAME"], os.environ.get("MQTT_PASSWORD", ""))
+        self._connected_callbacks = []
         # client.connect() only opens the socket and sends the CONNECT packet
         # -- it does not wait for the broker's CONNACK, which is only read
         # once loop_start()'s background thread is running. Without this,
@@ -82,6 +92,7 @@ class Simulator:
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
+        self.client.on_publish = self._on_publish
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         if reason_code.is_failure:
@@ -92,6 +103,15 @@ class Simulator:
             for topic in self._handlers:
                 client.subscribe(topic, qos=1)
             self._connected_event.set()
+            for callback in self._connected_callbacks:
+                try:
+                    callback()
+                except Exception:
+                    self.log.exception("a connected callback failed")
+
+    def on_connected(self, callback) -> None:
+        """Call `callback()` after every successful connect (including reconnects), on the network thread."""
+        self._connected_callbacks.append(callback)
 
     def subscribe(self, topic: str, handler) -> None:
         """Call `handler(payload_bytes)` for every message on `topic`, across reconnects."""
@@ -106,6 +126,10 @@ class Simulator:
                 handler(message.payload)
             except Exception:
                 self.log.exception("handler for %s failed", message.topic)
+
+    def _on_publish(self, client, userdata, mid, reason_code, properties=None):
+        if reason_code.is_failure:
+            self._refused_publishes[mid] = reason_code
 
     def publish_state(self, topic: str, payload: str) -> None:
         """Publish shared simulated-world state: retained, so a late subscriber sees it at once."""
@@ -153,6 +177,10 @@ class Simulator:
         payload = json.dumps(event)
         result = self.client.publish(self.mqtt_topic, payload, qos=1)
         result.wait_for_publish(timeout=5)
+        refused = self._refused_publishes.pop(result.mid, None)
+        if refused is not None:
+            # Not logged as "published": that line is the record of what reached the broker.
+            raise PermissionError(f"the broker refused {event['event_type']} event_id={event['event_id']} on {self.mqtt_topic}: {refused}")
         self.log.info("published %s event_id=%s", event["event_type"], event["event_id"])
 
     def sleep_poisson_interval(self) -> None:

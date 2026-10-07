@@ -56,7 +56,7 @@ Eight layers, each simulating one thing production does to a system. They are ca
 | 7 | Load and stability | 4 | Bursts and long runs | `tests/load/` |
 | 8 | Security and supply chain | 1 | Ageing dependencies | `tests/security/` |
 
-Plus the Godot client's own end-to-end test (`game/client/tests/smoke_test.gd`, roughly 80 checks) and the live audit script (`k8s/audit/audit-live-cluster.sh`), which is not automated in CI. In total: **649 distinct test names** (one name is shared by two files) plus the GDScript suite.
+Plus the Godot client's own end-to-end test (`game/client/tests/smoke_test.gd`, roughly 80 checks) and the live audit script (`k8s/audit/audit-live-cluster.sh`), which is not automated in CI. In total: **653 distinct test names** (one name is shared by two files) plus the GDScript suite.
 
 ### 3.2 Test design techniques used
 

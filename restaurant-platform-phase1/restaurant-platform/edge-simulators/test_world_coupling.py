@@ -334,3 +334,44 @@ def test_scenario_messages_are_filtered_by_target_and_end_only_the_matching_scen
     assert state["active"] is not None, "ending a different scenario must not end this one"
     scenario.apply(state, {"scenario_injection_id": "s1", "action": "end", "target": "all"}, targets)
     assert state["active"] is None
+
+
+def test_a_wall_clock_step_cannot_leave_a_tickets_stamps_disagreeing_with_its_own_elapsed_times(monkeypatch):
+    # DEF-168. The simulator measures elapsed time on the monotonic clock; if it stamped events from the wall clock as well, a
+    # step of the wall clock (WSL2's time resync did 1.5 s backwards) would stamp a ticket's later events earlier than their
+    # elapsed times imply. Here the wall clock steps back 1.5 s and then forward 4 s while tickets are open.
+    from datetime import datetime, timedelta, timezone
+
+    random.seed(5)
+    clock = FakeClock()
+    wall = {"now": datetime(2026, 10, 7, 15, 0, 0, tzinfo=timezone.utc)}
+    monkeypatch.setattr(service_timing, "time", types.SimpleNamespace(monotonic=clock.monotonic))
+    monkeypatch.setattr(service_timing, "_wall_now", lambda: wall["now"])
+    lifecycle = service_timing.TicketLifecycle()
+    by_ticket = {}
+    for i in range(4000):
+        clock.tick()
+        wall["now"] += timedelta(seconds=1)
+        if i == 1000:
+            wall["now"] -= timedelta(seconds=1.5)
+        if i == 2500:
+            wall["now"] += timedelta(seconds=4)
+        event = lifecycle.next_event()
+        by_ticket.setdefault(event["ticket_id"], []).append(event)
+    checked = 0
+    for events in by_ticket.values():
+        for earlier, later in zip(events, events[1:]):
+            gap_ms = (datetime.fromisoformat(later["timestamp"]) - datetime.fromisoformat(earlier["timestamp"])).total_seconds() * 1000
+            assert gap_ms >= 0, "a later stage was stamped before an earlier one"
+            assert abs(gap_ms - later["elapsed_since_previous_stage_ms"]) <= 1, (gap_ms, later["elapsed_since_previous_stage_ms"])
+            checked += 1
+    assert checked > 1000, "too few consecutive events were compared for this to show anything"
+
+
+def test_a_tickets_first_event_is_stamped_from_the_wall_clock_and_the_stamp_is_valid_iso_8601(monkeypatch):
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(service_timing, "_wall_now", lambda: datetime(2026, 10, 7, 15, 0, 0, tzinfo=timezone.utc))
+    event = service_timing.TicketLifecycle().next_event()
+    assert event["stage"] == "order_fired" and event["elapsed_since_previous_stage_ms"] is None
+    assert datetime.fromisoformat(event["timestamp"]) == datetime(2026, 10, 7, 15, 0, 0, tzinfo=timezone.utc)

@@ -123,9 +123,9 @@ class Client:
         self.connect_code = reason_code
         self._connected.set()
 
-    def connect_and_wait(self, port, timeout=5, tls=True):
+    def connect_and_wait(self, port, timeout=5, tls=True, ca=None):
         if tls:
-            self.client.tls_set(ca_certs=STATE["ca"])
+            self.client.tls_set(ca_certs=ca or STATE["ca"])
         self.client.connect("127.0.0.1", port, keepalive=30)
         self.client.loop_start()
         if not self._connected.wait(timeout):
@@ -528,7 +528,15 @@ def test_the_charts_init_container_gives_the_broker_files_it_accepts_without_war
     (source / "passwd").mkdir(parents=True)
     (source / "acl").mkdir()
     (source / "acl" / "acl").write_text(config["acl"])
-    (tmp_path / "mosquitto.conf").write_text(config["mosquitto.conf"].split("listener 8883")[0])  # the plaintext listener only: no certificates here
+    (tmp_path / "mosquitto.conf").write_text(config["mosquitto.conf"])  # the whole of it, as the pod runs it
+    public, private = make_certificate(str(tmp_path / "tls"))
+    certs = tmp_path / "certs"  # what the `mosquitto-tls` Secret mount provides: both files, readable
+    certs.mkdir()
+    shutil.copy(os.path.join(public, "tls.crt"), certs / "tls.crt")
+    shutil.copy(os.path.join(private, "tls.key"), certs / "tls.key")
+    os.chmod(certs / "tls.crt", 0o644)
+    os.chmod(certs / "tls.key", 0o644)
+    os.chmod(certs, 0o755)
     volume = f"rp-itest-auth-{uuid.uuid4().hex[:8]}"
     name = f"rp-itest-chart-{uuid.uuid4().hex[:8]}"
     subprocess.run(["docker", "volume", "create", volume], check=True, capture_output=True)
@@ -539,14 +547,15 @@ def test_the_charts_init_container_gives_the_broker_files_it_accepts_without_war
         subprocess.run(["docker", "run", "--rm", "-v", f"{source}/passwd:/source/passwd:ro", "-v", f"{source}/acl:/source/acl:ro",
                         "-v", f"{volume}:/auth", "--entrypoint", init["command"][0], IMAGE, *init["command"][1:]],
                        check=True, capture_output=True)
-        subprocess.run(["docker", "run", "-d", "--name", name, "-p", "127.0.0.1::1883", "-v", f"{volume}:/mosquitto/auth:ro",
+        subprocess.run(["docker", "run", "-d", "--name", name, "-p", "127.0.0.1::8883", "-p", "127.0.0.1::1883", "-v", f"{volume}:/mosquitto/auth:ro",
+                        "-v", f"{certs}:/mosquitto/certs:ro",
                         "-v", f"{tmp_path}/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro", IMAGE], check=True, capture_output=True)
-        port = int(subprocess.run(["docker", "port", name, "1883/tcp"], check=True, capture_output=True, text=True).stdout.split()[0].rsplit(":", 1)[1])
+        port = int(subprocess.run(["docker", "port", name, "8883/tcp"], check=True, capture_output=True, text=True).stdout.split()[0].rsplit(":", 1)[1])
         deadline = time.time() + 20
         client = Client("sim-pos-01", password="chart-pw")
         while True:
             try:
-                client.connect_and_wait(port, 2, tls=False)
+                client.connect_and_wait(port, 2, ca=str(certs / "tls.crt"))
                 break
             except Exception:
                 if time.time() > deadline:
@@ -557,6 +566,18 @@ def test_the_charts_init_container_gives_the_broker_files_it_accepts_without_war
         logs = subprocess.run(["docker", "logs", name], capture_output=True, text=True)
         assert "Future versions will refuse" not in logs.stdout + logs.stderr
         assert "Unable to open" not in logs.stdout + logs.stderr
+        # and the chart's broker has no plaintext listener (1883 was published too, so one would answer)
+        import socket
+        plaintext = int(subprocess.run(["docker", "port", name, "1883/tcp"], check=True, capture_output=True, text=True).stdout.split()[0].rsplit(":", 1)[1])
+        with socket.socket() as probe:
+            probe.settimeout(3)
+            try:
+                probe.connect(("127.0.0.1", plaintext))
+                probe.sendall(b"\x10\x0c\x00\x04MQTT\x04\x02\x00\x3c\x00\x00")
+                reply = probe.recv(4)
+            except OSError:
+                reply = b""
+        assert reply == b"", f"the chart's broker answered a plaintext MQTT CONNECT on 1883: {reply!r}"
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
         subprocess.run(["docker", "volume", "rm", "-f", volume], capture_output=True)

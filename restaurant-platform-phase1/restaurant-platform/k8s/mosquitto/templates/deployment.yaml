@@ -55,7 +55,6 @@ spec:
         - name: mosquitto
           image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
           ports:
-            - containerPort: 1883
             - containerPort: 8883
           volumeMounts:
             - name: config

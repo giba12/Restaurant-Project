@@ -4,7 +4,23 @@ metadata:
   name: mosquitto-config
 data:
   mosquitto.conf: |
-    listener 1883
+    # The only listener, and it must stay FIRST in this file: Mosquitto treats any setting that comes before the first
+    # `listener` line as configuring an implicit default listener on 1883, which would reopen the plaintext port (a test starts
+    # this config in the real broker and checks nothing answers on 1883). allow_anonymous and the other settings below are
+    # global, so they apply to this listener. cafile and
+    # certfile both point at the same self-signed cert (k8s/mosquitto-tls/
+    # generates it): mosquitto's listener config requires cafile even for
+    # server-only TLS with no client certificate requested, and since this
+    # cert is self-signed, it is trivially its own issuer -- one file plays
+    # both roles, the same simplification MinIO's TLS setup uses.
+    listener 8883
+    cafile /mosquitto/certs/tls.crt
+    certfile /mosquitto/certs/tls.crt
+    keyfile /mosquitto/certs/tls.key
+
+    # TLS only (the listener above). There is no plaintext listener on 1883: every client sends a password, and every
+    # client of this broker has used 8883 since the 2026-09-25 cutover; the plaintext port was closed on 2026-10-07 (it had
+    # been left open beside TLS, so a client that chose it would have sent its login in the clear).
 {{- if .Values.auth.enabled }}
 
     # Every client logs in, and each user may touch only its own topics (the acl key below). Anonymous clients are
@@ -12,7 +28,7 @@ data:
     # command. use_username_as_clientid makes a client's id its username, so nobody else can take over the bridge's
     # persistent session by connecting under its id. The password file is the Secret made by
     # k8s/mosquitto/provision-mqtt-auth.sh; nothing secret is in this repository. These settings are global, so they
-    # cover the TLS listener below as well.
+    # cover the TLS listener below.
     allow_anonymous false
     password_file /mosquitto/auth/passwd
     acl_file /mosquitto/auth/acl
@@ -36,20 +52,6 @@ data:
     max_queued_bytes 0
 
     log_dest stdout
-
-    # Added alongside 1883 rather than replacing it -- same non-breaking,
-    # migrate-one-consumer-at-a-time pattern as Kafka's "tls" listener (see
-    # k8s/kafka-tls/). allow_anonymous above is a global default that
-    # applies here too since it's set before any listener block. cafile and
-    # certfile both point at the same self-signed cert (k8s/mosquitto-tls/
-    # generates it): mosquitto's listener config requires cafile even for
-    # server-only TLS with no client certificate requested, and since this
-    # cert is self-signed, it is trivially its own issuer -- one file plays
-    # both roles, the same simplification MinIO's TLS setup uses.
-    listener 8883
-    cafile /mosquitto/certs/tls.crt
-    certfile /mosquitto/certs/tls.crt
-    keyfile /mosquitto/certs/tls.key
 {{- if .Values.auth.enabled }}
   # The same rules as docker-compose/mosquitto/acl; a test compares them.
   acl: |

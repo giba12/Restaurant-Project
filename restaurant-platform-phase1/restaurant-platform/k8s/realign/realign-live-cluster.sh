@@ -199,7 +199,7 @@ SQL
   kubectl exec -n "$NS" deploy/mqtt-kafka-bridge -- python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/metrics').read().decode())" 2>/dev/null \
     | grep -E "^bridge_(messages_forwarded_total|mqtt_connected|unconfirmed_messages|kafka_errors_total)" || true
   echo "--- the broker refuses anonymous clients (expect a refusal) and the bridge still reads (connected above):"
-  kubectl exec -n "$NS" deploy/mosquitto -- mosquitto_sub -h localhost -p 1883 -t 'sensors/#' -W 3 2>&1 | head -2 || true
+  kubectl exec -n "$NS" deploy/mosquitto -- mosquitto_sub -h localhost -p 8883 --cafile /mosquitto/certs/tls.crt -t 'sensors/#' -W 3 2>&1 | head -2 || true
   echo "--- Mosquitto's persistent volume (Bound), and nothing left of Kafka Connect (expect no output below):"
   kubectl get pvc mosquitto-data -n "$NS" || true
   kubectl get kafkaconnect,kafkaconnector,pods -n "$NS" 2>/dev/null | grep -i connect || echo "  (nothing)"

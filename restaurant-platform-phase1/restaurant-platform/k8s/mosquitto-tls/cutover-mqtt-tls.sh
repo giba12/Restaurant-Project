@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Migrates Mosquitto's clients from the plaintext listener (port 1883) to a
+# HISTORICAL: the broker's plaintext listener (1883) was removed on 2026-10-07, so this migration can no longer be run as it
+# stands. It is kept as the record of how the clients were moved. Migrates Mosquitto's clients from the plaintext listener (port 1883) to a
 # TLS one (port 8883), the same additive, migrate-then-verify shape as
 # k8s/kafka-tls/cutover-tls.sh -- a second listener added alongside the
 # existing plaintext one (not replacing it), so a consumer can move over on

@@ -1,10 +1,11 @@
 import os
 import random
 import time
+from datetime import datetime, timedelta, timezone
 
 from common import scenario as scenario_control
 from common import staffing, world
-from common.ids import new_event_id, now_iso
+from common.ids import new_event_id
 from common.runtime import Simulator
 
 STAGES = ["order_fired", "cook_started", "plated", "picked_up_by_server", "delivered"]
@@ -35,6 +36,11 @@ SCENARIO_CONTROL_ENABLED = os.environ.get("SCENARIO_CONTROL_ENABLED", "false").l
 # scenario was active, did the slowing without touching staffing at all, so the
 # analysed variable and the injected cause were unrelated; DEF-141.)
 MIN_OPEN_TICKETS = 2
+
+
+def _wall_now() -> datetime:
+    return datetime.now(timezone.utc)
+
 
 class TicketLifecycle:
     """
@@ -137,10 +143,19 @@ class TicketLifecycle:
         ticket = self.open_tickets[ticket_id]
         stage = STAGES[ticket["stage_index"]]
 
+        # A ticket's events are stamped from ONE wall-clock reading (its first), plus the monotonic time that has passed since,
+        # never from a fresh wall-clock reading per event. Stamping each event from the wall clock while measuring elapsed time on
+        # the monotonic clock let a step of the wall clock (WSL2's time resync did 1.2 to 1.5 s backwards in a test run) leave
+        # every later event of an open ticket stamped earlier than its own elapsed time implied, which the aggregator rightly
+        # refuses to turn into a duration (DEF-168). The stamps now always agree with `elapsed_since_previous_stage_ms`.
+        now_mono = time.monotonic()
         if ticket["stage_index"] == 0:
             elapsed_ms = None
+            stamp = _wall_now()
         else:
-            elapsed_ms = int((time.monotonic() - ticket["last_stage_ts"]) * 1000)
+            elapsed = now_mono - ticket["last_stage_ts"]
+            elapsed_ms = int(elapsed * 1000)
+            stamp = ticket["last_stage_wall"] + timedelta(milliseconds=elapsed_ms)
 
         event = {
             "event_id": new_event_id(),
@@ -148,7 +163,7 @@ class TicketLifecycle:
             "schema_version": world.SCHEMA_VERSION,
             "source_id": "sim-ticket-timer-01",
             "source_kind": "simulated",
-            "timestamp": now_iso(),
+            "timestamp": stamp.isoformat(),
             "restaurant_id": world.RESTAURANT_ID,
             "ticket_id": ticket_id,
             "table_id": ticket["table_id"],
@@ -161,7 +176,8 @@ class TicketLifecycle:
             del self.open_tickets[ticket_id]
         else:
             ticket["stage_index"] += 1
-            ticket["last_stage_ts"] = time.monotonic()
+            ticket["last_stage_ts"] = now_mono
+            ticket["last_stage_wall"] = stamp
 
         return event
 

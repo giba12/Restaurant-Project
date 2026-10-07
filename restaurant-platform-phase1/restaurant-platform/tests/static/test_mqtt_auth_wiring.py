@@ -329,3 +329,24 @@ def test_the_chart_simulators_use_tls_by_default_as_the_live_release_does_so_a_p
     for deployment in deployments:
         env = {e["name"]: e.get("value") for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
         assert env["MQTT_PORT"] == "8883" and env["MQTT_TLS_ENABLED"] == "true", deployment["metadata"]["name"]
+
+
+@needs_helm
+def test_the_chart_broker_listens_for_tls_only_and_exposes_only_that_port():
+    docs = render("mosquitto")
+    conf = next(d for d in docs if d["kind"] == "ConfigMap")["data"]["mosquitto.conf"]
+    assert re.findall(r"^\s*listener (\d+)\s*$", conf, flags=re.M) == ["8883"]
+    service = next(d for d in docs if d["kind"] == "Service")
+    assert [p["port"] for p in service["spec"]["ports"]] == [8883] and [p["targetPort"] for p in service["spec"]["ports"]] == [8883]
+    deployment = next(d for d in docs if d["kind"] == "Deployment")
+    ports = [p["containerPort"] for c in deployment["spec"]["template"]["spec"]["containers"] for p in c.get("ports", [])]
+    assert ports == [8883]
+
+
+@needs_helm
+def test_every_live_client_chart_of_the_broker_defaults_to_the_tls_port():
+    # With no plaintext listener a client left on 1883 gets nothing, so every chart that talks to the broker must default to 8883.
+    for chart in ("edge-simulators", "mqtt-kafka-bridge"):
+        for deployment in (d for d in render(chart) if d["kind"] == "Deployment"):
+            env = {e["name"]: e.get("value") for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
+            assert env.get("MQTT_PORT") == "8883" and env.get("MQTT_TLS_ENABLED") == "true", (chart, deployment["metadata"]["name"])

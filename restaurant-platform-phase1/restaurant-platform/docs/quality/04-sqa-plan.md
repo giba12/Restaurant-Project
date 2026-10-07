@@ -90,7 +90,7 @@ To assure that the system's code, configuration, data contracts and documents me
 | By severity | S1 Critical 8; S2 High 31; S3 Medium 53; S4 Low 57; Info 16 |
 | By status | Fixed and guarded by a test 56; fixed 79; mitigated 8; clarified 17; open 5 |
 | Distinct tests | 612, plus the GDScript smoke test (about 80 checks) |
-| Requirements | 100: 74 verified by automated test, 6 by inspection, 9 live or manual only, 10 partial, 1 not verified, 0 not met |
+| Requirements | 100: 75 verified by automated test, 6 by inspection, 9 live or manual only, 9 partial, 1 not verified, 0 not met |
 | Latest complete test cycle | 2026-10-04: every layer re-run passed on the final code, after repeated failed attempts at the heavy layers (flaky in this environment); the injected scenario's finding is refuted (DEF-141) |
 | Line or branch code coverage | **Not measured** |
 | Mean time to detect a silent failure | Not tracked; observed range: minutes (found by test) to 12 days (the silent MQTT bridge failure, DEF-035) |

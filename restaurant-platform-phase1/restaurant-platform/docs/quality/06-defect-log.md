@@ -28,7 +28,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 
 ## Summary
 
-**172 entries** (156 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-07.
+**173 entries** (157 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-07.
 
 ### By severity
 
@@ -36,21 +36,21 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 |---|---|
 | S1 Critical | 8 |
 | S2 High | 31 |
-| S3 Medium | 57 |
+| S3 Medium | 58 |
 | S4 Low | 60 |
 | Info | 16 |
-| **Total** | **172** |
+| **Total** | **173** |
 
 ### By status
 
 | Status | Count |
 |---|---|
-| Fixed+tested | 62 |
+| Fixed+tested | 63 |
 | Fixed | 79 |
 | Mitigated | 8 |
 | Clarified | 17 |
 | Open | 6 |
-| **Total** | **172** |
+| **Total** | **173** |
 
 ### By part (project period)
 
@@ -72,14 +72,15 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Part N: Strengthening the edge node's drift monitoring and adding its update path (2026-10-06) | 6 |
 | Part O: Authenticating the broker and giving each node its own key (2026-10-06) | 5 |
 | Part P: Closing the remaining gaps in the broker and the edge control path (2026-10-07) | 7 |
-| **Total** | **172** |
+| Part Q: Making every write idempotent (2026-10-08) | 1 |
+| **Total** | **173** |
 
 ### By how it was found
 
 | Found by | Count |
 |---|---|
 | Live operation, deployment or manual run | 74 |
-| Review (static or manual) | 23 |
+| Review (static or manual) | 24 |
 | Test-regime run or observation | 45 |
 | Automated test regime (2026-10-02) | 7 |
 | Chaos test | 5 |
@@ -87,14 +88,14 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | CI or first push | 11 |
 | User report | 3 |
 | Audit script | 1 |
-| **Total** | **172** |
+| **Total** | **173** |
 
 ### By class
 
 | Class | Count |
 |---|---|
 | Deployment | 23 |
-| Logic | 31 |
+| Logic | 32 |
 | Environment/tooling | 23 |
 | Test defect | 26 |
 | Observability | 10 |
@@ -111,7 +112,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Repository hygiene | 2 |
 | Operator error | 2 |
 | Code quality | 1 |
-| **Total** | **172** |
+| **Total** | **173** |
 
 ### Open items (6)
 
@@ -407,6 +408,14 @@ After the cluster cutover the owner asked for model control to be switched on fo
 | DEF-170 | Test regime | GitHub's `tests` workflow, three pushes in a row | **Three pushes went red on GitHub because of two assumptions my own machine hid.** (1) The real-broker tests that make the TLS certificate read its private key from the host, but under rootful Docker (GitHub's runners) the container writes it as root with mode 0600, so the tests got `PermissionError`; under rootless Podman, root in the container is the user, which is why it passed locally. This failed the `integration` job from the first commit of the day. (2) After the live check failed on a missing `paho-mqtt` in the owner's system Python, `verify-model-control.sh` gained a check for it, and its stand-in tests, which need no `paho`, then failed on the `static` job, whose Python has none (my test environment has it). I had been told to watch GitHub's runs and had not been watching the one that mattered. | S3 Medium | CI or first push | The test's own copy of the key is made readable (the script itself still leaves it root-only); the stand-in tests run the script with an interpreter wrapper that answers only the paho check, and were re-run in a clean virtual environment with no `paho` to reproduce CI. Confirmed green on GitHub on `f00d247`, `57d78e2` and `d94b789`. | Fixed+tested |
 | DEF-171 | Environment/tooling | an end-to-end run of the rotation test | **Root-owned `__pycache__` directories in the source tree stopped every image build.** See the open item below: they were created as root at 13:06, are mode 0700, and break `docker build` for any context that includes them. The rotation test was run from a clean copy of the tree meanwhile. | S4 Low | Test-regime run or observation | Diagnosed, not removed: only `sudo rm -rf` of the two directories clears it. | Open |
 | DEF-172 | Test regime | the nightly workflow on GitHub (2026-10-08) | **The database-rebuild resilience test failed on GitHub, twice, for two reasons.** It compared the refilled tables with Kafka's end offsets, which equal the distinct events only if Kafka holds none twice (350 messages, 349 rows: confirmed), and it rewound the consumer group without checking the group was empty, so on a fast runner the reset probably came before the stopped consumer had left and was refused (all tables still empty after five minutes; the tool prints an error and exits 0). It also reported only `last value: False`. | S4 Low | CI or first push | The test compares the rebuilt tables with the rows held just before the loss, requires rows not to exceed offsets, waits for the group to be empty, fails if the reset tool's own output holds an error or lacks the topics, and on a time-out reports rows held, rows now and offsets. Passed locally and then on GitHub (the resilience layer, 13 of 13, on `d94b789`). | Fixed+tested |
+
+## Part Q. Making every write idempotent (2026-10-08)
+
+The owner asked for the database to do idempotent writes. Auditing every `INSERT` in the application found the sensor events, the twin, the narrations and the ticket summaries already safe to repeat, and two writers that were not, plus one that could go backwards.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-173 | Logic | an audit of every write to the database | **A redelivered input wrote a second row, and an old summary could overwrite a new one.** Kafka delivers at least once, so a consumer that stores and crashes before committing sees its message again. The anomaly detector gave each anomaly a fresh random id and `INSERT`ed it with no conflict handling, so a redelivered ticket summary stored the same anomaly again (and published it again); the causal engine did the same for findings, and would also have re-run the (expensive, non-repeatable) estimate and stored a different number for the same anomaly; the narrator would have called the model again for an already-narrated finding; and `ticket_timing_summaries` was upserted unconditionally, so an older summary replayed after a newer one turned a completed ticket back into an unfinished one. The sensor-event tables were safe only because the event carries its own id. | S3 Medium | Review (static or manual) | Derived rows take their id from what they are about (`stable_id`: an anomaly from its ticket, metric and method; a finding from its anomaly and treatment), the writer finds the stored row first and returns it (the first write wins), and what is published again is what is stored; the causal engine skips the estimate for an anomaly already analysed; the narrator skips an already-narrated finding; the summary upsert only replaces an older summary. The derived tables cannot be UNIQUE on their id (TimescaleDB requires the time column in every unique index), so the primary key stays as the backstop. Fifteen real-database tests that run every writer twice and compare the tables (reverting each fix turned its test red), unit tests of the ids, and a static guard that every `INSERT` states its conflict behaviour and every table has a primary key. | Fixed+tested |
 
 ## How the defects were found, and what that says about the process
 

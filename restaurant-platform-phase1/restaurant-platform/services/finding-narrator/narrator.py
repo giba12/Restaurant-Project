@@ -116,6 +116,14 @@ def narrate(finding: dict) -> tuple[str, str]:
     return guard.render_fallback(finding), FALLBACK_MODEL_LABEL
 
 
+def narration_exists(conn, finding_id: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM narrated_findings WHERE finding_id = %(finding_id)s", {"finding_id": finding_id})
+        found = cur.fetchone() is not None
+    conn.commit()
+    return found
+
+
 def insert_narration(conn, finding_id: str, restaurant_id: str, narrative_text: str, model_used: str):
     with conn.cursor() as cur:
         cur.execute(
@@ -151,6 +159,11 @@ def main():
         signal = msg.value
         finding_id = signal.get("finding_id")
         try:
+            if narration_exists(conn, finding_id):
+                # Told again about a finding that is already narrated: nothing to write, and no model call to spend on it.
+                log.info("finding_id=%s is already narrated; skipping", finding_id)
+                consumer.commit()
+                continue
             finding = fetch_finding(conn, finding_id)
             if finding is None:
                 log.warning("finding_id=%s not found in causal_findings; skipping", finding_id)

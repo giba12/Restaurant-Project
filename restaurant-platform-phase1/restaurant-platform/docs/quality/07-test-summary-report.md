@@ -74,7 +74,7 @@ On the final code, every layer was re-run and passed: static 191 (3 skipped), un
 | 8 | Security | **11 passed** | 27 s | 2026-10-04 | One case per requirements file, now including the edge trainer's pins; no known vulnerabilities |
 | - | Godot client smoke test | Not re-run | - | 2026-09-30 (CI) | About 80 checks; passed on GitHub on 2026-09-30 |
 
-**Totals:** 670 distinct test names across the Python suites, plus the GDScript smoke test.
+**Totals:** 691 distinct test names across the Python suites, plus the GDScript smoke test.
 
 ## 3. Measured results
 

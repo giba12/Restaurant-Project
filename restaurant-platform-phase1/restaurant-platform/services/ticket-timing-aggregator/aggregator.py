@@ -218,7 +218,10 @@ def upsert_summary(conn, summary: dict):
                 service_delay_ms = EXCLUDED.service_delay_ms,
                 total_ticket_duration_ms = EXCLUDED.total_ticket_duration_ms,
                 is_complete = EXCLUDED.is_complete,
-                updated_at = now();
+                updated_at = now()
+            -- A summary that is OLDER than the one stored (an old message redelivered, a replay from the start of the topic) must not
+            -- overwrite it: a completed ticket would become an unfinished one. The same summary again changes nothing.
+            WHERE ticket_timing_summaries.computed_at <= EXCLUDED.computed_at;
             """,
             summary,
         )

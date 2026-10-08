@@ -372,6 +372,17 @@ The ACL is one file, copied into the Helm chart, and Mosquitto enforces it silen
 | `test_every_namespaced_command_is_scoped_and_it_reads_no_real_secret` | **Security test.** Nothing names the `kafka` namespace, nothing reads the real operator login or master key, and its credentials come from the provisioning script run in the scratch namespace. | Reading the real Secrets to drive the production broker was refused earlier the same day, correctly. | The trial is isolated. |
 | `test_no_password_is_put_on_a_host_command_line` | **Security test.** The password is expanded inside the pod from its Secret, never interpolated into a host argument. | Command lines are readable by every user on the machine. | Same rule as the provisioning script. |
 
+#### `test_idempotent_writes.py` — no writer without a stated conflict behaviour *(new, 2026-10-08)*
+
+What stops tomorrow's writer from being the one that is not idempotent. Nothing runs. Putting a random id back in an anomaly builder, and removing an `ON CONFLICT` from the consumer, each turned a test red.
+
+| Test | What it is and does | Why I created it | Why it matters |
+|---|---|---|---|
+| `test_the_guard_sees_the_writers_it_is_meant_to_guard` | **Sanity test.** The scan finds an INSERT for each of the thirteen tables the platform writes. | A guard that scans nothing passes. | It is looking in the right places. |
+| `test_every_insert_says_what_happens_on_a_conflict` | **Guard test (one case per INSERT).** Every `INSERT INTO` in the application code (services, storage, game bridge) has an `ON CONFLICT` clause in its statement. | Writing the same thing twice must be defined. | A new writer cannot skip the question. |
+| `test_every_table_the_migrations_create_has_a_primary_key` | **Guard test.** Every `CREATE TABLE` in the migrations has a primary key. | `ON CONFLICT` needs a key to conflict on. | No table that cannot be written idempotently. |
+| `test_the_derived_rows_take_their_ids_from_what_they_are_about_not_from_the_clock_or_chance` | **Guard test (DEF-173).** The anomaly builders use `_anomaly_id` and no random id; the finding id comes from `finding_id_for` and `stable_id`. | A random id is how a derived row becomes non-idempotent. | Verified by putting `new_event_id()` back. |
+
 #### `test_bridge_wiring.py` — the bridge is deployed the way its guarantee needs *(new)*
 
 The MQTT-Kafka bridge's guarantee (no sensor event lost to a restart of the bridge, Kafka or Mosquitto) rests on settings spread over several files: a persistent session in the bridge's code, Mosquitto persisting it to a volume, one bridge at a time, and a restart that loses nothing. Each is easy to change by accident and invisible until a restart happens (DEF-152). These read the rendered charts, the Compose configuration and the realign script; nothing runs. Each was checked for teeth by breaking the file it guards (rolling update, persistence off, retire Connect first, bridge not scraped, image not imported).
@@ -436,6 +447,9 @@ Random data is seeded, so every run is identical. A detector wrong in either dir
 | `test_trimming_removes_only_the_extreme_values_and_keeps_the_ordinary_ones` | **Behaviour test.** 190 ordinary tickets plus ten 4,000-second stalls give the ordinary mean and standard deviation. | The trimming does what it says. | Verified to fail without the trimming. |
 | `test_a_sustained_real_shift_still_becomes_the_new_normal` | **Adaptation test.** A slowdown that fills the window is no longer flagged. | Trimming must not make the window a permanent memory of the old baseline. | The detector still follows a genuine, lasting change. |
 | `test_built_events_satisfy_the_published_contract` | **Contract test.** Both kinds of anomaly event validate against `AnomalyEvent.schema.json`. | Downstream consumers trust the schema. | A malformed event would crash the causal engine. |
+| `test_scoring_the_same_completed_ticket_again_gives_the_same_anomaly_ids` | **Property test (DEF-173).** Two scorings of the same completed ticket give the same id for a control-limit anomaly and for an isolation-forest one. | Kafka delivers at least once; a random id on the second pass wrote a second row for the same anomaly. | A redelivery can be recognised. Verified by putting a random id back in the isolation-forest builder. |
+| `test_the_anomaly_id_follows_the_ticket_the_metric_and_the_method_and_nothing_else` | **Property test (DEF-173).** Different tickets, metrics and methods give different ids; the observed value, the bounds and the time of detection do not change the id. | An id that depended on those would differ on a second pass. | The id is exactly what the anomaly is about. |
+| `test_stable_id_is_a_valid_uuid_the_same_every_time_and_different_for_different_parts` | **Known-answer test (DEF-173).** `stable_id` gives a valid UUID, the same each time, different for different parts, separates its parts (`('ab','c')` is not `('a','bc')`), and one value is pinned. | Rows already stored were made under this id; changing it would orphan them. | The namespace and the derivation cannot change by accident. |
 
 #### `services/anomaly-detector/test_quarantine.py` — keeping human play out of the baseline
 
@@ -497,6 +511,8 @@ The statistical correctness of the estimates is tested separately (Layer 5); thi
 | `test_an_anomaly_on_an_unmapped_metric_is_skipped_and_counted_not_crashed_on` | **Unit test with a metrics check.** Unknown metrics return nothing and increment the skip counter. | The joint isolation-forest anomalies have no causal mapping. | Must be a quiet skip, and visible on a dashboard. |
 | `test_reviewer_passes_only_findings_that_survived_refutation` | **Behavioural test with fakes.** Four findings (passed, failed, untested, missing the field) go through the real reviewer loop; only the passed one is promoted and announced. | The gate is the platform's defence against narrating a spurious result. | The most safety-critical rule in the pipeline. |
 | `test_reviewer_does_not_commit_an_offset_when_the_database_write_fails` | **Failure-path test.** If the update fails, the message is not acknowledged and the transaction is rolled back. | Otherwise a database blip would silently drop a finding. | At-least-once delivery depends on it. |
+| `test_the_same_anomaly_and_treatment_give_the_same_finding_id_and_different_ones_give_different_ids` | **Property test (DEF-173).** The finding id follows the anomaly and the treatment-outcome pair. | A redelivered anomaly must find its finding. | Re-analysis is recognised. |
+| `test_an_analysis_with_no_anomaly_behind_it_gets_a_fresh_id_each_time` | **Property test.** With no anomaly (the one-shot scenario path) each call gets a new id. | That path is run on purpose, perhaps again on more data. | A deliberate re-run is not swallowed. |
 
 #### `services/finding-narrator/test_narration_guard.py` — checking what the LLM says
 
@@ -940,6 +956,25 @@ The React dashboard had no tests of its own (FR-DSH-01): the API behind it and d
 | `test_reassigning_a_station_changes_only_the_station` | **Integration test.** Reassignment leaves status and clock-in time alone. | An easy place to clobber state. | Preserves shift duration. |
 | `test_staff_are_tracked_independently` | **Integration test.** One person's events never affect another's. | Isolation. | Same. |
 | `test_replaying_a_staff_event_is_harmless` | **Idempotency test.** Replaying a clock-in leaves one row. | Contrast with the ticket counter. | Staff state is absolute, so it is safe to replay. |
+
+#### `tests/integration/test_idempotent_writes_db.py` — every write is idempotent, against the real database *(new, 2026-10-08)*
+
+Kafka delivers at least once, so every writer will one day run twice on the same input. The sensor events were always safe (the event carries its own id); the rows the platform derives (anomalies, findings) were not, because each pass made a fresh random id (DEF-173). These tests run each writer twice against the real TimescaleDB with the real migrations and compare the table's contents, not just the row count. Reverting each fix in turn turned exactly its test red (the isolation-forest id is caught by the unit test instead).
+
+| Test | What it is and does | Why I created it | Why it matters |
+|---|---|---|---|
+| `test_storing_a_sensor_event_a_second_time_leaves_every_table_exactly_as_it_was` | **Idempotence test (4 cases).** Each of the four sensor topics: store a real simulator event, then the same event twice more; every table it touches (including the line items) holds the same rows, compared as JSON without the database's own timestamps. | The oldest guarantee, now stated as an equality. | Redelivery is invisible in the event tables. |
+| `test_a_point_of_sale_event_with_several_line_items_is_stored_once_with_each_line_once` | **Idempotence test.** A point-of-sale event stored twice has one header row and exactly its own number of line rows. | Line items have their own key. | No doubled lines. |
+| `test_the_twin_told_the_same_ticket_events_again_ends_in_the_same_state` | **Idempotence test.** The twin is told an order opened twice and a delivery twice; its tables are unchanged by the repeat each time. | A counter that incremented on a repeat would drift for ever. | The twin is a function of the events, not of how often it heard them. |
+| `test_the_twin_told_the_same_staff_event_again_ends_in_the_same_state` | **Idempotence test.** A staff clock-in told twice leaves the same staff row. | Same reason. | Same guarantee. |
+| `test_a_summary_that_is_older_than_the_stored_one_does_not_overwrite_it` | **Regression test (DEF-173).** A completed ticket's summary is stored, then an older, unfinished summary of the same ticket arrives: the completed one stays. | A replay or a redelivery of an old message turned a finished ticket back into an unfinished one. | Verified by removing the `computed_at` guard. |
+| `test_a_newer_summary_still_replaces_an_older_one_and_the_same_one_again_changes_nothing` | **Behavioural test.** A newer summary replaces an older one; the same one again changes nothing. | The guard must not stop real progress. | Updates still work. |
+| `test_scoring_the_same_completed_ticket_again_stores_one_anomaly_and_returns_the_first_one_stored` | **Regression test (DEF-173).** Two passes at different times give the same anomaly id; one row is stored; the second call returns the first row's payload (its `detected_at`), so what is published again is what is stored. | Random ids made a second row on every redelivery. | Verified by removing the check-first. |
+| `test_one_ticket_gives_a_different_anomaly_for_each_metric_and_method_and_each_ticket_its_own` | **Property test.** Four anomalies (two metrics, the isolation forest, another ticket) have four ids. | Determinism must not merge things that differ. | No collisions. |
+| `test_the_same_anomaly_analysed_again_has_the_same_finding_id_and_the_first_estimate_is_kept` | **Regression test (DEF-173).** Two findings for the same anomaly, with different estimates: same id, one row, the first estimate kept. | A re-estimate must not replace a stored number. | Verified by making the finding id random. |
+| `test_analysing_a_redelivered_anomaly_does_not_estimate_again_and_publishes_the_stored_finding` | **Behavioural test (DEF-173).** `process_anomaly` run twice on the same anomaly (estimation stubbed to return a different number each time it runs): one estimate, one row, and the same finding published twice. | The estimate is expensive and not repeatable; downstream must still get the finding if the first publish was lost. | Exactly-once effect, at-least-once delivery. |
+| `test_an_analysis_with_no_anomaly_behind_it_is_not_deduplicated` | **Behavioural test.** Two scenario-path analyses are two findings. | That path is a deliberate re-run. | Not swallowed. |
+| `test_a_finding_narrated_twice_keeps_the_first_narration_and_is_seen_as_narrated` | **Idempotence test.** `insert_narration` twice keeps the first text; `narration_exists` reports it; the narrator skips an already-narrated finding without calling the model. | A repeat should not cost a model call or change what was said. | Verified by making `narration_exists` always false. |
 
 #### `test_pipeline_writers_db.py` — derived data, and the SQL that feeds the causal engine
 

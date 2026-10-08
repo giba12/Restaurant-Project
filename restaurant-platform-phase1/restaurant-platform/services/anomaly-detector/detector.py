@@ -193,10 +193,15 @@ def _severity_from_score(score: float) -> str:
     return "low"
 
 
+def _anomaly_id(summary, *kind) -> str:
+    """The same completed ticket scored again (a redelivered message, an aggregator that republished its summary) gives the same id."""
+    return common.stable_id("anomaly", summary["ticket_id"], summary.get("order_time"), summary.get("delivered_time"), *kind)
+
+
 def build_control_limit_event(metric_name, summary, value, bounds) -> dict:
     lower, upper = bounds
     return {
-        "anomaly_id": common.new_event_id(),
+        "anomaly_id": _anomaly_id(summary, "control_limit", metric_name),
         "event_type": "AnomalyEvent",
         "schema_version": common.SCHEMA_VERSION,
         "source_id": SOURCE_ID,
@@ -217,7 +222,7 @@ def build_control_limit_event(metric_name, summary, value, bounds) -> dict:
 
 def build_isolation_forest_event(summary, score) -> dict:
     return {
-        "anomaly_id": common.new_event_id(),
+        "anomaly_id": _anomaly_id(summary, "isolation_forest"),
         "event_type": "AnomalyEvent",
         "schema_version": common.SCHEMA_VERSION,
         "source_id": SOURCE_ID,
@@ -236,7 +241,19 @@ def build_isolation_forest_event(summary, score) -> dict:
     }
 
 
-def insert_anomaly(conn, event: dict):
+def insert_anomaly(conn, event: dict) -> dict:
+    """
+    Stores the anomaly unless one with this id is already there, and returns the one that is stored (the first write wins), so what
+    is published downstream is what the database holds. The table cannot be made UNIQUE on anomaly_id alone (TimescaleDB requires
+    the partitioning column in every unique index, and detected_at is the time of the detection), so the check is made here; the
+    consumer is the only writer, and the primary key is a backstop for the case it is not.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT raw_payload FROM anomaly_events WHERE anomaly_id = %(anomaly_id)s LIMIT 1", {"anomaly_id": event["anomaly_id"]})
+        stored = cur.fetchone()
+    if stored is not None:
+        conn.commit()
+        return stored[0] if isinstance(stored[0], dict) else json.loads(stored[0])
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -252,7 +269,8 @@ def insert_anomaly(conn, event: dict):
                 %(window_start)s, %(window_end)s, %(observed_value)s,
                 %(expected_range_lower)s, %(expected_range_upper)s, %(anomaly_score)s, %(severity)s,
                 %(contributing_event_ids)s, %(raw_payload)s
-            );
+            )
+            ON CONFLICT (anomaly_id, detected_at) DO NOTHING;
             """,
             {
                 **event,
@@ -267,6 +285,7 @@ def insert_anomaly(conn, event: dict):
             },
         )
     conn.commit()
+    return event
 
 
 def main():
@@ -337,7 +356,7 @@ def main():
 
             for event in events_to_emit:
                 jsonschema.validate(instance=event, schema=anomaly_schema)
-                insert_anomaly(conn, event)
+                event = insert_anomaly(conn, event)
                 producer.send(ANOMALY_TOPIC, value=event)
                 ANOMALIES_DETECTED.labels(detection_method=event["detection_method"]).inc()
             producer.flush()

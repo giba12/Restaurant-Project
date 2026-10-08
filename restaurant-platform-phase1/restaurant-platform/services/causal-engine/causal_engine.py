@@ -246,9 +246,20 @@ def _run_dowhy(df: pd.DataFrame, treatment: str, outcome: str, confounders: list
     }
 
 
-def _build_finding(spec: dict, result: dict, restaurant_id: str, triggering_anomaly_id, scenario_injection_id) -> dict:
+def finding_id_for(triggering_anomaly_id, spec: dict) -> str:
+    """
+    The finding for one anomaly and one treatment-outcome pair has one id, so analysing the same anomaly again (a redelivered
+    message) finds the stored finding instead of writing a second. An analysis with no anomaly behind it (the one-shot scenario
+    path, run on purpose, possibly again on more data) has none to be the same as, and gets a fresh id.
+    """
+    if triggering_anomaly_id is None:
+        return common.new_event_id()
+    return common.stable_id("finding", triggering_anomaly_id, spec["treatment"], spec["outcome"])
+
+
+def _build_finding(spec: dict, result: dict, restaurant_id: str, triggering_anomaly_id, scenario_injection_id, finding_id=None) -> dict:
     return {
-        "finding_id": common.new_event_id(),
+        "finding_id": finding_id or finding_id_for(triggering_anomaly_id, spec),
         "event_type": "CausalFinding",
         "schema_version": common.SCHEMA_VERSION,
         "source_id": SOURCE_ID,
@@ -269,7 +280,26 @@ def _build_finding(spec: dict, result: dict, restaurant_id: str, triggering_anom
     }
 
 
-def insert_finding(conn, finding: dict):
+def find_stored_finding(conn, finding_id: str):
+    """The finding stored under this id (as it was first written), or None."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT raw_payload FROM causal_findings WHERE finding_id = %(finding_id)s LIMIT 1", {"finding_id": finding_id})
+        row = cur.fetchone()
+    conn.commit()
+    if row is None:
+        return None
+    return row[0] if isinstance(row[0], dict) else json.loads(row[0])
+
+
+def insert_finding(conn, finding: dict) -> dict:
+    """
+    Stores the finding unless one with this id is already there, and returns the one that is stored (the first write wins: an
+    estimate is not re-estimated into a different number by a redelivery). Not UNIQUE on finding_id in the schema, for the reason
+    given at insert_anomaly in the anomaly detector; the primary key is the backstop.
+    """
+    stored = find_stored_finding(conn, finding["finding_id"])
+    if stored is not None:
+        return stored
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -285,7 +315,8 @@ def insert_finding(conn, finding: dict):
                 %(confounders_controlled)s, %(effect_estimate)s, %(effect_estimate_unit)s,
                 %(ci_lower)s, %(ci_upper)s, %(ci_confidence_level)s, %(method)s, %(refutation_passed)s,
                 %(narrative_ready)s, %(summary_text)s, %(raw_payload)s
-            );
+            )
+            ON CONFLICT (finding_id, computed_at) DO NOTHING;
             """,
             {
                 **finding,
@@ -296,6 +327,7 @@ def insert_finding(conn, finding: dict):
             },
         )
     conn.commit()
+    return finding
 
 
 def process_anomaly(conn, producer, finding_schema, anomaly: dict, scenario_injection_id=None):
@@ -305,15 +337,25 @@ def process_anomaly(conn, producer, finding_schema, anomaly: dict, scenario_inje
         ANOMALIES_SKIPPED.labels(reason="no_treatment_map_entry").inc()
         return None
 
+    finding_id = finding_id_for(anomaly.get("anomaly_id"), spec)
+    already = find_stored_finding(conn, finding_id) if anomaly.get("anomaly_id") is not None else None
+    if already is not None:
+        # This anomaly was analysed before (the message came again). Nothing is recomputed, which would give a different estimate
+        # for the same finding; the stored finding is published again so downstream still gets it if the first publish was lost.
+        log.info("finding_id=%s for anomaly_id=%s is already stored; publishing it again, not re-estimating", finding_id, anomaly.get("anomaly_id"))
+        producer.send(FINDING_TOPIC, value=already)
+        producer.flush()
+        return already
+
     df = _load_data(conn, spec, anomaly["window_start"], anomaly["window_end"])
     result = _run_dowhy(df, spec["treatment"], spec["outcome"], spec["confounders"])
     finding = _build_finding(
-        spec, result, anomaly["restaurant_id"], anomaly.get("anomaly_id"), scenario_injection_id
+        spec, result, anomaly["restaurant_id"], anomaly.get("anomaly_id"), scenario_injection_id, finding_id=finding_id
     )
     jsonschema.validate(instance=finding, schema=finding_schema)
     FINDINGS_EMITTED.inc()
     REFUTATION_RESULT.labels(passed=str(finding["refutation_passed"])).inc()
-    insert_finding(conn, finding)
+    finding = insert_finding(conn, finding)
     producer.send(FINDING_TOPIC, value=finding)
     producer.flush()
     log.info(

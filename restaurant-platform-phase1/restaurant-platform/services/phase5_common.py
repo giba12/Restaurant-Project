@@ -76,6 +76,21 @@ def new_event_id() -> str:
     return str(uuid.uuid4())
 
 
+# A fixed namespace, so the same inputs make the same id in every process and on every run. Never change it: ids already stored
+# were made under it.
+_STABLE_ID_NAMESPACE = uuid.UUID("5f0c1f5e-3d0a-4a39-9a40-0b6a6f2d7a11")
+
+
+def stable_id(*parts) -> str:
+    """
+    An id that is a function of what a row is ABOUT, not of when it was made. Every table the platform derives from other data (an
+    anomaly from a ticket summary, a finding from an anomaly) must be written so that doing it again changes nothing: Kafka
+    delivers at least once, so a consumer that crashes after storing and before committing sees the same input again. With a
+    random id the second pass would write a second row; with this one the row is found and left alone.
+    """
+    return str(uuid.uuid5(_STABLE_ID_NAMESPACE, "\x1f".join("" if p is None else str(p) for p in parts)))
+
+
 def now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 

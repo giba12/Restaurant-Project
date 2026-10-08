@@ -215,3 +215,19 @@ def test_reviewer_does_not_commit_an_offset_when_the_database_write_fails(monkey
         causal_engine.run_reviewer()
     assert consumer.commits == 0
     assert conn.rollbacks == 1
+
+
+# ------------------------------------------------------------------ ids that make a second pass harmless (DEF-173)
+
+def test_the_same_anomaly_and_treatment_give_the_same_finding_id_and_different_ones_give_different_ids():
+    spec = causal_engine.TREATMENT_MAP[sorted(causal_engine.TREATMENT_MAP)[0]]
+    other = causal_engine.TREATMENT_MAP[sorted(causal_engine.TREATMENT_MAP)[-1]]
+    assert causal_engine.finding_id_for("anomaly-1", spec) == causal_engine.finding_id_for("anomaly-1", spec)
+    assert causal_engine.finding_id_for("anomaly-1", spec) != causal_engine.finding_id_for("anomaly-2", spec)
+    if (spec["treatment"], spec["outcome"]) != (other["treatment"], other["outcome"]):
+        assert causal_engine.finding_id_for("anomaly-1", spec) != causal_engine.finding_id_for("anomaly-1", other)
+
+
+def test_an_analysis_with_no_anomaly_behind_it_gets_a_fresh_id_each_time():
+    spec = causal_engine.TREATMENT_MAP[sorted(causal_engine.TREATMENT_MAP)[0]]
+    assert causal_engine.finding_id_for(None, spec) != causal_engine.finding_id_for(None, spec)

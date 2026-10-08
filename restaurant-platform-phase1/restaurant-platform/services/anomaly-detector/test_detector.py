@@ -238,3 +238,41 @@ def test_a_sustained_real_shift_still_becomes_the_new_normal():
     for i in range(detector.WINDOW_SIZE):
         window.add(ticket(1000 + i, **{METRIC: float(rng.normal(60000.0, 6000.0))}))
     assert window.control_limit_check(METRIC, 60000.0) is None
+
+
+# ------------------------------------------------------------------ ids that make a second pass harmless (DEF-173)
+
+def completed(i, **over):
+    return ticket(i, delivered_time="2026-10-01T12:08:00.000Z", **over)
+
+
+def test_scoring_the_same_completed_ticket_again_gives_the_same_anomaly_ids():
+    a, b = completed(1), completed(1)
+    assert (detector.build_control_limit_event(METRIC, a, 90000.0, (1.0, 2.0))["anomaly_id"]
+            == detector.build_control_limit_event(METRIC, b, 90000.0, (1.0, 2.0))["anomaly_id"])
+    assert detector.build_isolation_forest_event(a, -0.2)["anomaly_id"] == detector.build_isolation_forest_event(b, -0.2)["anomaly_id"]
+
+
+def test_the_anomaly_id_follows_the_ticket_the_metric_and_the_method_and_nothing_else():
+    base = completed(1)
+    ids = {detector.build_control_limit_event(METRIC, base, 1.0, (0.0, 0.5))["anomaly_id"],
+           detector.build_control_limit_event("cook_duration_ms", base, 1.0, (0.0, 0.5))["anomaly_id"],
+           detector.build_isolation_forest_event(base, -0.2)["anomaly_id"],
+           detector.build_control_limit_event(METRIC, completed(2), 1.0, (0.0, 0.5))["anomaly_id"]}
+    assert len(ids) == 4
+    # the observed value, the bounds and the time of detection are not part of what the anomaly is about
+    again = detector.build_control_limit_event(METRIC, base, 5.0, (3.0, 4.0))
+    assert again["anomaly_id"] == detector.build_control_limit_event(METRIC, base, 1.0, (0.0, 0.5))["anomaly_id"]
+
+
+def test_stable_id_is_a_valid_uuid_the_same_every_time_and_different_for_different_parts():
+    import uuid
+
+    first = detector.common.stable_id("anomaly", "t1", None, "x")
+    assert str(uuid.UUID(first)) == first and first == detector.common.stable_id("anomaly", "t1", None, "x")
+    assert len({first, detector.common.stable_id("anomaly", "t1", "x"), detector.common.stable_id("anomaly", "t2", None, "x"),
+                detector.common.stable_id("finding", "t1", None, "x")}) == 4
+    # parts are separated, not concatenated: ("ab", "c") and ("a", "bc") are different things
+    assert detector.common.stable_id("ab", "c") != detector.common.stable_id("a", "bc")
+    # and the id is pinned, because rows already stored were made under it
+    assert detector.common.stable_id("anomaly", "t1") == "8ef4df43-2c12-5a94-b40d-2ff94e57a70c"

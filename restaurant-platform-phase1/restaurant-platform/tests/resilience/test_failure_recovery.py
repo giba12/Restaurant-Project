@@ -313,9 +313,11 @@ def test_a_mosquitto_that_loses_its_disk_comes_back_empty_and_from_then_on_loses
 def test_a_database_that_loses_its_disk_is_rebuilt_from_kafka_to_exactly_what_was_there():
     # The database is not the record of what the sensors said; Kafka is. With the producers stopped and the consumer caught up,
     # lose the database's volume: the schema is recreated empty by the image's own start-up scripts, the consumer group is
-    # rewound to the start of every topic, and the event tables must refill to exactly what Kafka holds (storage is
-    # idempotent on event_id, so a replay can only restore, never duplicate). Tables derived from the events (summaries,
-    # findings, the twin) are not rebuilt by this and are not claimed.
+    # rewound to the start of every topic, and the event tables must refill to exactly what they held before the loss (storage is
+    # idempotent on event_id, so a replay can only restore, never duplicate). "What they held", not "what Kafka holds": Kafka may
+    # hold a message twice (a crash between Kafka's confirmation and the MQTT acknowledgement redelivers it, and the Mosquitto
+    # kills earlier in this layer do exactly that), and the table, keyed on event_id, keeps one. Tables derived from the events
+    # (summaries, findings, the twin) are not rebuilt by this and are not claimed.
     pipeline_is_flowing()
     compose("stop", *SIMULATORS, timeout=120)
     try:
@@ -326,22 +328,29 @@ def test_a_database_that_loses_its_disk_is_rebuilt_from_kafka_to_exactly_what_wa
             time.sleep(8)
             return before == {t: stack.end_offset(t) for t in TOPIC_TABLE} and stack.consumer_lag("storage-consumer") == 0
 
+        def counts():
+            return {t: sql_int(f"SELECT count(*) FROM {table}") for t, table in TOPIC_TABLE.items()}
+
         wait_for(drained, 300, interval=2, description="every event to be stored before the disk is lost")
         offsets = {t: stack.end_offset(t) for t in TOPIC_TABLE}
-        assert all(count > 0 for count in offsets.values()), f"nothing in Kafka for some topic, so this proves nothing: {offsets}"
+        held = counts()
+        assert all(count > 0 for count in held.values()), f"nothing stored for some topic, so this proves nothing: {held}"
+        assert all(held[t] <= offsets[t] for t in TOPIC_TABLE), f"more rows than Kafka messages: rows {held}, offsets {offsets}"
         compose("stop", "storage-consumer", timeout=120)
 
         lose_the_disk_of("timescaledb", "timescaledb-data")
         compose("up", "-d", "--no-build", "timescaledb", timeout=180)
         wait_for(lambda: stack.healthy("timescaledb"), 240, description="the new, empty database to be healthy")
-        assert {t: sql_int(f"SELECT count(*) FROM {table}") for t, table in TOPIC_TABLE.items()} == {t: 0 for t in TOPIC_TABLE}, \
-            "the new database was not empty, so the disk was not really lost"
+        assert counts() == {t: 0 for t in TOPIC_TABLE}, "the new database was not empty, so the disk was not really lost"
 
         compose("exec", "-T", "kafka", f"{stack.KAFKA_BIN}/kafka-consumer-groups.sh", "--bootstrap-server", "localhost:9092",
                 "--group", "storage-consumer", "--reset-offsets", "--to-earliest", "--all-topics", "--execute", timeout=120)
         compose("start", "storage-consumer", timeout=120)
-        wait_for(lambda: {t: sql_int(f"SELECT count(*) FROM {table}") for t, table in TOPIC_TABLE.items()} == offsets, 300, interval=5,
-                 description="the event tables to refill to exactly what Kafka holds")
+        try:
+            wait_for(lambda: counts() == held, 300, interval=5, description="the event tables to refill to what they held")
+        except AssertionError:
+            raise AssertionError(f"the event tables did not refill to what they held: held {held}, now {counts()}, Kafka offsets {offsets} "
+                                 f"(Kafka messages beyond the rows, i.e. duplicates in Kafka: {({t: offsets[t] - held[t] for t in offsets})})") from None
         for table in TOPIC_TABLE.values():
             assert sql_int(f"SELECT count(*) - count(DISTINCT event_id) FROM {table}") == 0
     finally:

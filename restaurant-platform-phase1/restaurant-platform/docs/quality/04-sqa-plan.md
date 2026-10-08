@@ -86,7 +86,7 @@ To assure that the system's code, configuration, data contracts and documents me
 
 | Metric | Value |
 |---|---|
-| Entries in the defect log | 171 (155 defects, 16 informational) |
+| Entries in the defect log | 172 (156 defects, 16 informational) |
 | By severity | S1 Critical 8; S2 High 31; S3 Medium 53; S4 Low 57; Info 16 |
 | By status | Fixed and guarded by a test 56; fixed 79; mitigated 8; clarified 17; open 5 |
 | Distinct tests | 670, plus the GDScript smoke test (about 80 checks) |

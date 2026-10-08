@@ -343,8 +343,19 @@ def test_a_database_that_loses_its_disk_is_rebuilt_from_kafka_to_exactly_what_wa
         wait_for(lambda: stack.healthy("timescaledb"), 240, description="the new, empty database to be healthy")
         assert counts() == {t: 0 for t in TOPIC_TABLE}, "the new database was not empty, so the disk was not really lost"
 
-        compose("exec", "-T", "kafka", f"{stack.KAFKA_BIN}/kafka-consumer-groups.sh", "--bootstrap-server", "localhost:9092",
-                "--group", "storage-consumer", "--reset-offsets", "--to-earliest", "--all-topics", "--execute", timeout=120)
+        # Kafka only rewinds a group with no members. A container that was stopped, not shut down politely, may still be a member
+        # until its session times out, and the tool then prints an error and exits 0: the consumer would carry on from where it was
+        # and replay nothing (on GitHub's faster runner the reset came before the old member had gone). So wait for an empty group,
+        # and read what the tool said.
+        def group_state():
+            return compose("exec", "-T", "kafka", f"{stack.KAFKA_BIN}/kafka-consumer-groups.sh", "--bootstrap-server", "localhost:9092",
+                           "--describe", "--group", "storage-consumer", "--state", timeout=60).stdout
+
+        wait_for(lambda: any(word in group_state() for word in ("Empty", "Dead")), 180, interval=3, description="the stopped consumer to leave its group")
+        reset = compose("exec", "-T", "kafka", f"{stack.KAFKA_BIN}/kafka-consumer-groups.sh", "--bootstrap-server", "localhost:9092",
+                        "--group", "storage-consumer", "--reset-offsets", "--to-earliest", "--all-topics", "--execute", timeout=120)
+        said = reset.stdout + reset.stderr
+        assert "Error" not in said and "plate-waste-events" in said, f"the offsets were not reset: {said}"
         compose("start", "storage-consumer", timeout=120)
         try:
             wait_for(lambda: counts() == held, 300, interval=5, description="the event tables to refill to what they held")

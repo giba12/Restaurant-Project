@@ -15,8 +15,12 @@ IMAGE="rp-causal-engine-test"
 
 docker build -q -f services/causal-engine/Dockerfile -t "$IMAGE" services >/dev/null
 
+# The -W below hides ONE known warning and nothing else: DoWhy 0.11.1 indexes a pandas Series by position, which pandas 3 removes (it
+# was 5,757 of 5,975 warnings in a run, drowning anything new). It is safe only while pandas stays on 2.x, which
+# tests/static/test_dowhy_pandas_pin.py enforces.
+#
 # --entrypoint sh: the image's ENTRYPOINT is the service itself. pytest is a
 # test-only dependency, so it is installed at run time rather than baked into
 # the production image.
 docker run --rm --entrypoint sh -v "$PWD":/work:ro -w /work -e PYTHONDONTWRITEBYTECODE=1 "$IMAGE" -c \
-  'pip install -q --user pytest 2>&1 | tail -1; python -m pytest tests/statistical -v -p no:cacheprovider --rootdir=/work "$@"' sh "$@"
+  'pip install -q --user pytest 2>&1 | tail -1; python -m pytest tests/statistical -v -p no:cacheprovider --rootdir=/work -W "ignore:Series.__getitem__ treating keys as positions is deprecated:FutureWarning" "$@"' sh "$@"

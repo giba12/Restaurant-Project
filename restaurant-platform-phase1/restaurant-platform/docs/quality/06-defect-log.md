@@ -28,7 +28,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 
 ## Summary
 
-**174 entries** (158 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-07.
+**176 entries** (160 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-07.
 
 ### By severity
 
@@ -37,20 +37,20 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | S1 Critical | 8 |
 | S2 High | 31 |
 | S3 Medium | 59 |
-| S4 Low | 60 |
+| S4 Low | 62 |
 | Info | 16 |
-| **Total** | **174** |
+| **Total** | **176** |
 
 ### By status
 
 | Status | Count |
 |---|---|
-| Fixed+tested | 64 |
-| Fixed | 79 |
+| Fixed+tested | 65 |
+| Fixed | 81 |
 | Mitigated | 8 |
 | Clarified | 17 |
-| Open | 6 |
-| **Total** | **174** |
+| Open | 5 |
+| **Total** | **176** |
 
 ### By part (project period)
 
@@ -74,14 +74,15 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Part P: Closing the remaining gaps in the broker and the edge control path (2026-10-07) | 7 |
 | Part Q: Making every write idempotent (2026-10-08) | 1 |
 | Part R: Rotating the master key on Kubernetes (2026-10-08) | 1 |
-| **Total** | **174** |
+| Part S: Reviewing a full nightly run (2026-10-08) | 2 |
+| **Total** | **176** |
 
 ### By how it was found
 
 | Found by | Count |
 |---|---|
 | Live operation, deployment or manual run | 74 |
-| Review (static or manual) | 24 |
+| Review (static or manual) | 26 |
 | Test-regime run or observation | 46 |
 | Automated test regime (2026-10-02) | 7 |
 | Chaos test | 5 |
@@ -89,7 +90,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | CI or first push | 11 |
 | User report | 3 |
 | Audit script | 1 |
-| **Total** | **174** |
+| **Total** | **176** |
 
 ### By class
 
@@ -100,8 +101,8 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Environment/tooling | 23 |
 | Test defect | 26 |
 | Observability | 10 |
-| Dependency | 7 |
-| Configuration | 6 |
+| Dependency | 8 |
+| Configuration | 7 |
 | Documentation | 7 |
 | Portability | 6 |
 | Integration | 8 |
@@ -113,9 +114,9 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Repository hygiene | 2 |
 | Operator error | 2 |
 | Code quality | 1 |
-| **Total** | **174** |
+| **Total** | **176** |
 
-### Open items (6)
+### Open items (5)
 
 | ID | Summary | Severity |
 |---|---|---|
@@ -123,7 +124,6 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | DEF-091 | Whether `PodCrashLooping` had notified continuously during those 10 hours could not be established afterwards; Kubernetes' restart backoff may have pu... | Info |
 | DEF-093 | `strimzi-cluster-operator` sat at 90% of its memory limit during the investigation. | Info |
 | DEF-123 | Two Compose providers coexist on the development machine (a v1 `docker-compose` via the Podman shim, and the user's own Compose plugin, v5.5.1), so a... | Info |
-| DEF-171 | Root-owned, mode-0700 `__pycache__` directories appeared in `edge-simulators/edge_ai` and `edge-simulators/control` at 13:06 on 2026-10-07 (something was run as root in the source tree), so no image build whose context includes them can read them: the end-to-end layer's `edge-operator` build failed, and the owner's next `docker build` of the simulator image would fail the same way. They are only caches and git-ignored; removing them needs `sudo`. | S4 Low |
 | DEF-131 | The gate certifies statistical significance, not causation: it cannot detect an omitted confounder or a mis-specified treatment (for example the staff... | Info |
 
 ## Part A. Phases 1-3 (before 2026-09-10): recovered lessons
@@ -407,7 +407,7 @@ After the cluster cutover the owner asked for model control to be switched on fo
 | DEF-168 | Environment/tooling | an end-to-end run on the author's machine | **Two end-to-end tests failed on a wall-clock step in WSL2.** `test_completed_ticket_summaries_are_internally_consistent` found seven completed tickets with an empty duration, and the aggregator's log showed a Kafka connection time-out at start-up under load. The stored events were in the order they were sent and the ledger found 5,370 published and 0 missing, so the transport was not at fault: every event after `cook_started` in the affected tickets was stamped 1.2 to 1.5 s earlier than its own `elapsed_since_previous_stage_ms` implies, which a step of the VM's wall clock explains and nothing else does. | S4 Low | Test-regime run or observation | The aggregator behaves as designed (it leaves a duration empty rather than invent a negative one), so the fault was the simulator's: `TicketLifecycle` now stamps a ticket's first event from the wall clock and every later event as the previous stamp plus the monotonic elapsed time, so the stamps always agree with `elapsed_since_previous_stage_ms`. A test steps the wall clock back 1.5 s and forward 4 s with tickets open and fails on the old per-event stamping. | Fixed+tested |
 | DEF-169 | Security | closing the cluster's plaintext listener | **The cluster's broker kept a plaintext listener beside TLS, and removing it by deleting its line would not have closed it.** The chart's config opened `listener 1883` and `listener 8883` (added alongside during the 2026-09-25 TLS cutover and never removed), so a client that chose 1883 would have sent its login in the clear; every live client used 8883, and the chart's own defaults for the simulators still said 1883. Deleting the `listener 1883` line left port 1883 open anyway: the chart's global settings came before its first `listener` line, and Mosquitto treats settings in that position as configuring an implicit default listener on 1883. The real-broker test of the chart's config (run whole, with 1883 published) failed with a CONNACK from 1883. | S3 Medium | Test-regime run or observation | The TLS listener moved to the top of the config with the reason beside it; the Service and container no longer name 1883; the chart-config test runs the whole config over TLS and checks nothing answers on 1883 (and fails when a 1883 listener is added back, at the end or the start); a static test pins one listener, one Service port and one container port; the realign script's anonymous-refusal probe moved to 8883. Applied to the cluster on 2026-10-07 and checked live. | Fixed+tested |
 | DEF-170 | Test regime | GitHub's `tests` workflow, three pushes in a row | **Three pushes went red on GitHub because of two assumptions my own machine hid.** (1) The real-broker tests that make the TLS certificate read its private key from the host, but under rootful Docker (GitHub's runners) the container writes it as root with mode 0600, so the tests got `PermissionError`; under rootless Podman, root in the container is the user, which is why it passed locally. This failed the `integration` job from the first commit of the day. (2) After the live check failed on a missing `paho-mqtt` in the owner's system Python, `verify-model-control.sh` gained a check for it, and its stand-in tests, which need no `paho`, then failed on the `static` job, whose Python has none (my test environment has it). I had been told to watch GitHub's runs and had not been watching the one that mattered. | S3 Medium | CI or first push | The test's own copy of the key is made readable (the script itself still leaves it root-only); the stand-in tests run the script with an interpreter wrapper that answers only the paho check, and were re-run in a clean virtual environment with no `paho` to reproduce CI. Confirmed green on GitHub on `f00d247`, `57d78e2` and `d94b789`. | Fixed+tested |
-| DEF-171 | Environment/tooling | an end-to-end run of the rotation test | **Root-owned `__pycache__` directories in the source tree stopped every image build.** See the open item below: they were created as root at 13:06, are mode 0700, and break `docker build` for any context that includes them. The rotation test was run from a clean copy of the tree meanwhile. | S4 Low | Test-regime run or observation | Diagnosed, not removed: only `sudo rm -rf` of the two directories clears it. | Open |
+| DEF-171 | Environment/tooling | an end-to-end run of the rotation test | **Root-owned `__pycache__` directories in the source tree stopped every image build.** See the open item below: they were created as root at 13:06, are mode 0700, and break `docker build` for any context that includes them. The rotation test was run from a clean copy of the tree meanwhile. | S4 Low | Test-regime run or observation | The owner removed the two directories with `sudo rm -rf` (2026-10-08) and image builds work again; nothing in the repository creates root-owned files, so the cause was something run as root in the source tree. | Fixed |
 | DEF-172 | Test regime | the nightly workflow on GitHub (2026-10-08) | **The database-rebuild resilience test failed on GitHub, twice, for two reasons.** It compared the refilled tables with Kafka's end offsets, which equal the distinct events only if Kafka holds none twice (350 messages, 349 rows: confirmed), and it rewound the consumer group without checking the group was empty, so on a fast runner the reset probably came before the stopped consumer had left and was refused (all tables still empty after five minutes; the tool prints an error and exits 0). It also reported only `last value: False`. | S4 Low | CI or first push | The test compares the rebuilt tables with the rows held just before the loss, requires rows not to exceed offsets, waits for the group to be empty, fails if the reset tool's own output holds an error or lacks the topics, and on a time-out reports rows held, rows now and offsets. Passed locally and then on GitHub (the resilience layer, 13 of 13, on `d94b789`). | Fixed+tested |
 
 ## Part Q. Making every write idempotent (2026-10-08)
@@ -425,6 +425,15 @@ The owner asked for the cluster key rotation to be started. Real rotation change
 | ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
 |---|---|---|---|---|---|---|---|
 | DEF-174 | Deployment | the first rehearsals of the rotation on k3s | **A replaced simulator pod kept running, and fought its replacement for the broker, for 30 seconds.** The simulators ignored SIGTERM (a container's first process does unless it handles it), so Kubernetes waited out its whole 30 s grace period before killing the old pod; the chart's rolling update started the new pod meanwhile; and both connect to the broker as the same client id (its `SOURCE_ID`, because the broker makes a client's id its username), which makes the broker hand the session to the newest connection and drop the other. The broker log showed `session taken over` several times a second; the two pods kicked each other off, the retained command was redelivered at every reconnect, and a command to the node was answered by whichever pod was connected, the old one (holding only the old key) included: the same request was answered `unchanged`, `rejected: bad signature` and `ignored` in the same second. It happens at every upgrade of a simulator, not only in a rotation, and had gone unnoticed because publishing resumes by itself. | S3 Medium | Test-regime run or observation | The simulator now handles SIGTERM and SIGINT: it ends its wait at once, stops, and sends the broker a DISCONNECT (two unit tests; reverting the wait to `time.sleep` turned them red). The chart runs `maxSurge: 0` / `maxUnavailable: 1` with a 10 s grace period as a backstop (a rolling update still does not wait for the old pod to finish terminating, so this alone was not enough, as the second rehearsal showed). And `rotate-master-key.sh` waits until the node has exactly one pod, none terminating, before it sends any command (fifteen stand-in tests; deleting that wait turned its test red). The fixed simulator image has to be built and imported into k3s (needs `sudo`) to take effect; the rotation does not depend on it. | Fixed+tested |
+
+## Part S. Reviewing a full nightly run (2026-10-08)
+
+The owner asked for the full nightly to be run again and for the issues found to be reported and fixed. The run passed every layer; reading it, the repository and the cluster for what the tests do not fail on turned up two things worth fixing (the rest is in `11-nightly-review-2026-10-08.md`).
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-175 | Configuration | the annotations on every GitHub run | **The workflows ran on a moving runner image and on actions GitHub is retiring.** Every job used `ubuntu-latest`, which becomes Ubuntu 26 on 2026-10-19, so the nightly's Docker, Python and toolchain could change with no change of ours; and `checkout@v4`, `setup-python@v5` and `upload-artifact@v4` target Node 20, which is being retired. | S4 Low | Review (static or manual) | Runner pinned to `ubuntu-24.04` in all three workflows; `checkout@v5`, `setup-python@v6`, `upload-artifact@v6` (each read to use Node 24) in the two workflows that can be run; the docker actions and `checkout` in `publish-images.yml` were left, because that workflow cannot be tried without publishing. Confirmed by the runs after the push. | Fixed |
+| DEF-176 | Dependency | the statistical layer's warning summary | **DoWhy 0.11.1 needs pandas 2.x, warned about it 5,757 times a run, and nothing stopped pandas being bumped.** Its regression estimator indexes a Series by position (deprecated in pandas 2.1, removed in 3), so a routine upgrade would break the causal engine at its first estimate; the flood of identical warnings (96% of the layer's warnings) hid anything new. | S4 Low | Review (static or manual) | The statistical runner hides that one warning and no other (checked: two warnings in, one out); a static guard fails if pandas leaves 2.x while DoWhy 0.11 is pinned (it fails on `pandas==3.0.0`). | Fixed+tested |
 
 ## How the defects were found, and what that says about the process
 

@@ -24,11 +24,12 @@ The three registers (traceability matrix, defect log, risk register) were first 
 | 03 | [Requirements traceability matrix](03-requirements-traceability-matrix.md) | Which test proves each requirement, and is it met? | An auditor |
 | 04 | [SQA plan](04-sqa-plan.md) | What quality practices were in force, and how good are they honestly? | A manager |
 | 05 | [Risk register](05-risk-register.md) | What could go wrong, what already did, what is open? | A manager or maintainer |
-| 06 | [Defect and difficulty log](06-defect-log.md) | Every failure, bug and difficulty (151 entries) | Anyone curious how it really went |
+| 06 | [Defect and difficulty log](06-defect-log.md) | Every failure, bug and difficulty (176 entries) | Anyone curious how it really went |
 | 07 | [Test summary report](07-test-summary-report.md) | What do the latest results say? | Everyone: start here |
 | 08 | [Lessons learned](08-lessons-learned.md) | What does the project teach? | An engineer, an interviewer |
 | 09 | [Environment and configuration baseline](09-test-environment-and-configuration-baseline.md) | Where were the results obtained? | Anyone reproducing them |
 | 10 | [Release readiness and known issues](10-release-readiness-and-known-issues.md) | Is it ready, and with what caveats? | The owner, a reviewer |
+| 11 | [Nightly review, 2026-10-08](11-nightly-review-2026-10-08.md) | What did reading a full nightly run, the repository and the cluster turn up? | A maintainer |
 
 Related documents elsewhere in the repository: [`TESTING.md`](../../TESTING.md) (the catalogue of every test: what it is, what it does, why it exists, why it matters), [`CODEBASE-GUIDE.md`](../../CODEBASE-GUIDE.md) (every file explained), [`restaurant-platform-implementation-status.md`](../../restaurant-platform-implementation-status.md) (the technical log and the original problem log), and [`restaurant-platform-project-notes.md`](../../restaurant-platform-project-notes.md) (the original design brief).
 

@@ -408,6 +408,15 @@ What stops tomorrow's writer from being the one that is not idempotent. Nothing 
 | `test_no_credential_is_read_printed_or_put_on_a_command_line` | **Security test.** No `kubectl get secret` asks for a value; every pod gets the login and master through `secretKeyRef`, never as a literal. | The script drives production credentials. | It never touches a credential value. |
 | `test_it_is_executable_parses_and_kills_nothing_by_name` | **Sanity test.** Executable, parses, `set -Eeuo pipefail`, no `pkill`. | Standing rules. | Basic hygiene. |
 
+#### `test_dowhy_pandas_pin.py` — a routine pandas upgrade cannot break the causal engine *(new, 2026-10-08)*
+
+DoWhy 0.11.1 indexes a pandas Series by position, which pandas 3 removes. Both are pinned today, so nothing breaks; this is what stops a routine "bump pandas" from doing it silently (DEF-176). Nothing runs. Pinning pandas to 3.0.0 turned the first test red.
+
+| Test | What it is and does | Why I created it | Why it matters |
+|---|---|---|---|
+| `test_wherever_dowhy_0_11_is_pinned_pandas_is_pinned_to_the_2_x_line` | **Dependency guard.** In every requirements file that pins DoWhy 0.11, pandas is pinned and is a 2.x version; at least one such file exists. | A pandas upgrade would break the causal engine at its first estimate, not at install. | The upgrade fails here, in seconds. |
+| `test_the_statistical_runner_hides_that_one_warning_and_no_other` | **Script-structure test.** The statistical runner's `-W` filters are exactly the one for DoWhy's Series-indexing FutureWarning. | That warning was 5,757 of 5,975 in a run and drowned anything new; hiding more would hide real signal. | Noise out, new warnings still visible. |
+
 #### `test_bridge_wiring.py` — the bridge is deployed the way its guarantee needs *(new)*
 
 The MQTT-Kafka bridge's guarantee (no sensor event lost to a restart of the bridge, Kafka or Mosquitto) rests on settings spread over several files: a persistent session in the bridge's code, Mosquitto persisting it to a volume, one bridge at a time, and a restart that loses nothing. Each is easy to change by accident and invisible until a restart happens (DEF-152). These read the rendered charts, the Compose configuration and the realign script; nothing runs. Each was checked for teeth by breaking the file it guards (rolling update, persistence off, retire Connect first, bridge not scraped, image not imported).

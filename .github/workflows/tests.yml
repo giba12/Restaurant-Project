@@ -26,7 +26,7 @@ name: tests
 # 2026-09-30 was accurate for a reason nobody had checked: it could not
 # have run at all. All working-directory values below are prefixed with
 # restaurant-platform-phase1/restaurant-platform accordingly, since
-# actions/checkout@v4 now lands the repo root here, not that subdirectory.
+# actions/checkout@v5 now lands the repo root here, not that subdirectory.
 on:
   push:
     branches: [main]
@@ -34,7 +34,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -80,13 +80,13 @@ jobs:
             install: pip install jsonschema pandas pytest numpy prometheus-client==0.26.0
             run: python -m pytest test_producer_schema_compatibility.py -v
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # 3.11, not "latest 3.x": every service's own Dockerfile is built
       # FROM python:3.11-slim -- pinning CI to the same version production
       # actually runs avoids a class of bug where tests pass on a newer
       # interpreter but the real image behaves differently.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -102,11 +102,11 @@ jobs:
   # every push; the heavy ones (full-stack, resilience, load, statistical,
   # security) run nightly in production-readiness.yml.
   static:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       # helm is preinstalled on GitHub's ubuntu runners.
@@ -118,13 +118,13 @@ jobs:
   # The React dashboard's component tests (Vitest, React Testing Library, jsdom): the real <App/> against canned
   # dashboard-api answers, nothing live. Also lints and builds it, so a broken build fails here and not in the image.
   dashboard-web:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
         working-directory: restaurant-platform-phase1/restaurant-platform/services/dashboard-web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -136,11 +136,11 @@ jobs:
       - run: npm run build
 
   integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       # paho-mqtt: tests/integration/test_mosquitto_auth.py runs the real broker (docker is on the runner) and talks to it as a client.
@@ -150,7 +150,7 @@ jobs:
         run: bash tests/integration/run_db_tests.sh
 
   game-smoke-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -190,7 +190,7 @@ jobs:
       BRIDGE_URL: "http://127.0.0.1:8001"
       DASHBOARD_URL: "http://127.0.0.1:8080"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Only the services the smoke test actually exercises -- not
       # mosquitto/the MQTT-Kafka bridge (the game publishes straight to Kafka, no

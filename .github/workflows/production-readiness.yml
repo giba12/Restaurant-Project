@@ -34,11 +34,11 @@ defaults:
 
 jobs:
   stack:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - run: pip install pytest pyyaml
@@ -46,26 +46,26 @@ jobs:
         run: bash tests/run_stack_tests.sh "${{ inputs.stack_layer || 'full' }}"
       - name: Keep container logs from a failed run
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: stack-logs
           path: restaurant-platform-phase1/restaurant-platform/tests/artifacts/
           if-no-files-found: ignore
 
   statistical:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Causal engine vs synthetic ground truth (includes the slow noise-gate measurement)
         run: bash tests/statistical/run_statistical_tests.sh --run-slow
 
   security:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - run: pip install pytest pip-audit

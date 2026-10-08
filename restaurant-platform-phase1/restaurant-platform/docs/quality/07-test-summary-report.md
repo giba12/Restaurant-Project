@@ -5,12 +5,15 @@
 | Document | Test summary report |
 | Project | Restaurant Operations Digital Twin Platform |
 | Version | 1.0 |
-| Date | 2026-10-03, updated 2026-10-04 |
-| Baseline | Commit `4960c62` plus the edge-inference feature (the commit that follows it) |
+| Date | 2026-10-03, results table refreshed 2026-10-08 (the sections after it are a dated log and are left as written) |
+| Baseline | The log below is dated; the results table in section 2 and the current verdict are as of commit `6f5c34e` (2026-10-08) |
 | Cycle | The 2026-10-02/03 production-style regime, one complete clean pass on 2026-10-03 (first cycle); a second cycle on 2026-10-03/04 after the edge-inference feature, which was not clean on its first attempt; a third on 2026-10-04 that fixed the open findings and re-ran what they touched (sections 1, 2 and 6) |
 | Environment | See `09-test-environment-and-configuration-baseline.md` (one laptop, rootless Podman) |
 
 ## 1. Verdict
+
+**Current (2026-10-08).** On GitHub, at commit `6f5c34e`, `tests` is green on every job and the full nightly passes every layer (security 12, statistical 14, end-to-end 69 with 4 skipped by design, acceptance 4, load 8, resilience 13); the latest six full nightly runs passed in a row after six failures between 2026-10-05 and 10-08, each a real fault that was fixed. 100 requirements: 75 verified by automated test, 6 by inspection, 9 live or manual only, 9 partial, 1 not verified, 0 not met. Open defects: 5, all informational. The live cluster runs the repaired refutation gate and the current simulator and bridge images, but its service images predate the idempotent-writes fix (`10-release-readiness-and-known-issues.md`, section 1). The paragraphs below are the dated history that led here.
+
 
 **First cycle (2026-10-03).** Every layer of the regime passed, apart from one test that deliberately fails because it records a known, unfixed defect. Building the regime found and fixed **two silent-data-loss defects** and surfaced **one significant weakness the project had been understating, the refutation gate, which was then repaired the same day** (section 3.4).
 
@@ -65,22 +68,26 @@ On the final code, every layer was re-run and passed: static 191 (3 skipped), un
 
 **Twentieth step (2026-10-08, the review): a full nightly, read for what it does not fail on.** A full nightly on `6aa38b4` passed every layer (security 12, statistical 14, end-to-end 69 with 4 skipped by design, acceptance 4, load 8, resilience 13, durations in line with the previous run). Reading its log, the repository and the live cluster turned up five things (`11-nightly-review-2026-10-08.md`): every job ran on `ubuntu-latest`, which becomes Ubuntu 26 on 2026-10-19; the actions targeted Node 20; 5,757 of the statistical layer's 5,975 warnings were one DoWhy-needs-pandas-2 warning that nothing guarded; a status document still called the broker anonymous; DEF-171 was still listed open. Fixed: runner pinned to `ubuntu-24.04`, the actions moved to Node 24 versions (the publish workflow's docker actions left, since it cannot be tried without publishing), the one warning filtered and a static guard added (it fails on `pandas==3.0.0`), the document corrected, the defect closed (DEF-175, DEF-176). The first push left one Node 20 warning (`setup-node` in the dashboard job), fixed in the next. `tests` was green on both, with no annotation left, and the full nightly on `f60afb0` passed every layer again on `ubuntu-24.04` with the statistical warnings at 218.
 
+**Twenty-first step (2026-10-08): the documents refreshed.** The owner asked for the stale release-readiness list and the other documents to be refreshed. Each was re-read against the cluster, the CI runs and the code (DEF-177): the release-readiness recommendation, criteria and remaining conditions were rewritten (the CI workflows have run on GitHub for days, the repaired refutation gate has been live since 2026-10-07, and the latest six full nightly runs passed), the results table in section 2 of this report was replaced with the figures GitHub reported for `6f5c34e`, the SQA plan's gates and metrics, the test plan, the environment baseline (now with the CI runner and the tools added this week), `TESTING.md` and the codebase guide were corrected, six lessons and four process changes were added, and every document's date and baseline were moved on. Checking the cluster for one of the claims found something that no test had: the idempotent-writes fix (DEF-173) is committed, tested and green on GitHub, but the service images in the cluster are still those of the 2026-10-06/07 realign (the pods contain none of its code), so the recommendation now says so and the remaining conditions list deploying it first (RSK-003). The simulator and bridge images, and the repaired refutation gate, are current on the cluster.
+
 **The limits that matter most:** one machine and one container engine; the two e2e fixes from the first GitHub run were re-run there, and the full nightly workflow passed every layer on 2026-10-05 after two new ledger checks first failed (DEF-151); the heavy layers are flaky in this environment (the resilience layer needed six runs in the second cycle to produce one clean pass), so their stability is unmeasured; the staffing effect and the edge sensors are designs of the simulation, so passing shows the pipeline works, not that the real world behaves so; there is no independent reviewer.
 
 ## 2. Results by layer
 
-| # | Layer | Result | Time | Last run | Notes |
-|---|---|---|---|---|---|
-| 1 | Static | **192 passed, 3 skipped** | about 45 s | 2026-10-04 | The 3 skips are documented exceptions (two operator-managed charts; the nginx image); lint ran |
-| 2 | Unit | **275 passed** | seconds per suite | 2026-10-04 | edge node, world coupling and trainer 63, detector 25, aggregator and origin 33, causal engine 16, narrator 35, dashboard API 21, alert relay 5, game bridge 50, schema compatibility 7, connector supervisor 20 |
-| 3 | Database integration | **118 passed, no expected-fail** | 107 s | 2026-10-04 | The twin's redelivery double-count (DEF-107) is fixed, so the one expected-fail is gone |
-| 4 | Statistical | **14 passed** | 5 min 36 s | 2026-10-04 | Re-run on the final code: unchanged |
-| 5 | End-to-end | **65 passed, 4 skipped** | 8 min 27 s | 2026-10-04 | The 4 skips are the slow acceptance tests; includes the supervisor service and two edge-inference tests |
-| 5 | Acceptance | **4 passed** (two runs) | 12 min 34 s | 2026-10-04 | The finding for the injected shortage now **passes refutation** (section 3.1, DEF-141); a first run failed one new check because it measured staffing too late (DEF-145) |
-| 6 | Resilience | **8 passed** (full run on the fixed Connect configuration, 48 min 44 s) | 2026-10-04 | Includes the supervisor test, which fails with the supervisor stopped. Earlier in the cycle the layer needed six runs for one clean pass (DEF-137, DEF-142, DEF-143) |
-| 7 | Load | **4 passed** | 10 min | 2026-10-04 | Burst 35 events/s (45 in an earlier run), p95 latency 0.95 s, dashboard API p95 602 ms; the causal engine's one-off import +112 MB, every other service at most +1.5 MB |
-| 8 | Security | **11 passed** | 27 s | 2026-10-04 | One case per requirements file, now including the edge trainer's pins; no known vulnerabilities |
-| - | Godot client smoke test | Not re-run | - | 2026-09-30 (CI) | About 80 checks; passed on GitHub on 2026-09-30 |
+As of 2026-10-08, from GitHub's runs at commit `6f5c34e` (the `tests` workflow and the full nightly). Earlier figures are in the dated log below.
+
+| # | Layer | Result | Time (GitHub) | Notes |
+|---|---|---|---|---|
+| 1 | Static | **347 passed, 2 skipped** | 44 s | The 2 skips are documented exceptions (limits held inside an operator resource; the official nginx image); lint runs. This layer also holds the guards for the documents, the executable bit, idempotent writes, the pandas pin and the shell scripts' stand-in tests |
+| 2 | Unit | **417 passed**, plus 15 dashboard component tests | seconds per suite | Edge node, simulators and trainer 187, detector 28, aggregator 33, causal engine 18, narrator 35, dashboard API 21, alert relay 5, game bridge 50, MQTT-Kafka bridge 33, schema compatibility 7; the dashboard's 15 run under Vitest |
+| 3 | Database integration | **180 passed** | 130 s | A real TimescaleDB with the real migrations; includes the 47 tests against the real Mosquitto image (login, TLS, rules, delivery) and the 15 that run every writer twice |
+| 4 | Statistical | **14 passed** | 35 to 57 s | 218 warnings (it was 5,975 until one third-party warning was filtered, DEF-176); the noise-gate measurement runs here |
+| 5 | End-to-end | **69 passed, 4 skipped** | 3 min 21 s | The 4 skips are the slow acceptance tests, which have their own layer; includes the live-node model rollout, the master-key rotation on a real node container and the broker-login test |
+| 5 | Acceptance | **4 passed** | 7 min 21 s | The finding for the injected shortage passes the repaired refutation gate |
+| 6 | Resilience | **13 passed** | 14 to 17 min (16 min 4 s on the latest) | The ledger checks (0 missing) across Kafka, Mosquitto and bridge restarts and kills, the loss of Mosquitto's disk, and the loss of the database's disk rebuilt from Kafka |
+| 7 | Load | **8 passed** | 1 min 4 s | 4 throughput and stability tests and 4 node-footprint tests (inside the chart's CPU and memory limits) |
+| 8 | Security | **12 passed** | 6 s | One case per requirements file; no known vulnerabilities |
+| - | Godot client smoke test | **Passed** | 2 min 19 s | About 80 checks; runs on every push (the `game-smoke-test` job) |
 
 **Totals:** 713 distinct test names across the Python suites, plus the GDScript smoke test.
 

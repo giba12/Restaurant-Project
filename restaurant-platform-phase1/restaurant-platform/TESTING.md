@@ -112,11 +112,27 @@ Not run in this round: integration, load, resilience, acceptance and the GitHub 
 | 8 · Security | 12 passed | one case per requirements file, now including the bridge's pins; no known vulnerabilities |
 | 2 · Unit | bridge 28, simulators and edge model 63 | the simulator suite shrank by the 24 gate tests that went with the gate |
 
+**Update, 2026-10-08, on GitHub** (commit `6f5c34e`; the `tests` workflow and the full nightly, run six times in a row; the earlier tables above are history from the laptop):
+
+| Layer | Result | Notes |
+|---|---|---|
+| 1 · Static | 347 passed, 2 skipped (44 s) | the skips are the documented exceptions; this layer now also holds the stand-in tests of the operational scripts, the executable-bit rule, the idempotent-writes guard and the pandas pin |
+| 2 · Unit | 417 passed across ten suites, plus 15 dashboard component tests | edge node, simulators and trainer 187, detector 28, aggregator 33, causal engine 18, narrator 35, dashboard API 21, alert relay 5, game bridge 50, MQTT-Kafka bridge 33, schema compatibility 7 |
+| 3 · Database integration | 180 passed (130 s) | includes the 47 tests against the real Mosquitto image (login, TLS, rules, delivery) and the 15 that run every writer twice |
+| 4 · Statistical | 14 passed (35 to 57 s) | 218 warnings, down from 5,975 after one third-party warning was filtered |
+| 5 · End-to-end | 69 passed, 4 skipped (3 min 21 s) | includes the master-key rotation on a real node container |
+| 5 · Acceptance | 4 passed (7 min 21 s) | |
+| 6 · Resilience | 13 passed (14 to 17 min) | includes the loss of Mosquitto's disk and of the database's disk |
+| 7 · Load | 8 passed (1 min 4 s) | four throughput and four node-footprint tests |
+| 8 · Security | 12 passed (6 s) | |
+
+On the laptop the end-to-end layer still gives 66 of 68 (start-up timeouts while Kafka is slow to come up, and WSL clock steps), which GitHub's runners do not show.
+
 **Acceptance (an injected staffing shortage):** mean pickup delay at the loaded stations rose from 6.5 s to 19.1 s (**2.9×**); staff clocked in fell from 9 to 2; **104 anomalies** were flagged at the stations absorbing the load and **1** at the removed station; and the causal finding for the scenario **passes the repaired refutation gate** with a negative effect (-2,098 ms per additional staff member, p = 5.2e-4; an earlier run gave -2,399 ms, p = 4.8e-6). Between 2026-10-03 and 2026-10-04 it was refuted (p = 0.95) because the simulated world contained no staffing effect; it now does (DEF-141). The effect is a designed property of the simulation.
 
 **Load:** event-to-storage latency p95 **0.95 s**; a 3,000-event burst was fully stored, exactly once, at **35 events/s** end to end in the final run (45 in an earlier one; a floor of 10 is asserted; the stack's real default traffic is ~0.7 events/s); no service grew by more than **1.5 MB** except the causal engine's one-off import of DoWhy (+112 MB, within its allowance) and none restarted; the dashboard API held p95 **602 ms** at 20 concurrent users without errors.
 
-**Not yet seen anywhere but this laptop:** none of the GitHub workflows has run on GitHub. They were validated locally by running each command they contain, but their first real run may still surface a runner-specific difference.
+**Seen on GitHub as well (2026-10-08):** both workflows run there, `tests` on every push and the full nightly on a schedule and on demand, on GitHub's clean Docker Engine with Compose v2. See the update above and `docs/quality/07-test-summary-report.md`; the failures that GitHub surfaced and this laptop did not are recorded as DEF-146, DEF-147, DEF-159, DEF-160, DEF-170, DEF-172 and DEF-175.
 
 ## What building this regime found
 

@@ -5,8 +5,8 @@
 | Document | Defect and difficulty log |
 | Project | Restaurant Operations Digital Twin Platform |
 | Version | 1.0 |
-| Date | 2026-10-03 |
-| Status | Current as of commit `898c7aa`; the "open" entries are the project's known gaps |
+| Date | 2026-10-08 (refreshed; first written 2026-10-03) |
+| Status | Current as of commit `6f5c34e`; the "open" entries are the project's known gaps |
 
 ## Purpose and honesty note
 
@@ -28,7 +28,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 
 ## Summary
 
-**176 entries** (160 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-07.
+**177 entries** (161 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-07.
 
 ### By severity
 
@@ -37,20 +37,20 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | S1 Critical | 8 |
 | S2 High | 31 |
 | S3 Medium | 59 |
-| S4 Low | 62 |
+| S4 Low | 63 |
 | Info | 16 |
-| **Total** | **176** |
+| **Total** | **177** |
 
 ### By status
 
 | Status | Count |
 |---|---|
 | Fixed+tested | 65 |
-| Fixed | 81 |
+| Fixed | 82 |
 | Mitigated | 8 |
 | Clarified | 17 |
 | Open | 5 |
-| **Total** | **176** |
+| **Total** | **177** |
 
 ### By part (project period)
 
@@ -75,14 +75,15 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Part Q: Making every write idempotent (2026-10-08) | 1 |
 | Part R: Rotating the master key on Kubernetes (2026-10-08) | 1 |
 | Part S: Reviewing a full nightly run (2026-10-08) | 2 |
-| **Total** | **176** |
+| Part T: Refreshing the documents (2026-10-08) | 1 |
+| **Total** | **177** |
 
 ### By how it was found
 
 | Found by | Count |
 |---|---|
 | Live operation, deployment or manual run | 74 |
-| Review (static or manual) | 26 |
+| Review (static or manual) | 27 |
 | Test-regime run or observation | 46 |
 | Automated test regime (2026-10-02) | 7 |
 | Chaos test | 5 |
@@ -90,7 +91,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | CI or first push | 11 |
 | User report | 3 |
 | Audit script | 1 |
-| **Total** | **176** |
+| **Total** | **177** |
 
 ### By class
 
@@ -103,7 +104,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Observability | 10 |
 | Dependency | 8 |
 | Configuration | 7 |
-| Documentation | 7 |
+| Documentation | 8 |
 | Portability | 6 |
 | Integration | 8 |
 | Contract | 4 |
@@ -114,7 +115,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Repository hygiene | 2 |
 | Operator error | 2 |
 | Code quality | 1 |
-| **Total** | **176** |
+| **Total** | **177** |
 
 ### Open items (5)
 
@@ -434,6 +435,14 @@ The owner asked for the full nightly to be run again and for the issues found to
 |---|---|---|---|---|---|---|---|
 | DEF-175 | Configuration | the annotations on every GitHub run | **The workflows ran on a moving runner image and on actions GitHub is retiring.** Every job used `ubuntu-latest`, which becomes Ubuntu 26 on 2026-10-19, so the nightly's Docker, Python and toolchain could change with no change of ours; and `checkout@v4`, `setup-python@v5` and `upload-artifact@v4` target Node 20, which is being retired. | S4 Low | Review (static or manual) | Runner pinned to `ubuntu-24.04` in all three workflows; `checkout@v5`, `setup-python@v6`, `upload-artifact@v6`, and `setup-node@v5` (missed at first, reported by the next run) (each read to use Node 24) in the two workflows that can be run; the docker actions and `checkout` in `publish-images.yml` were left, because that workflow cannot be tried without publishing. Confirmed by the runs after the push. | Fixed |
 | DEF-176 | Dependency | the statistical layer's warning summary | **DoWhy 0.11.1 needs pandas 2.x, warned about it 5,757 times a run, and nothing stopped pandas being bumped.** Its regression estimator indexes a Series by position (deprecated in pandas 2.1, removed in 3), so a routine upgrade would break the causal engine at its first estimate; the flood of identical warnings (96% of the layer's warnings) hid anything new. | S4 Low | Review (static or manual) | The statistical runner hides that one warning and no other (checked: two warnings in, one out); a static guard fails if pandas leaves 2.x while DoWhy 0.11 is pinned (it fails on `pandas==3.0.0`). | Fixed+tested |
+
+## Part T. Refreshing the documents (2026-10-08)
+
+The owner asked for the stale release-readiness list and the other documents to be refreshed. Reading them against the cluster, the CI runs and the code found one defect, and one finding about the system itself.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-177 | Documentation | re-reading every quality document, the guides and the status log against the system | **The quality documents and the guides had fallen days behind the system.** Eight documents still named a baseline commit of 2026-10-03; the release-readiness recommendation said the CI workflows had never run on GitHub and that clusters kept the old refutation gate (it has been deployed since 2026-10-07); the SQA plan called the nightly "never run on GitHub" and quoted severity counts and a serious-defect analysis from 2026-10-05; the test summary's results table was the 2026-10-04 one; `TESTING.md` said no workflow had run on GitHub; the environment baseline listed migrations 001 to 005, 18 stack services and nothing about the CI runner; the lessons stopped at 2026-10-07; the codebase guide named none of five operational scripts, the stable ids, the simulator's shutdown or the new chart value and still called `game/` uncommitted; a defect resolved days earlier was still listed open, and the open-defect table listed one the log had closed. The machine checks only catch a cited test or defect that does not exist, not a sentence that stopped being true. | S4 Low | Review (static or manual) | Every quality document re-read and corrected (headers, baselines, recommendation, criteria, remaining conditions, gates, metrics, results tables, environment baseline), six lessons and four process changes added, `TESTING.md` and the codebase guide updated, the open-defect list reconciled. Not fixed, and not fixable by a guard: a document can still lag; the register of risks records it (RSK-019). Found on the way: the idempotent-writes fix was not deployed to the cluster (RSK-003, DEF-173). | Fixed |
 
 ## How the defects were found, and what that says about the process
 

@@ -5,8 +5,8 @@
 | Document | Test environment and configuration baseline |
 | Project | Restaurant Operations Digital Twin Platform |
 | Version | 1.0 |
-| Date | 2026-10-03 |
-| Baseline | Repository commit `898c7aa` (plus the documents in `docs/quality/`) |
+| Date | 2026-10-08 (refreshed; first written 2026-10-03) |
+| Baseline | Repository commit `6f5c34e` (plus the documents in `docs/quality/`) |
 | Status | Records where every result in this document set was obtained |
 
 ## 1. Why this exists
@@ -25,9 +25,19 @@ A test result is only meaningful with the environment that produced it. Every "v
 | Container engine | **Podman 4.9.3, rootless**, with the `podman-docker` shim presenting a `docker` command |
 | Compose provider used by the test runs | `docker-compose` 1.29.2 (Compose v1) via the Podman shim |
 | Other Compose provider on the machine | The owner's own plugin, `docker-compose` v5.5.1 (`~/.docker/cli-plugins/`); **not used by the stack-layer runs** (DEF-123) |
-| Kubernetes | k3s (the owner's development cluster; reached only by manual runs and the audit script, never by automated tests) |
+| Kubernetes | k3s v1.36.4+k3s1 (the owner's development cluster; reached only by manual runs, the audit and rehearsal scripts in `k8s/audit/`, never by the automated layers) |
 | Helm | v4.2.4 |
 | Godot | 4.5 (headless, for the game client's smoke test) |
+
+### GitHub's runners (the second environment)
+
+| Item | Value |
+|---|---|
+| Runner image | `ubuntu-24.04`, pinned in all three workflows since 2026-10-08 (the job log showed image version 20261002.596); it was `ubuntu-latest`, which GitHub moves to Ubuntu 26 on 2026-10-19 |
+| Container engine | GitHub's Docker Engine with Compose v2, rootful (the laptop's is rootless Podman: the difference has caused real failures, DEF-170) |
+| Actions | `checkout@v5`, `setup-python@v6`, `upload-artifact@v6`, `setup-node@v5` (all Node 24); the docker actions in the publish workflow, which is never run without asking, are older |
+| What runs there | `tests.yml` on every push; `production-readiness.yml` nightly (a schedule) and on demand: the stack layers, statistical and security |
+| Images the tests pull | `prom/prometheus:v2.55.1` (for `promtool test rules`), `alpine/openssl:3.5.9` (the broker's certificate), `eclipse-mosquitto:2` (2.1.2 at the time) |
 
 ### Known behaviours of this environment (each cost time; see the defect log)
 
@@ -43,7 +53,7 @@ Installed in a virtual environment at `~/.cache/rp-test-venv` (the exact install
 
 | Tool | Version |
 |---|---|
-| Python (host, layers 1-3, 5-8) | 3.12.3 |
+| Python (host, layers 1-3, 5-8) | 3.12.3, in a virtual environment at `~/.cache/rp-test-venv` (not the system Python, which lacks `paho-mqtt`) |
 | Python (causal-engine image, layer 4) | 3.11 (`python:3.11-slim`) |
 | pytest | 9.1.1 |
 | ruff | 0.16.10 |
@@ -51,7 +61,7 @@ Installed in a virtual environment at `~/.cache/rp-test-venv` (the exact install
 | jsonschema | 4.23.0 |
 | PyYAML | 6.0.3 |
 | psycopg2-binary | 2.9.9 |
-| kafka-python | 3.0.11 |
+| kafka-python / paho-mqtt | 3.0.11 / 2.1.0 |
 | pandas / numpy / scikit-learn | 2.2.2 / 1.26.4 / 1.5.1 |
 | prometheus-client | 0.26.0 |
 | requests | 2.33.0 |
@@ -71,7 +81,7 @@ Installed in a virtual environment at `~/.cache/rp-test-venv` (the exact install
 | MinIO | `cgr.dev/chainguard/minio`, pinned by digest (k3s only) |
 | Python dependencies | Exact pins in each service's `requirements.txt` (one range, `numpy>=1.26` in the simulators, which the edge node's model now also relies on); the offline trainer's own pins (`scikit-learn==1.5.1`, `numpy==1.26.4`) are in `edge-simulators/training/requirements.txt` and, since 2026-10-04, are audited like every other requirements file |
 | Schemas | `schemas/*.schema.json`, JSON Schema 2020-12 |
-| Migrations | `storage/schema/001`-`005`, idempotent |
+| Migrations | `storage/schema/001`-`006`, idempotent |
 
 ## 5. Test environments, by layer
 
@@ -81,7 +91,7 @@ Installed in a virtual environment at `~/.cache/rp-test-venv` (the exact install
 | 2 Unit | Host Python | Kafka, Postgres, MQTT stubbed or faked |
 | 3 Integration | Host Python plus a throwaway TimescaleDB container on port 15432 | Own container, removed afterwards |
 | 4 Statistical | The causal-engine image, built from `services/causal-engine/Dockerfile` | `docker run --rm`, source mounted read-only |
-| 5-7 Stack | Compose project `rp-test`, dashboard on port 18080, 18 services (the three LLM services are omitted); `tests/e2e/docker-compose.test.yml` changes only pacing | Own project name, network, volumes and port; torn down (volumes included) afterwards |
+| 5-7 Stack | Compose project `rp-test`, dashboard on port 18080, 17 services plus the one-shot `mqtt-tls-init` that makes the broker's certificate (the three LLM services are omitted); `tests/e2e/docker-compose.test.yml` changes only pacing | Own project name, network, volumes and port; torn down (volumes included) afterwards |
 | 8 Security | Host Python plus the internet | None |
 
 ### Pacing overlay for the stack layers

@@ -5,8 +5,8 @@
 | Document | Software requirements specification (SRS) |
 | Project | Restaurant Operations Digital Twin Platform ("restaurant-platform") |
 | Version | 1.0 |
-| Date | 2026-10-03 |
-| Status | Retrospective baseline, current as of commit `898c7aa` |
+| Date | 2026-10-08 (refreshed; first written 2026-10-03) |
+| Status | Retrospective baseline, current as of commit `6f5c34e` |
 | Prepared by | The project's AI assistant (Claude), for the project owner |
 | Repository | `github.com/giba12/Restaurant-Project` |
 
@@ -196,7 +196,7 @@ Added 2026-10-03 at the owner's request: the plate-waste node estimates waste on
 | FR-EDG-06 | The platform shall expose the edge nodes as a fleet through its API: for each node and model, the readings, how many the node distrusted, the drift rate, inference latency, and whether it is drifting now. | C | Owner request, 2026-10-03 | T |
 | FR-EDG-07 | The model shall be reproducible: a seeded trainer, a model card of measured figures stored with the artifact and checked against fresh data, and a test that retraining reproduces the model's quality. | S | Owner request, 2026-10-03 | T |
 | FR-EDG-08 | The plate-waste node shall take a new model from the cloud only after checking it, and shall be able to return to an older one: the command shall be authenticated; the artifact shall be checked for integrity, identity, size and speed budgets, and agreement with the cloud's own answers on probe readings; the candidate shall be compared on live readings with the model in service before it replaces it; an older stored version shall be installable without that comparison; and a rejected model shall leave the node's estimates unchanged. | S | Owner request, 2026-10-06 | T |
-| FR-EDG-09 | The platform shall provide a cloud-to-edge control path: commands over MQTT held as a retained desired state, one per node, each signed with THAT node's own key (derived from an operator master secret, so a key taken from one node commands no other) and naming the node it is for, with the node's reply published as a status and a way to rotate a node's key without a gap; a node with no key shall take no commands; and a drift alarm shall be reported as advice to a person and shall not by itself start a rollout. | S | Owner request, 2026-10-06 | T |
+| FR-EDG-09 | The platform shall provide a cloud-to-edge control path: commands over MQTT held as a retained desired state, one per node, each signed with THAT node's own key (derived from an operator master secret, so a key taken from one node commands no other) and naming the node it is for, with the node's reply published as a status and a way to rotate a node's key, and the operator's master secret, without a gap (a window in which the node holds both keys, and the old one shown to be refused before it is deleted); a node with no key shall take no commands; and a drift alarm shall be reported as advice to a person and shall not by itself start a rollout. | S | Owner request, 2026-10-06 | T |
 
 ## 5. Non-functional requirements
 
@@ -211,7 +211,7 @@ Added 2026-10-03 at the owner's request: the plate-waste node estimates waste on
 | NFR-SEC-05 | No pinned Python dependency shall have a known published vulnerability. | S | Derived | T |
 | NFR-SEC-06 | Placeholder credentials shall be rotated at deploy time, and a live audit shall detect any left in place. | S | Status log, items 1, 11, 20 | D |
 | NFR-SEC-07 | On the Compose path only the dashboard shall be published to the host. | S | Derived | T |
-| NFR-SEC-08 | The MQTT broker shall refuse clients that do not log in and shall limit each user to the topics it needs (each sensor publishes only its own topic, only the bridge reads sensor topics, only the operator publishes control topics); a client whose publish the broker refuses shall report an error and not record the event as published. | S | Owner request, 2026-10-06 | T |
+| NFR-SEC-08 | The MQTT broker shall refuse clients that do not log in and shall limit each user to the topics it needs (each sensor publishes only its own topic, only the bridge reads sensor topics, only the operator publishes control topics); a client whose publish the broker refuses shall report an error and not record the event as published; and every login shall travel over TLS (the broker has no plaintext listener). | S | Owner request, 2026-10-06 | T |
 
 ### 5.2 Reliability (REL)
 
@@ -313,3 +313,5 @@ Computer-vision plate-waste detection (a solved, commercial problem; MinIO exist
 | 2026-10-03 | Edge intelligence added: the plate-waste node infers on the node, with integrity, budget, drift and fleet-view requirements (FR-EDG-01 to 07) |
 | 2026-10-04 | Staffing made a real driver of the simulated kitchen (FR-ING-07); the done-condition finding required to pass refutation (FR-CAU-07); robust control limits (FR-ANA-05); self-healing connectors on Compose (NFR-REL-05) |
 | 2026-10-05 | No sensor event may be lost to a bridge, Kafka or Mosquitto restart (NFR-REL-06); the Kafka Connect connectors and their supervisor were replaced by the MQTT-Kafka bridge, so NFR-REL-05 now describes the bridge's self-healing instead of the supervisor's (DEF-152) |
+| 2026-10-06/07 | A node's model can be updated from the cloud (FR-EDG-08) over a control path with per-node keys (FR-EDG-09); the MQTT broker authenticates and limits every client (NFR-SEC-08) |
+| 2026-10-08 | NFR-REL-04 widened from the sensor events to every write the platform makes (DEF-173); the broker carries every login over TLS on Compose as well as the cluster (NFR-SEC-08, DEF-167, DEF-169); the control path covers rotating the master secret (FR-EDG-09) |

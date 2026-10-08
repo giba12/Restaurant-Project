@@ -5,8 +5,8 @@
 | Document | Requirements traceability matrix (RTM) |
 | Project | Restaurant Operations Digital Twin Platform |
 | Version | 1.0 |
-| Date | 2026-10-03 |
-| Status | Current as of commit `898c7aa`; checked by `tests/static/test_quality_docs.py` |
+| Date | 2026-10-08 (refreshed; first written 2026-10-03) |
+| Status | Current as of commit `6f5c34e`; checked by `tests/static/test_quality_docs.py` |
 
 ## Purpose
 

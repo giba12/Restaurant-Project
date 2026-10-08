@@ -5,7 +5,7 @@
 | Document | Master test plan |
 | Project | Restaurant Operations Digital Twin Platform |
 | Version | 1.0 |
-| Date | 2026-10-03 |
+| Date | 2026-10-08 (refreshed; first written 2026-10-03) |
 | Status | Retrospective plan, describing the strategy as actually executed |
 | Prepared by | The project's AI assistant (Claude), for the project owner |
 
@@ -145,6 +145,8 @@ Detailed in `09-test-environment-and-configuration-baseline.md`. In summary: a W
 | 2026-10-02 | The eight-layer regime designed and built; first runs; defects DEF-100 to DEF-107 found |
 | 2026-10-03 | Resilience rerun after fixes; one complete clean run of every stack layer; documents prepared; the refutation gate repaired and re-verified (DEF-106, DEF-129) |
 | 2026-10-05 | A ledger check added to the resilience layer (what the sensors published against what was stored); it found the ingest path losing events (DEF-148, DEF-151); the Kafka Connect path was replaced by the MQTT-Kafka bridge and the layer now passes 10 of 10 with no loss allowed (DEF-152) |
+| 2026-10-06 to 2026-10-07 | The edge node's update and control path, per-node keys and broker authentication built and tested against the real broker; the cutover and a no-loss ledger run on the cluster; the nightly started to fail and pass on GitHub as real faults were found and fixed (DEF-155 to DEF-165) |
+| 2026-10-08 | Broker TLS, volume-loss and key-rotation tests; every write made idempotent (DEF-173); the rotation rehearsed on k3s in a throwaway namespace, which found a defect no earlier test had (DEF-174); the nightly reviewed for what its tests do not fail on (DEF-175, DEF-176); the full nightly passing six times in a row |
 
 ## 12. Deliverables
 
@@ -152,7 +154,7 @@ Detailed in `09-test-environment-and-configuration-baseline.md`. In summary: a W
 
 ## 13. Risks to testing
 
-Maintained in `05-risk-register.md`. The principal ones: **no independence between author and tester; results from one machine only; the heavy layers have not run on GitHub; the stack layers take about an hour; a dependency changing under pinned versions.**
+Maintained in `05-risk-register.md`. The principal ones: **no independence between author and tester; results from one laptop and GitHub's runners only (never a reader's own machine); the stack layers take about 25 minutes on GitHub and over an hour on the laptop; a dependency changing under pinned versions (a guard now covers the one known case, DoWhy and pandas).**
 
 ## 14. Defect handling
 

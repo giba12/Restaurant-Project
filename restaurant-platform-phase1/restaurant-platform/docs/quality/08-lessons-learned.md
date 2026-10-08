@@ -5,7 +5,7 @@
 | Document | Lessons learned |
 | Project | Restaurant Operations Digital Twin Platform |
 | Version | 1.0 |
-| Date | 2026-10-03 |
+| Date | 2026-10-08 (refreshed; first written 2026-10-03) |
 | Status | Drawn from the 147 entries of `06-defect-log.md`; each lesson cites the entries that taught it |
 
 ## 1. The short version
@@ -108,6 +108,30 @@ I designed the bridge's handling of a broker's access rules around an assumption
 
 Two bugs of mine were invisible to every fast test and found only by running the stack: the operator tool's `Link` used one attribute name for two things, so every publish crashed (its unit tests used a fake link), and the footprint probe called a function that had gained a parameter (it only runs inside the node's image under CPU and memory limits). Each took a heavy run of tens of minutes to surface, on a machine whose load made the run slower and noisier. **A tool or script that is normally run only in a container or against a broker deserves one quick test that runs the real code, against the real component where it is cheap (a broker in a container takes two seconds) and in-process where it is not; the fake is for the cases a real run cannot reach, not a substitute for ever running the real one.**
 
+### 3.9n A pass the first time is not evidence: break the thing and watch the test fail
+
+Many of my tests passed on their first run: the arrival-alarm rule's, the key-rotation script's, the idempotent-write tests, the cutover trial's checks. In each case what mattered was not that they passed but that they could fail. Removing each guard clause in turn turned exactly its own test red, and that exercise found tests that proved nothing: two of the trial's checks ("a forged publish reaches nobody", "the new broker is empty") would have passed on a client pod that printed nothing at all, I wrote an `or True` into one assertion, and one mutation I wrote badly demonstrated nothing until I redid it. **A test is finished when it has been seen to fail on the broken thing, and a check that passes on silence needs a positive signal (the publish was acknowledged, the reader connected and timed out) before its silence means anything.**
+
+### 3.9o Your machine hides what CI sees, and CI only helps if it is watched
+
+Five pushes on 2026-10-07/08 were red on GitHub and green here: rootless Podman maps root in a container to me, so a key written as root was readable locally and not on GitHub's rootful Docker; my test environment had a Python package the CI's did not; `core.fileMode` is off on this machine, so new scripts were committed non-executable; and a rule that reads only git-tracked files passed while my new file was untracked. For three pushes I was not watching the run that mattered. **Stage before running the static layer, record the executable bit explicitly, reproduce a CI-only failure by recreating CI's condition (a clean virtual environment, a file made untracked) rather than theorising, and read `gh run list` after every push.**
+
+### 3.9p Rehearse a production change on a throwaway copy of production
+
+Rotating the master key changes production Secrets and restarts the production node twice. It was built as a script and rehearsed on real Kubernetes in a throwaway namespace (its own broker, the real chart and image, credentials made on the spot). The rehearsal failed three times and found a defect that no unit test or Compose run had (DEF-174): a replaced simulator pod ignored SIGTERM and fought its replacement for the broker session for 30 seconds, so one command was answered `unchanged`, `rejected` and `ignored` in a second. What made it findable was a recorder of every status the node published, read beside the broker's own log. The first attempt also tried to install a chart into the real namespace (it names its namespace in every template); the only thing that stopped it was Helm refusing, which is why the harness now renders the chart first and refuses by itself. **Rehearse where a mistake costs nothing, record what the system says during the rehearsal, and build the refusal that keeps the rehearsal away from the real thing.**
+
+### 3.9q Idempotence is a property of every write, not of the one you were thinking of
+
+The sensor events were safe to repeat because each carries its own id, and that was all anyone had checked. Listing every `INSERT` and asking what happens the second time found the derived rows (anomalies, findings) written with fresh random ids, a causal engine that would re-run a non-repeatable estimate, a narrator that would pay for the model again, and a summary upsert that let an older message overwrite a newer one (DEF-173). **Audit every write, make the answer a test that runs each writer twice against the real database and compares the tables, and add a static guard so the next writer has to state its conflict behaviour.**
+
+### 3.9r Read what the tests do not fail on
+
+A nightly that passed every layer still had a runner image about to change under it, actions about to be retired, one warning making up 96% of a layer's output (a symptom of a library that would break on a routine upgrade), a document that still described a closed port, and a defect listed open after it was resolved (DEF-175, DEF-176). None failed a test. **After a green run, read its log, its annotations, the repository and the running system for what no assertion covers, and turn the findings into pins and guards.**
+
+### 3.9s Pushed is not deployed
+
+The idempotent-writes fix passed every test and three nightly runs while the cluster still ran images built days earlier, and it was found only when a document claimed otherwise and I looked inside the pods. **When a fix is meant for a running system, checking that it arrived (the new code is in the pod) is part of the fix, and "deployed" is its own line in the status, separate from "committed" and "passing".**
+
 ### 3.9c The thing you analyse has to exist in the data, and a test that accepts either answer proves nothing
 
 The causal engine had a `staffing_level` to pickup-delay analysis from the start, and the Phase 5 done-condition was recorded as met. But the simulators never encoded that staffing affects anything: the injected "shortage" slowed the kitchen through a direct multiplier that left the staffing signal untouched. The original refutation gate passed noise, so it "found" an effect that was not there; the repaired gate refused it (p = 0.95), and the acceptance test, which had been relaxed to accept either verdict, kept passing over a refuted finding (DEF-141). Three habits would have caught it earlier: **put every relationship an analysis is meant to find into the data on purpose, and test that it is there** (the to-go effect on waste always had this; staffing did not); **make an acceptance test assert the outcome it names, not "a finding exists"**; and **treat a quality gate you have just fixed as a new instrument that may reveal old results were never real.** The fix was in the world, not in the engine or the gate: staffing now drives the kitchen's capacity, the shortage acts on staffing, and the finding passes with the right sign, in two independent runs. It remains a designed effect: passing shows the pipeline recovers what is there.
@@ -194,3 +218,7 @@ Everything here was verified by the people who built it. The mutation checks and
 | Pin Ollama and scan images | The one unpinned image and the unscanned layers remain |
 | Get an independent review early | Self-verification has a ceiling |
 | Keep the heavy tests in a nightly job from the start | A one-hour run is easy to avoid |
+| Watch the CI run after every push, and run the static layer after staging | Five red pushes in two days were mine (3.9o) |
+| Fail every new test once on purpose before trusting it | Passes on the first run hid vacuous checks (3.9n) |
+| Rehearse a production change in a throwaway namespace, with a recorder | The rotation rehearsal found DEF-174, which no earlier test could (3.9p) |
+| Keep "deployed" as its own line, and check the new code is in the pod | The idempotent-writes fix was committed and green but not on the cluster (3.9s) |

@@ -5,7 +5,7 @@
 | Document | Software quality assurance (SQA) plan |
 | Project | Restaurant Operations Digital Twin Platform |
 | Version | 1.0 |
-| Date | 2026-10-03 |
+| Date | 2026-10-08 (refreshed; first written 2026-10-03) |
 | Status | Retrospective: records the quality practices actually in force, then assesses them honestly |
 | Prepared by | The project's AI assistant (Claude), for the project owner |
 
@@ -76,26 +76,26 @@ To assure that the system's code, configuration, data contracts and documents me
 
 | Gate | When | Automated | Status |
 |---|---|---|---|
-| Static checks, unit tests, database integration, schema compatibility, game smoke test | Every push and pull request (`tests.yml`) | Yes | Workflow repaired 2026-09-30 and run on GitHub then; the `static` and `integration` jobs added 2026-10-02 have **not yet run on GitHub** |
-| End-to-end, acceptance, resilience, load, statistical, dependency audit | Nightly and on demand (`production-readiness.yml`) | Yes | Written; **never run on GitHub**; every command in it was run locally |
-| Live-cluster drift, limits and placeholder-credential audit | Manually, after any deploy | No (needs the cluster) | Clean on 2026-10-01 |
+| Static checks, unit tests, database integration, schema compatibility, game smoke test, dashboard tests | Every push (`tests.yml`) | Yes | Runs on every push and passes (the runner is pinned to `ubuntu-24.04` and the actions are on Node 24, 2026-10-08); five pushes on 2026-10-07/08 were red for faults of my own tests and were fixed (DEF-170) |
+| End-to-end, acceptance, resilience, load, statistical, dependency audit | Nightly and on demand (`production-readiness.yml`) | Yes | Runs nightly and on demand on GitHub; of its latest 20 runs 14 passed and 6 failed (2026-10-05 to 10-08), each failure a real fault that was fixed, and the latest six full runs passed |
+| Live-cluster drift, limits and placeholder-credential audit | Manually, after any deploy | No (needs the cluster) | Clean on 2026-10-01; the cluster was also read (not changed) on 2026-10-08: nothing firing, backups complete, no warning events |
 | Owner review before commit | Every commit | No | In force |
 | Branch protection, required reviews, pre-commit hooks | - | - | **Not in place** (single `main` branch) |
 
-### 4.3 Metrics (from `06-defect-log.md`, as of 2026-10-05)
+### 4.3 Metrics (from `06-defect-log.md`, as of 2026-10-08)
 
 | Metric | Value |
 |---|---|
-| Entries in the defect log | 176 (160 defects, 16 informational) |
-| By severity | S1 Critical 8; S2 High 31; S3 Medium 53; S4 Low 57; Info 16 |
-| By status | Fixed and guarded by a test 56; fixed 79; mitigated 8; clarified 17; open 5 |
+| Entries in the defect log | 177 (161 defects, 16 informational) |
+| By severity | S1 Critical 8; S2 High 31; S3 Medium 59; S4 Low 63; Info 16 |
+| By status | Fixed and guarded by a test 65; fixed 82; mitigated 8; clarified 17; open 5 |
 | Distinct tests | 713, plus the GDScript smoke test (about 80 checks) |
 | Requirements | 100: 75 verified by automated test, 6 by inspection, 9 live or manual only, 9 partial, 1 not verified, 0 not met |
-| Latest complete test cycle | 2026-10-04: every layer re-run passed on the final code, after repeated failed attempts at the heavy layers (flaky in this environment); the injected scenario's finding is refuted (DEF-141) |
+| Latest complete test cycle | 2026-10-08, on GitHub, commit `6f5c34e`: `tests` green on every job and the full nightly passed every layer (the latest six full runs in a row); on the laptop the end-to-end layer still gives 66 of 68 from start-up timeouts and clock steps (DEF-168 is fixed; the start-up flake is not) |
 | Line or branch code coverage | **Not measured** |
 | Mean time to detect a silent failure | Not tracked; observed range: minutes (found by test) to 12 days (the silent MQTT bridge failure, DEF-035) |
 
-**What the defect metrics say.** Of the 35 serious defects (S1 and S2), **none was found by a unit test**: 22 by live operation or deployment, 5 by static review before deployment, 3 by attempting the done condition, 3 by chaos testing, 1 by CI and 1 by the statistical test. Several lived undetected for days. The automated regime of 2026-10-02/03 then found two silent-data-loss defects that all earlier verification had missed. The lesson is recorded in `08-lessons-learned.md`.
+**What the defect metrics say.** Of the 39 serious defects (S1 and S2), **none was found by a unit test**: 22 by live operation or deployment, 5 by static review before deployment, 3 by attempting the done condition, 3 by chaos testing, 3 by running the test regime itself, 2 by CI or the first push and 1 by the statistical test. Several lived undetected for days. The automated regime of 2026-10-02/03 then found two silent-data-loss defects that all earlier verification had missed. The lesson is recorded in `08-lessons-learned.md`.
 
 ## 5. Reviews and audits
 
@@ -142,8 +142,8 @@ Test techniques are listed in `02-test-plan.md` section 3.2. Tooling is listed i
 
 | Item | Practice |
 |---|---|
-| Version control | Git, single `main` branch, 60+ commits from 2026-08-24; commit messages explain *why*; commits are made only on the owner's instruction and pushed by the owner |
-| Baselines | None formally; the commit hash is the baseline (this document set: `898c7aa`) |
+| Version control | Git, single `main` branch, 98 commits from 2026-08-24; commit messages explain *why*; commits and pushes are made only on the owner's instruction (the owner pushes, or tells the assistant to); `core.fileMode` is off on the development machine, so a new script must be recorded executable explicitly (`git add --chmod=+x`; a test checks it) |
+| Baselines | None formally; the commit hash is the baseline (this document set: `6f5c34e`) |
 | Releases and tags | None; the project has never been versioned or released |
 | Reproducibility | Every Python dependency pinned; images pinned by tag or digest (Ollama is the one documented exception); Python 3.11 everywhere |
 | Controlled data items | `schemas/` (single source of truth), `storage/schema/*.sql` (migrations, idempotent) |
@@ -153,7 +153,7 @@ Test techniques are listed in `02-test-plan.md` section 3.2. Tooling is listed i
 
 ## 10. Supplier and third-party control
 
-Third parties are the largest source of surprise in this project: **eight** of the defect log's entries are classed Dependency or Supply chain (a dependency, image or chart changing, disappearing or being incompatible: for example DEF-017, DEF-022, DEF-023, DEF-026, DEF-027), and more involve third-party behaviour. Controls:
+Third parties are the largest source of surprise in this project: **eleven** of the defect log's entries are classed Dependency (8) or Supply chain (3) (a dependency, image or chart changing, disappearing or being incompatible: for example DEF-017, DEF-022, DEF-023, DEF-026, DEF-027), and more involve third-party behaviour. Controls:
 
 1. Pin every dependency exactly; pin images by tag or digest.
 2. Prefer hand-rolled manifests around an official image to wrapping a third-party chart (CON-07).

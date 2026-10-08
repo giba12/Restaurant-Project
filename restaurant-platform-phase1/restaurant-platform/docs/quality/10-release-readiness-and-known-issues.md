@@ -5,15 +5,22 @@
 | Document | Release readiness assessment and known-issues register |
 | Project | Restaurant Operations Digital Twin Platform |
 | Version | 1.0 |
-| Date | 2026-10-03 |
-| Baseline | Commit `898c7aa` |
+| Date | 2026-10-08 (refreshed; first written 2026-10-03) |
+| Baseline | Commit `6f5c34e` |
 | Status | Assessment for a decision by the project owner |
 
 ## 1. Recommendation
 
-**Ready to show, with its caveats disclosed. Not ready to call "released" or to describe as production-grade.** A caveat from the previous days is resolved: the injected staffing shortage's finding was refuted under the repaired gate (DEF-141) and now passes it, because the simulation contains the staffing effect the analysis looks for; that effect is a design of the simulation.
+**Ready to show, with its caveats disclosed. Not ready to call "released" or to describe as production-grade.**
 
-The system does what it claims on the machine it was built on, the evidence is unusually thorough for a project of this size, and its known weaknesses are written down rather than hidden. It has **not** been run on any machine other than the author's, its new CI workflows have not run on GitHub, and live Kubernetes clusters keep the old, weaker refutation gate until their images are rebuilt and imported (the gate itself was repaired in the repository on 2026-10-03).
+The evidence is much stronger than when this was first written (2026-10-03). Both GitHub workflows now run and pass: `tests` on every push, and the full nightly (end-to-end, acceptance, resilience, load, statistical, security) on GitHub's clean Docker Engine, whose latest six full runs all passed. The repaired refutation gate is live on the cluster (deployed by the realign of 2026-10-07). The MQTT broker requires a login and speaks TLS only, on the cluster and on Compose; every edge node has its own control key and the master was rotated on the live cluster (2026-10-08); sensor events are not lost to a restart or outage of the bridge, Kafka or Mosquitto, nor to the loss of Mosquitto's disk (the resilience layer's ledger); and every write to the database is idempotent in the repository (DEF-173).
+
+What is still true, and what a reader should weigh:
+- **The live cluster does not yet run the idempotent-writes fix.** The service images (anomaly detector, causal engine, narrator, aggregator, storage consumer) were last built in the realign of 2026-10-06/07; only the simulator and bridge images were rebuilt and imported since. Deploying means rebuilding and importing them (needs `sudo`) and rolling the services (`k8s/realign/realign-live-cluster.sh` does it). Until then the cluster can still store a second anomaly or finding for a redelivered input.
+- **It has been run only on the author's laptop and on GitHub's runners,** never on a recruiter's own machine, under the reader's own Compose plugin, or in a Codespace.
+- **There has been no independent review:** the author of the code also wrote the tests and judged the results.
+- **It has only ever seen simulated data.** Whether its findings mean anything on a real restaurant, and whether the edge model's calibration holds on real sensors, is untested by construction (RSK-031).
+- **Not tried:** a node loss on the cluster (the one node is the production machine); a browser-level test of the dashboard; a repeated restore of the database backup (RSK-016).
 
 For a recruiter or reviewer the project is credible *because* of that honesty. The conditions in section 4 would turn "ready to show" into "ready to rely on".
 
@@ -22,16 +29,17 @@ For a recruiter or reviewer the project is credible *because* of that honesty. T
 | Criterion | Status | Evidence |
 |---|---|---|
 | All "must" requirements met | **Met** | 100 requirements: 75 verified by test, 6 by inspection, 9 live or manual only, 9 partial, 1 not verified, 0 not met (`03-requirements-traceability-matrix.md`) |
-| No open critical (S1) defects | **Met** | All six S1 defects are fixed; five are guarded by tests (`06-defect-log.md`) |
-| No open high (S2) defects | **Met** | DEF-141 (the injected shortage's finding refuted under the repaired gate) was fixed on 2026-10-04 and verified live in two acceptance runs; DEF-106 (the gate itself) was repaired on 2026-10-03. No defect above informational is open |
-| Full test cycle passes | **Met on the final code, after several failed attempts** | 2026-10-04: static, unit, integration (no expected-failures), end-to-end, acceptance (4, finding passes refutation) and resilience (7) passed; load (35 events/s), statistical (14) and security (11) were re-run and passed (`07-test-summary-report.md`) |
-| Test cycle repeated | **Done, and it showed instability that was then explained** | The heavy layers were repeated in the second and third cycles; the Kafka-restart test failed in five of six runs (DEF-142) until its cause, Kafka Connect's default five-minute rebalance delay, was found in the logs and set to zero; the full resilience layer then passed 8 of 8, and eight further Kafka restarts resumed in 64 to 101 s. The live k3s cluster has the old setting until upgraded |
-| CI green on GitHub | **Met for `tests`; mostly for the nightly workflow** | 2026-10-04: all 13 jobs of `tests` passed on the first run of the new ones (static 192, integration 116, edge-ai 63, connector-supervisor 20, nine unit jobs, the Godot smoke test). The first run of the nightly workflow passed statistical (14), security (11), acceptance (4), load (4) and resilience (8) and failed two e2e tests, both genuine and fixed (DEF-146, DEF-147); the fixes were re-run on GitHub the same evening (the nightly workflow with only the end-to-end layer: e2e 65 passed, 4 skipped; the statistical and security jobs passed again); a later full nightly run (2026-10-05, run `37355406811`) passed every layer, resilience 9 of 9 included, after the first nightly of that day failed two new ledger checks (DEF-151). The image-publish workflow has not been run |
-| Runs on a clean machine | **Verified on a GitHub runner; not on a recruiter's own machine** | A clean, cold-cache Ubuntu runner built and started the whole Compose stack in 3 min 22 s and ran every layer |
-| Runs on Docker Engine | **Verified** | GitHub's Docker Engine with Compose v2: acceptance, load and resilience passed; the two e2e failures were a Compose-v2 harness bug and a twin robustness gap (DEF-146, DEF-147), not product incompatibilities |
-| Security basics | **Met for the demo scope** | No committed secrets, authentication on both APIs, least-privilege narrator, no known vulnerable dependency, TLS on the Kubernetes path. Plain HTTP on the Compose path is a documented local-only trade-off; the MQTT broker requires a login with a per-user ACL and (on Compose, since 2026-10-07) speaks TLS only, in the repository and, since 2026-10-07, on the live cluster (RSK-036) |
-| Backup restored | **Met once** | 2026-09-24 |
-| Documentation current | **Mostly** | The catalogue and registers are machine-checked; the codebase guide and status log are hand-edited and have been wrong before |
+| No open critical (S1) defects | **Met** | All eight S1 defects are fixed; seven are guarded by a test (`06-defect-log.md`) |
+| No open high (S2) defects | **Met** | All 31 S2 defects are fixed, 14 of them guarded by a test. Only five entries are open, all informational (DEF-015, DEF-091, DEF-093, DEF-123, DEF-131) |
+| Full test cycle passes | **Met** | GitHub, 2026-10-08, commit `6f5c34e`: `tests` green on every job (static 347 passed and 2 skipped, database integration 180 including the real-broker tests, unit tests 417 across ten suites, dashboard 15), and the full nightly passed every layer (security 12, statistical 14, end-to-end 69 with 4 skipped by design, acceptance 4, load 8, resilience 13) (`07-test-summary-report.md`) |
+| Test cycle repeated | **Done; every failure was real** | The nightly has run on GitHub on every day since 2026-10-04. Of its latest 20 runs 14 passed and 6 failed (2026-10-05 to 10-08); each failure was a real defect or a fault in one of my tests and was fixed (the ingest path losing events, a footprint probe, end-to-end faults, the rebuild test; DEF-148, DEF-151, DEF-159, DEF-160, DEF-172), and the latest six full runs passed in a row. Layer times are stable (end-to-end 3 min 21 s to 3 min 40 s, resilience 14 to 17 min) |
+| CI green on GitHub | **Met** | `tests` is green on the latest pushes with no deprecation annotation (runner pinned to `ubuntu-24.04`, actions on Node 24; DEF-175). Five pushes on 2026-10-07/08 were red (not consecutive), for assumptions my machine hides (rootless Podman, a Python that has `paho`), the executable bit (`core.fileMode` is off here) and a version-boundary rule that only sees tracked files; each was fixed in the next push (DEF-170 and the status-log entries 39 to 42) |
+| Runs on a clean machine | **Verified on a GitHub runner; not on a recruiter's own machine** | A clean, cold-cache Ubuntu runner built and started the whole Compose stack in 3 min 22 s (2026-10-04) and runs every layer every night |
+| Runs on Docker Engine | **Verified** | GitHub's Docker Engine with Compose v2 runs every stack layer nightly; the failures it surfaced were test-harness and robustness faults, not product incompatibilities (DEF-146, DEF-147, DEF-170) |
+| Security basics | **Met for the demo scope** | No committed secrets, authentication on both APIs, least-privilege narrator, no known vulnerable dependency (the security layer, nightly), TLS on the Kubernetes path. The MQTT broker requires a login with a per-user rule set and speaks TLS only on both paths (the cluster's plaintext listener was closed 2026-10-07); each edge node has its own control key, and the master was rotated on the live cluster on 2026-10-08 (RSK-036). Plain HTTP on the Compose path is a documented local-only trade-off |
+| Backup restored | **Met once** | 2026-09-24. Scheduled full and differential backups run and the recent ones complete (one differential failed on 2026-09-27 on a pgBackRest lock); the restore drill has not been repeated (RSK-016) |
+| Live cluster runs the repository's code | **Not entirely** | The repaired refutation gate (2026-10-03) is live; the simulator and bridge images were re-imported on 2026-10-07/08; the service images predate the idempotent-writes fix (section 1) |
+| Documentation current | **Yes, as of 2026-10-08** | The catalogue and registers are machine-checked. On 2026-10-08 every quality document was re-read against the cluster, the CI runs and the code and refreshed (`11-nightly-review-2026-10-08.md` records what the review of the nightly found). The codebase guide and status log are hand-edited and have been wrong before |
 | Independent review | **Not done** | See `04-sqa-plan.md` section 11 |
 
 ## 3. Phase exit criteria (from the original brief)
@@ -47,31 +55,37 @@ For a recruiter or reviewer the project is credible *because* of that honesty. T
 
 ## 4. Conditions to turn "ready to show" into "ready to rely on"
 
-In order of value:
+**Done since this was first written (2026-10-03):**
+- The ledger test on the cluster (2026-10-06, `k8s/audit/k3s_scenarios.py`): six disturbances, 569 events published, 0 missing; an unplanned full restart lost 0 of 979. On Compose (2026-10-07/08): the loss of Mosquitto's volume (2,240 published, 0 missing, once) and of the database's volume (rebuilt from Kafka to Kafka's offsets).
+- The repaired refutation gate deployed to the cluster (the realign of 2026-10-07).
+- The first GitHub runs watched and what they surfaced fixed; the full nightly repeated (section 2).
+- Broker authentication and TLS, per-node control keys, the master-key rotation on the live cluster, the arrival alarm seen firing on the cluster, and every database write made idempotent in the repository.
 
-0. **Done 2026-10-06: the ledger test on the cluster.** Run by hand with `k8s/audit/k3s_scenarios.py`: six disturbances, 569 events published, **0 missing**. Bridge rolled (52 published), bridge force-deleted with no grace period (43), bridge scaled to zero for 90 s (139), Mosquitto rolled (42), Mosquitto force-deleted (40), Kafka broker pod deleted (253; the pipeline took 5 min 38 s to resume while Kafka's group coordinator reloaded). An unplanned full-stack restart (the machine was off about 11 hours) lost 0 of 979. The first look after the Kafka restart in an earlier trial showed 125 to 151 events 'missing' that were only in transit; with the settle time and re-look the script now uses, they had arrived. Tried on Compose on 2026-10-07 (not on the cluster): the loss of Mosquitto's volume (2,240 events published from just before it, 0 missing, once) and of the database's volume (rebuilt from Kafka to Kafka's offsets). On k3s the loss of the broker's volume was tried on a throwaway copy of the chart in its own namespace (the pod waits until the chart is applied again, then the broker is empty and accepts logins). Not covered on the cluster: a node loss, or a PVC loss on the live broker or database (single node, local-path volumes, real data), and a Mosquitto kill landing inside the 5 s save window (a hard kill, seen 0 of 2,632 on Compose, was not repeated five times there).
-1. **Deploy the repaired refutation gate.** It is fixed and verified in the repository; the live Kubernetes cluster still runs the old rule until its images are rebuilt and imported (`k8s/realign/realign-live-cluster.sh`, which needs `sudo`). Findings already stored were judged by the old rule.
-2. **Push, then watch the first GitHub runs** (`gh run list`, `gh run watch`) of `tests.yml`'s new jobs and `production-readiness.yml`; fix whatever the runners surface.
-3. **Run the first-run path on a clean machine and on Docker Engine,** measure the cold-build time, and try the Codespaces devcontainer.
-4. **Seek one independent review** of the requirements and the tests.
-5. **Repeat the full stack pass** (nightly, several times) to learn whether its thresholds flap.
-6. **Measure code coverage** (`pytest-cov`) and close the weakly verified requirements listed at the end of the traceability matrix.
+**Remaining, in order of value:**
+1. **Deploy the idempotent-writes fix to the cluster:** rebuild and import the service images (`sudo`) and roll the services (`k8s/realign/realign-live-cluster.sh`), then run `k8s/audit/k3s_ledger.py` over the roll.
+2. **Run the first-run path on a machine that is not the author's or a GitHub runner,** under the reader's own Compose plugin, and try the Codespaces devcontainer (RSK-022).
+3. **Seek one independent review** of the requirements and the tests (RSK-026).
+4. **Schedule the restore drill and alert when it has not succeeded recently** (RSK-016; it changes the live cluster).
+5. **Measure code coverage** (`pytest-cov`) and close the weakly verified requirements listed at the end of the traceability matrix.
+6. **Add a browser-level test of the dashboard** (FR-DSH-01; Playwright against the Compose stack).
+7. **Test the simulators' timing distribution,** which the causal analysis relies on and nothing tests (RSK-008).
+8. **Try a node loss on a disposable cluster.** Not possible on this one: the single node is the production machine.
+9. **Real sensor data** for the edge model's calibration (RSK-031). None exists: the model's channels are simulated.
 
 ## 5. Known issues
 
-### 5.1 Open defects (from the defect log)
+### 5.1 Open defects (from the defect log; five, all informational)
 
 | ID | Issue | Severity | Workaround |
 |---|---|---|---|
-| DEF-143 | One full stop and start did not resume in time; not reproduced | Info | See the log |
 | DEF-131 | The repaired refutation gate certifies statistical significance, not causation: an omitted confounder or a proxy treatment is invisible to it | Info | Treat findings as "unlikely to be noise", not "proven causal" |
 | DEF-015, DEF-091, DEF-093, DEF-123 | Unconfirmed hypotheses and observations | Info | See the log |
 
 ### 5.2 Design limitations (accepted trade-offs, not bugs)
 
 - Every service is a single replica; the aggregator, simulators and game bridge keep state in memory, so a restart drops tickets in flight.
-- The Compose path has no Prometheus or Grafana and no MinIO, backup or TLS (Mosquitto requires a login there, since 2026-10-06). It is a local demo.
-- The plate-waste node's drift detection is measured on one simulated fault (a fouling lens, a pure bias) and nothing else. Two window monitors, spread and shift, now catch fouling of 0.15 to 0.2 in about 99% of onsets within a few minutes of readings (model 1.1.0, 2026-10-06), but at 0.1 a quarter of onsets still take over 150 readings, the shift monitor flags any sustained input change and cannot say what changed, the combined alarm is in alarm about 0.27% of clean time, and the live cluster still runs the previous simulator image until it is rebuilt and imported (RSK-031, RSK-032, DEF-155).
+- The Compose path has no Prometheus or Grafana and no MinIO or backup, and plain HTTP for the dashboard (the MQTT broker requires a login and speaks TLS only there, since 2026-10-07). It is a local demo.
+- The plate-waste node's drift detection is measured on one simulated fault (a fouling lens, a pure bias) and nothing else. Two window monitors, spread and shift, now catch fouling of 0.15 to 0.2 in about 99% of onsets within a few minutes of readings (model 1.1.0, 2026-10-06), but at 0.1 a quarter of onsets still take over 150 readings, the shift monitor flags any sustained input change and cannot say what changed, and the combined alarm is in alarm about 0.27% of clean time (RSK-031, RSK-032, DEF-155). The live cluster runs the current simulator image (imported 2026-10-08).
 - A node's model can now be changed from the cloud (signed retained commands, a versioned store, a canary, a shadow comparison, a rollback; 2026-10-06), run on the Compose stack and in unit tests, and switched on for the plate node on the cluster on 2026-10-07 (its pod holds its own key; the live check, `k8s/audit/verify-model-control.sh`, passed there once: a wrong signature was rejected and the right one answered `unchanged`). The gate measures agreement with the model in service, not correctness (there is no ground truth in the field); each node has its own key under one operator master secret, with a scripted, rehearsed rotation of the master (`rotate-master-key.sh`: rehearsed on k3s in a throwaway namespace, then run once on the live cluster on 2026-10-08); and a drift alarm only produces advice, never a rollout, on purpose (RSK-033, RSK-036, DEF-156).
 - The plate node's drift monitoring was checked against real drift from a public chemical-sensor dataset (method only: no public data has the plate model's channels). Large drift was caught; the 0.1% false-alarm calibration and the mild-drift detection measured on the simulation did not transfer, and a mild gain loss (0.7) is caught only about a fifth of the time; a flatline monitor (2026-10-06, model 1.2.0) now catches a stuck sensor or a larger gain loss (DEF-157). The node needs about 40 MiB for its runtime (the model is 5 KB), measured in a container under the chart's CPU and memory limits, not on any other processor (RSK-031, RSK-032).
 - **The MQTT broker requires a login everywhere, and a wrong access rule is silent.** Compose, the Helm charts and, since 2026-10-07, the live cluster refuse anonymous clients and limit each login to its own topics, and every edge node has its own control key (RSK-036, NFR-SEC-08). The cluster cutover was run by the owner with `k8s/realign/realign-live-cluster.sh` and checked by hand afterwards (not by a repeatable test). Mosquitto enforces its rules silently (a refused subscription is granted and delivers nothing), so a wrong ACL would show as silence rather than an error: the tests catch it, and a `SensorTopicSilent` alert (ten silent minutes on a topic while the bridge is connected) now covers a sensor that stops arriving, tested with `promtool` and deployed on the cluster on 2026-10-07 (loaded in Prometheus, nothing firing). The cluster's broker has had no plaintext listener since 2026-10-07: only TLS on 8883, which every client already used.
@@ -91,7 +105,7 @@ In order of value:
 | "One command" | `docker compose up --build`, from `restaurant-platform-phase1/restaurant-platform` |
 | Disk | About 15 GB of images (the TimescaleDB and Ollama images are about 11 GB of it) |
 | Memory | About 4 GB free; roughly 1.7 GB in use once running |
-| First start | The first build and model pull take several minutes (not measured cold); findings take a while to appear unless one is triggered by hand (`QUICKSTART.md`) |
+| First start | The first build and model pull take several minutes (a cold GitHub runner built and started the stack in 3 min 22 s on 2026-10-04, without the model pull); findings take a while to appear unless one is triggered by hand (`QUICKSTART.md`) |
 | Narration | Mostly template text on CPU, labelled as such |
 | Podman users | After a WSL restart start the API socket; do not run another stack at the same time |
 

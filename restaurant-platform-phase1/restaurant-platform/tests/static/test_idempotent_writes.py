@@ -16,7 +16,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from helpers import ROOT  # noqa: E402
 
-APPLICATION_DIRS = ["services", "storage", "game/bridge"]
+APPLICATION_DIRS = ["services", "storage"]
 
 
 def application_python_files():

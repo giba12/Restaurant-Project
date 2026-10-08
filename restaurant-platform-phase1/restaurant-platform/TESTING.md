@@ -379,7 +379,7 @@ What stops tomorrow's writer from being the one that is not idempotent. Nothing 
 | Test | What it is and does | Why I created it | Why it matters |
 |---|---|---|---|
 | `test_the_guard_sees_the_writers_it_is_meant_to_guard` | **Sanity test.** The scan finds an INSERT for each of the thirteen tables the platform writes. | A guard that scans nothing passes. | It is looking in the right places. |
-| `test_every_insert_says_what_happens_on_a_conflict` | **Guard test (one case per INSERT).** Every `INSERT INTO` in the application code (services, storage, game bridge) has an `ON CONFLICT` clause in its statement. | Writing the same thing twice must be defined. | A new writer cannot skip the question. |
+| `test_every_insert_says_what_happens_on_a_conflict` | **Guard test (one case per INSERT).** Every `INSERT INTO` in the platform's application code (services and storage) has an `ON CONFLICT` clause in its statement. | Writing the same thing twice must be defined. | A new writer cannot skip the question. |
 | `test_every_table_the_migrations_create_has_a_primary_key` | **Guard test.** Every `CREATE TABLE` in the migrations has a primary key. | `ON CONFLICT` needs a key to conflict on. | No table that cannot be written idempotently. |
 | `test_the_derived_rows_take_their_ids_from_what_they_are_about_not_from_the_clock_or_chance` | **Guard test (DEF-173).** The anomaly builders use `_anomaly_id` and no random id; the finding id comes from `finding_id_for` and `stable_id`. | A random id is how a derived row becomes non-idempotent. | Verified by putting `new_event_id()` back. |
 

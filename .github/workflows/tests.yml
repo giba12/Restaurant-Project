@@ -125,7 +125,7 @@ jobs:
         working-directory: restaurant-platform-phase1/restaurant-platform/services/dashboard-web
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm

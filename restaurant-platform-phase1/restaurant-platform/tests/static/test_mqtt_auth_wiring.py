@@ -350,3 +350,41 @@ def test_every_live_client_chart_of_the_broker_defaults_to_the_tls_port():
         for deployment in (d for d in render(chart) if d["kind"] == "Deployment"):
             env = {e["name"]: e.get("value") for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
             assert env.get("MQTT_PORT") == "8883" and env.get("MQTT_TLS_ENABLED") == "true", (chart, deployment["metadata"]["name"])
+
+
+# ------------------------------------------------------------------ key rotation and rollouts of the simulators (DEF-174)
+
+def _simulator_envs(*sets):
+    docs = render("edge-simulators", *sets)
+    return {d["metadata"]["name"]: {e["name"]: e for e in d["spec"]["template"]["spec"]["containers"][0]["env"]}
+            for d in docs if d["kind"] == "Deployment"}
+
+
+@needs_helm
+def test_the_previous_key_map_gives_that_node_and_only_that_node_its_old_key_from_the_secret_named():
+    envs = _simulator_envs("--set", "controlKeyPreviousByNode.sim-plate-cam-01=edge-control-sim-plate-cam-01-previous")
+    holders = {name: e["EDGE_CONTROL_KEY_PREVIOUS"]["valueFrom"]["secretKeyRef"] for name, e in envs.items() if "EDGE_CONTROL_KEY_PREVIOUS" in e}
+    assert holders == {"edge-sim-plate-waste": {"name": "edge-control-sim-plate-cam-01-previous", "key": "key"}}
+    assert envs["edge-sim-plate-waste"]["EDGE_CONTROL_KEY"]["valueFrom"]["secretKeyRef"]["name"] == "edge-control-sim-plate-cam-01", "the new key went"
+
+
+@needs_helm
+def test_an_empty_previous_key_map_entry_closes_the_window_and_by_default_no_node_has_an_old_key():
+    for sets in ((), ("--set", "controlKeyPreviousByNode.sim-plate-cam-01=")):
+        assert not [n for n, e in _simulator_envs(*sets).items() if "EDGE_CONTROL_KEY_PREVIOUS" in e], f"an old key with {sets}"
+
+
+@needs_helm
+def test_the_rotation_script_closes_the_window_with_the_empty_value_the_chart_treats_as_none():
+    text = (ROOT / "k8s" / "audit" / "rotate-master-key.sh").read_text()
+    assert '--set "controlKeyPreviousByNode.$NODE=$1"' in text and 'helm_node_previous ""' in text
+
+
+@needs_helm
+def test_a_simulator_is_never_run_twice_at_once_during_a_rollout_because_two_would_take_each_others_broker_session_over():
+    docs = [d for d in render("edge-simulators") if d["kind"] == "Deployment"]
+    assert len(docs) == 4
+    for deployment in docs:
+        strategy = deployment["spec"]["strategy"]
+        assert strategy["type"] == "RollingUpdate" and strategy["rollingUpdate"] == {"maxSurge": 0, "maxUnavailable": 1}, deployment["metadata"]["name"]
+        assert deployment["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] <= 10, "a pod that does not stop would overlap its replacement for too long"

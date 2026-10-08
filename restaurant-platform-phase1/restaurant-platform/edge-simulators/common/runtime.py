@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import random
+import signal
 import sys
 import threading
 import time
@@ -77,6 +78,7 @@ class Simulator:
         if os.environ.get("MQTT_USERNAME"):
             self.client.username_pw_set(os.environ["MQTT_USERNAME"], os.environ.get("MQTT_PASSWORD", ""))
         self._connected_callbacks = []
+        self._stopping = threading.Event()
         # client.connect() only opens the socket and sends the CONNECT packet
         # -- it does not wait for the broker's CONNACK, which is only read
         # once loop_start()'s background thread is running. Without this,
@@ -187,7 +189,12 @@ class Simulator:
         mean_seconds = 60.0 / max(self.rate_per_minute, 0.01)
         interval = random.expovariate(1.0 / mean_seconds)
         # floor at 0.5s so a very small draw doesn't hammer the broker
-        time.sleep(max(interval, 0.5))
+        # wait(), not sleep(): a stop request ends the wait at once
+        self._stopping.wait(max(interval, 0.5))
+
+    def request_stop(self, *_signal_args) -> None:
+        """Ask the event loop to finish: it stops publishing, tells the broker it is leaving, and run_forever returns."""
+        self._stopping.set()
 
     def run_forever(self, generate_event_fn):
         """generate_event_fn: () -> dict, called once per loop iteration."""
@@ -196,7 +203,27 @@ class Simulator:
             "starting event loop: sensor_type=%s rate=%.2f/min",
             self.sensor_type, self.rate_per_minute,
         )
-        while True:
+        # A container's first process ignores SIGTERM unless it handles it, so without this a simulator being replaced kept running,
+        # connected, for Kubernetes's whole 30 s grace period. Every simulator connects to the broker as its SOURCE_ID and the
+        # broker lets a second connection under the same id take the first one over, so the old pod and its replacement kicked each
+        # other off the broker for those 30 s, and a command to the node was answered by whichever was connected, the old one
+        # (holding the old key) included. Now: stop at once and say goodbye to the broker. Only from the main thread (where signal
+        # handlers can be set); anything else that runs the loop in a thread asks with request_stop().
+        previous = {}
+        if threading.current_thread() is threading.main_thread():
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                previous[signum] = signal.signal(signum, self.request_stop)
+        try:
+            self._event_loop(generate_event_fn)
+        finally:
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)
+        self.log.info("stopping: leaving the broker")
+        self.client.loop_stop()
+        self.client.disconnect()
+
+    def _event_loop(self, generate_event_fn):
+        while not self._stopping.is_set():
             try:
                 event = generate_event_fn()
                 self.publish(event)

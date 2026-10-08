@@ -54,6 +54,11 @@ resources:
     cpu: 100m
     memory: 96Mi
 
+# Only while a control key is being rotated (k8s/audit/rotate-master-key.sh sets and clears it): node id -> the Secret holding the key
+# being replaced, which that node then accepts as well as its new one. A map of its own so a rotation is one `--set` and never an edit
+# to the list below (a `--set` on a list element replaces the whole list). controlKeyPreviousSecret on a node still works.
+controlKeyPreviousByNode: {}
+
 # One entry per simulated sensor type == one Deployment (one pod type)
 # each, per the Phase 1 architecture requirement ("one container per
 # simulated sensor type"). eventRatePerMin is the Poisson rate parameter

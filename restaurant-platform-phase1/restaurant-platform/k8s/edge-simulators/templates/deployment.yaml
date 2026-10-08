@@ -10,6 +10,16 @@ metadata:
     sensor-type: {{ .sensorType }}
 spec:
   replicas: 1
+  # Never two pods of one simulator at once. Each connects to the broker as its SOURCE_ID (the broker makes a client's id its username),
+  # and a second connection under the same id TAKES OVER the first: the two pods kicked each other off the broker several times a
+  # second for as long as a rolling update overlapped them, and a command to the node was answered by whichever pod happened to be
+  # connected, the old one included. `maxSurge: 0` with `maxUnavailable: 1` stops the old pod before the new one starts. It is not
+  # `type: Recreate` for the reason given in k8s/mosquitto/templates/deployment.yaml (switching the type fails on a live release).
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app: edge-sim-{{ .sensorType }}
@@ -20,6 +30,8 @@ spec:
         component: edge-simulator
         sensor-type: {{ .sensorType }}
     spec:
+      # The simulator stops at once on SIGTERM; this is the backstop, so a pod that does not can overlap its replacement for 10 s, not 30.
+      terminationGracePeriodSeconds: 10
       containers:
         - name: simulator
           image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
@@ -61,11 +73,12 @@ spec:
                   name: {{ .controlKeySecret | quote }}
                   key: key
             {{- end }}
-            {{- if .controlKeyPreviousSecret }}
+            {{- $previous := .controlKeyPreviousSecret | default (get $.Values.controlKeyPreviousByNode .sourceId) }}
+            {{- if $previous }}
             - name: EDGE_CONTROL_KEY_PREVIOUS
               valueFrom:
                 secretKeyRef:
-                  name: {{ .controlKeyPreviousSecret | quote }}
+                  name: {{ $previous | quote }}
                   key: key
             {{- end }}
           volumeMounts:

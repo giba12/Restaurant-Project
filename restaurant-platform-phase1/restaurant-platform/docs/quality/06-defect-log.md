@@ -28,7 +28,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 
 ## Summary
 
-**173 entries** (157 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-07.
+**174 entries** (158 defects and 16 informational difficulties), recorded between 2026-08 and 2026-10-07.
 
 ### By severity
 
@@ -36,21 +36,21 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 |---|---|
 | S1 Critical | 8 |
 | S2 High | 31 |
-| S3 Medium | 58 |
+| S3 Medium | 59 |
 | S4 Low | 60 |
 | Info | 16 |
-| **Total** | **173** |
+| **Total** | **174** |
 
 ### By status
 
 | Status | Count |
 |---|---|
-| Fixed+tested | 63 |
+| Fixed+tested | 64 |
 | Fixed | 79 |
 | Mitigated | 8 |
 | Clarified | 17 |
 | Open | 6 |
-| **Total** | **173** |
+| **Total** | **174** |
 
 ### By part (project period)
 
@@ -73,7 +73,8 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Part O: Authenticating the broker and giving each node its own key (2026-10-06) | 5 |
 | Part P: Closing the remaining gaps in the broker and the edge control path (2026-10-07) | 7 |
 | Part Q: Making every write idempotent (2026-10-08) | 1 |
-| **Total** | **173** |
+| Part R: Rotating the master key on Kubernetes (2026-10-08) | 1 |
+| **Total** | **174** |
 
 ### By how it was found
 
@@ -81,20 +82,20 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 |---|---|
 | Live operation, deployment or manual run | 74 |
 | Review (static or manual) | 24 |
-| Test-regime run or observation | 45 |
+| Test-regime run or observation | 46 |
 | Automated test regime (2026-10-02) | 7 |
 | Chaos test | 5 |
 | Attempting the done condition | 3 |
 | CI or first push | 11 |
 | User report | 3 |
 | Audit script | 1 |
-| **Total** | **173** |
+| **Total** | **174** |
 
 ### By class
 
 | Class | Count |
 |---|---|
-| Deployment | 23 |
+| Deployment | 24 |
 | Logic | 32 |
 | Environment/tooling | 23 |
 | Test defect | 26 |
@@ -112,7 +113,7 @@ Failures of the regime and of the assistant's own work (Part G) are included on 
 | Repository hygiene | 2 |
 | Operator error | 2 |
 | Code quality | 1 |
-| **Total** | **173** |
+| **Total** | **174** |
 
 ### Open items (6)
 
@@ -416,6 +417,14 @@ The owner asked for the database to do idempotent writes. Auditing every `INSERT
 | ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
 |---|---|---|---|---|---|---|---|
 | DEF-173 | Logic | an audit of every write to the database | **A redelivered input wrote a second row, and an old summary could overwrite a new one.** Kafka delivers at least once, so a consumer that stores and crashes before committing sees its message again. The anomaly detector gave each anomaly a fresh random id and `INSERT`ed it with no conflict handling, so a redelivered ticket summary stored the same anomaly again (and published it again); the causal engine did the same for findings, and would also have re-run the (expensive, non-repeatable) estimate and stored a different number for the same anomaly; the narrator would have called the model again for an already-narrated finding; and `ticket_timing_summaries` was upserted unconditionally, so an older summary replayed after a newer one turned a completed ticket back into an unfinished one. The sensor-event tables were safe only because the event carries its own id. | S3 Medium | Review (static or manual) | Derived rows take their id from what they are about (`stable_id`: an anomaly from its ticket, metric and method; a finding from its anomaly and treatment), the writer finds the stored row first and returns it (the first write wins), and what is published again is what is stored; the causal engine skips the estimate for an anomaly already analysed; the narrator skips an already-narrated finding; the summary upsert only replaces an older summary. The derived tables cannot be UNIQUE on their id (TimescaleDB requires the time column in every unique index), so the primary key stays as the backstop. Fifteen real-database tests that run every writer twice and compare the tables (reverting each fix turned its test red), unit tests of the ids, and a static guard that every `INSERT` states its conflict behaviour and every table has a primary key. | Fixed+tested |
+
+## Part R. Rotating the master key on Kubernetes (2026-10-08)
+
+The owner asked for the cluster key rotation to be started. Real rotation changes production Secrets and restarts the production node twice, so the whole procedure was first built as a script and rehearsed on real Kubernetes in a throwaway namespace. The rehearsal found a defect that no other test had.
+
+| ID | When | Source | What went wrong, and why | Sev | Found by | Resolution | Status |
+|---|---|---|---|---|---|---|---|
+| DEF-174 | Deployment | the first rehearsals of the rotation on k3s | **A replaced simulator pod kept running, and fought its replacement for the broker, for 30 seconds.** The simulators ignored SIGTERM (a container's first process does unless it handles it), so Kubernetes waited out its whole 30 s grace period before killing the old pod; the chart's rolling update started the new pod meanwhile; and both connect to the broker as the same client id (its `SOURCE_ID`, because the broker makes a client's id its username), which makes the broker hand the session to the newest connection and drop the other. The broker log showed `session taken over` several times a second; the two pods kicked each other off, the retained command was redelivered at every reconnect, and a command to the node was answered by whichever pod was connected, the old one (holding only the old key) included: the same request was answered `unchanged`, `rejected: bad signature` and `ignored` in the same second. It happens at every upgrade of a simulator, not only in a rotation, and had gone unnoticed because publishing resumes by itself. | S3 Medium | Test-regime run or observation | The simulator now handles SIGTERM and SIGINT: it ends its wait at once, stops, and sends the broker a DISCONNECT (two unit tests; reverting the wait to `time.sleep` turned them red). The chart runs `maxSurge: 0` / `maxUnavailable: 1` with a 10 s grace period as a backstop (a rolling update still does not wait for the old pod to finish terminating, so this alone was not enough, as the second rehearsal showed). And `rotate-master-key.sh` waits until the node has exactly one pod, none terminating, before it sends any command (fifteen stand-in tests; deleting that wait turned its test red). The fixed simulator image has to be built and imported into k3s (needs `sudo`) to take effect; the rotation does not depend on it. | Fixed+tested |
 
 ## How the defects were found, and what that says about the process
 

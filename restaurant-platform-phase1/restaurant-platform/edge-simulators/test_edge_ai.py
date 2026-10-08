@@ -662,3 +662,43 @@ def test_a_corrupt_model_stops_the_node_at_startup_instead_of_running_on(tmp_pat
     monkeypatch.setenv("EDGE_MODEL_PATH", str(bad))
     with pytest.raises(edge_model.ModelIntegrityError):
         plate_waste.main()
+
+
+# ------------------------------------------------------------------ a simulator that is told to stop stops, and says goodbye (DEF-174)
+
+def test_a_simulator_told_to_stop_leaves_its_loop_at_once_and_disconnects_from_the_broker():
+    import logging
+    import signal
+    import threading
+    import types
+
+    from common import runtime
+
+    # Built without its constructor (this file stubs out the MQTT library): only what the loop uses.
+    sim = object.__new__(runtime.Simulator)
+    calls = []
+    sim.log = logging.getLogger("test-simulator")
+    sim.sensor_type, sim.rate_per_minute, sim._stopping = "pos-transaction", 1.0, threading.Event()  # a mean wait of a minute
+    sim.connect = lambda: calls.append("connect")
+    sim.publish = lambda event: calls.append("publish")
+    sim.client = types.SimpleNamespace(loop_stop=lambda: calls.append("loop_stop"), disconnect=lambda: calls.append("disconnect"))
+    before = signal.getsignal(signal.SIGTERM)
+    threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+    started = time.time()
+    sim.run_forever(lambda: {})
+    assert time.time() - started < 5, "the loop did not stop when asked: it was still waiting out its interval"
+    assert calls[0] == "connect" and calls[-2:] == ["loop_stop", "disconnect"] and "publish" in calls
+    assert signal.getsignal(signal.SIGTERM) == before, "the signal handler was not put back"
+
+
+def test_request_stop_ends_the_wait_between_events_immediately():
+    import threading
+    import types
+
+    from common import runtime
+
+    sim = types.SimpleNamespace(rate_per_minute=1.0, _stopping=threading.Event())
+    threading.Timer(0.3, sim._stopping.set).start()
+    started = time.time()
+    runtime.Simulator.sleep_poisson_interval(sim)
+    assert time.time() - started < 3

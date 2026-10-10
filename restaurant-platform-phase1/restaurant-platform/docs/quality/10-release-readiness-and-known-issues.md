@@ -13,10 +13,10 @@
 
 **Ready to show, with its caveats disclosed. Not ready to call "released" or to describe as production-grade.**
 
-The evidence is much stronger than when this was first written (2026-10-03). Both GitHub workflows now run and pass: `tests` on every push, and the full nightly (end-to-end, acceptance, resilience, load, statistical, security) on GitHub's clean Docker Engine, whose latest six full runs all passed. The repaired refutation gate is live on the cluster (deployed by the realign of 2026-10-07). The MQTT broker requires a login and speaks TLS only, on the cluster and on Compose; every edge node has its own control key and the master was rotated on the live cluster (2026-10-08); sensor events are not lost to a restart or outage of the bridge, Kafka or Mosquitto, nor to the loss of Mosquitto's disk (the resilience layer's ledger); and every write to the database is idempotent in the repository (DEF-173).
+The evidence is much stronger than when this was first written (2026-10-03). Both GitHub workflows now run and pass: `tests` on every push, and the full nightly (end-to-end, acceptance, resilience, load, statistical, security) on GitHub's clean Docker Engine, whose latest six full runs all passed. The repaired refutation gate is live on the cluster (deployed by the realign of 2026-10-07). The MQTT broker requires a login and speaks TLS only, on the cluster and on Compose; every edge node has its own control key and the master was rotated on the live cluster (2026-10-08); sensor events are not lost to a restart or outage of the bridge, Kafka or Mosquitto, nor to the loss of Mosquitto's disk (the resilience layer's ledger); and every write to the database is idempotent, in the repository and, since 2026-10-08, on the cluster (DEF-173).
 
 What is still true, and what a reader should weigh:
-- **The live cluster does not yet run the idempotent-writes fix.** The service images (anomaly detector, causal engine, narrator, aggregator, storage consumer) were last built in the realign of 2026-10-06/07; only the simulator and bridge images were rebuilt and imported since. Deploying means rebuilding and importing them (needs `sudo`) and rolling the services (`k8s/realign/realign-live-cluster.sh` does it). Until then the cluster can still store a second anomaly or finding for a redelivered input.
+- **The idempotent-writes fix is deployed (2026-10-08).** The five affected deployments (aggregator, detector, causal engine, finding reviewer, narrator) were rebuilt, imported and rolled one at a time, and the live cluster was read afterwards: the new code is in every pod, the ledger over the roll found 0 missing, consumer lag is 0 on every group, and the first anomalies the new detector wrote (2026-10-08 21:07Z) carry stable ids (UUID version 5; the 5,201 earlier ones are random, version 4, and are left as they are) and flowed on to the causal engine. Not yet seen on the cluster: a finding or a narration with a stable id (none has been produced since; the two anomalies were skipped for the usual reasons, too few rows for an estimate and no treatment for the joint score), and a redelivery actually being absorbed: that is shown by the real-database tests, and the duplicate counts staying at zero is the ongoing check.
 - **It has been run only on the author's laptop and on GitHub's runners,** never on a recruiter's own machine, under the reader's own Compose plugin, or in a Codespace.
 - **There has been no independent review:** the author of the code also wrote the tests and judged the results.
 - **It has only ever seen simulated data.** Whether its findings mean anything on a real restaurant, and whether the edge model's calibration holds on real sensors, is untested by construction (RSK-031).
@@ -38,7 +38,7 @@ For a recruiter or reviewer the project is credible *because* of that honesty. T
 | Runs on Docker Engine | **Verified** | GitHub's Docker Engine with Compose v2 runs every stack layer nightly; the failures it surfaced were test-harness and robustness faults, not product incompatibilities (DEF-146, DEF-147, DEF-170) |
 | Security basics | **Met for the demo scope** | No committed secrets, authentication on both APIs, least-privilege narrator, no known vulnerable dependency (the security layer, nightly), TLS on the Kubernetes path. The MQTT broker requires a login with a per-user rule set and speaks TLS only on both paths (the cluster's plaintext listener was closed 2026-10-07); each edge node has its own control key, and the master was rotated on the live cluster on 2026-10-08 (RSK-036). Plain HTTP on the Compose path is a documented local-only trade-off |
 | Backup restored | **Met once** | 2026-09-24. Scheduled full and differential backups run and the recent ones complete (one differential failed on 2026-09-27 on a pgBackRest lock); the restore drill has not been repeated (RSK-016) |
-| Live cluster runs the repository's code | **Not entirely** | The repaired refutation gate (2026-10-03) is live; the simulator and bridge images were re-imported on 2026-10-07/08; the service images predate the idempotent-writes fix (section 1) |
+| Live cluster runs the repository's code | **Yes, as of 2026-10-08** | The repaired refutation gate (2026-10-03) is live; the bridge image was re-imported on 2026-10-07 and the simulator image on 2026-10-08; the five services the idempotent-writes fix touched were rebuilt and rolled on 2026-10-08 (the code was found in every pod); the storage consumer, twin, dashboard and scenario images date from the 2026-10-06/07 realign and have not changed in code since. Checked by reading the pods, not by an automated comparison (none exists, RSK-003) |
 | Documentation current | **Yes, as of 2026-10-08** | The catalogue and registers are machine-checked. On 2026-10-08 every quality document was re-read against the cluster, the CI runs and the code and refreshed (`11-nightly-review-2026-10-08.md` records what the review of the nightly found). The codebase guide and status log are hand-edited and have been wrong before |
 | Independent review | **Not done** | See `04-sqa-plan.md` section 11 |
 
@@ -59,18 +59,17 @@ For a recruiter or reviewer the project is credible *because* of that honesty. T
 - The ledger test on the cluster (2026-10-06, `k8s/audit/k3s_scenarios.py`): six disturbances, 569 events published, 0 missing; an unplanned full restart lost 0 of 979. On Compose (2026-10-07/08): the loss of Mosquitto's volume (2,240 published, 0 missing, once) and of the database's volume (rebuilt from Kafka to Kafka's offsets).
 - The repaired refutation gate deployed to the cluster (the realign of 2026-10-07).
 - The first GitHub runs watched and what they surfaced fixed; the full nightly repeated (section 2).
-- Broker authentication and TLS, per-node control keys, the master-key rotation on the live cluster, the arrival alarm seen firing on the cluster, and every database write made idempotent in the repository.
+- Broker authentication and TLS, per-node control keys, the master-key rotation on the live cluster, the arrival alarm seen firing on the cluster, and every database write made idempotent and the fix deployed to the cluster (2026-10-08).
 
 **Remaining, in order of value:**
-1. **Deploy the idempotent-writes fix to the cluster:** rebuild and import the service images (`sudo`) and roll the services (`k8s/realign/realign-live-cluster.sh`), then run `k8s/audit/k3s_ledger.py` over the roll.
-2. **Run the first-run path on a machine that is not the author's or a GitHub runner,** under the reader's own Compose plugin, and try the Codespaces devcontainer (RSK-022).
-3. **Seek one independent review** of the requirements and the tests (RSK-026).
-4. **Schedule the restore drill and alert when it has not succeeded recently** (RSK-016; it changes the live cluster).
-5. **Measure code coverage** (`pytest-cov`) and close the weakly verified requirements listed at the end of the traceability matrix.
-6. **Add a browser-level test of the dashboard** (FR-DSH-01; Playwright against the Compose stack).
-7. **Test the simulators' timing distribution,** which the causal analysis relies on and nothing tests (RSK-008).
-8. **Try a node loss on a disposable cluster.** Not possible on this one: the single node is the production machine.
-9. **Real sensor data** for the edge model's calibration (RSK-031). None exists: the model's channels are simulated.
+1. **Run the first-run path on a machine that is not the author's or a GitHub runner,** under the reader's own Compose plugin, and try the Codespaces devcontainer (RSK-022).
+2. **Seek one independent review** of the requirements and the tests (RSK-026).
+3. **Schedule the restore drill and alert when it has not succeeded recently** (RSK-016; it changes the live cluster).
+4. **Measure code coverage** (`pytest-cov`) and close the weakly verified requirements listed at the end of the traceability matrix.
+5. **Add a browser-level test of the dashboard** (FR-DSH-01; Playwright against the Compose stack).
+6. **Test the simulators' timing distribution,** which the causal analysis relies on and nothing tests (RSK-008).
+7. **Try a node loss on a disposable cluster.** Not possible on this one: the single node is the production machine.
+8. **Real sensor data** for the edge model's calibration (RSK-031). None exists: the model's channels are simulated.
 
 ## 5. Known issues
 
